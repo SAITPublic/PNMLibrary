@@ -1,0 +1,28 @@
+From ed25758747e2c000b349f9ed16e48fcfddd46935 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 14 Mar 2022 16:53:50 +0900
+Subject: [PATCH 019/161] [libaxdimm] Change AXDIMM_BASE_ADDR to 66Gb
+
+Setup new AXDIMM_BASE_ADDR to reflect recent BIOS changes for homogeneity.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ include/uapi/linux/libaxdimm.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 20121f305..57ddee4d1 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -14,7 +14,7 @@
+ #define AXDIMM_MEMORY_SIZE 0x1000000000
+ 
+ /* Start address of AXDIMM */
+-#define AXDIMM_BASE_ADDR 0x100000000
++#define AXDIMM_BASE_ADDR 0x1080000000
+ 
+ /* Interleaving Stride length : 128Bytes (0x80) */
+ #define AXDIMM_STRIDE_LENGTH 0x80
+-- 
+2.34.1
+

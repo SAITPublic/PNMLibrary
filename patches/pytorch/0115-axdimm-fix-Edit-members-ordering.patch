@@ -1,0 +1,31 @@
+From c7be84ace912104bd95675a98c05065e9a6c110f Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 19 Apr 2023 19:21:02 +0300
+Subject: [PATCH 115/128] [axdimm][fix] Edit members ordering
+
+PNM context own allocators that need for allocation and deallocation memory in buffers
+We get segfault when program try to destroy buffers, because buffers dtor try to use `dead` allocator
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 90014464..17680ac6 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -391,10 +391,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked lengths buffer
+   AxdimmDevice device_ =
+       AxdimmDevice::make(); // AXDIMM device. TODO: move into AXDIMMContext
+-  pnm::memory::EmbeddedTablesHandler tables_ = nullptr;
+ 
+   pnm::ContextHandler pnm_ctx_ = pnm::make_context(pnm::ContextType::AXDIMM);
+ 
++  pnm::memory::EmbeddedTablesHandler tables_ = nullptr;
++
+   bool private_tables_ = false;
+ };
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,51 @@
+From 5bb6fecf4b7dc9675345da152555206a37429738 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 21 Nov 2022 18:12:36 +0300
+Subject: [PATCH 16/23] Remove mentions of SGX from dlrm.
+
+Remove checks for SGX mode and SGX-related options from the Facebook
+DLRM application.
+---
+ axdimm_utils.py   | 4 ----
+ dlrm_s_pytorch.py | 3 +--
+ 2 files changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/axdimm_utils.py b/axdimm_utils.py
+index 40d55af..2eeebfb 100644
+--- a/axdimm_utils.py
++++ b/axdimm_utils.py
+@@ -6,8 +6,6 @@ class AxdimmTensorType(enum.Enum):
+     simple = enum.auto()
+     secure = enum.auto()
+     secure_tagged = enum.auto()
+-    secure_sgx = enum.auto()
+-    secure_sgx_tagged = enum.auto()
+     
+     def __str__(self):
+         return self.name
+@@ -16,8 +14,6 @@ to_internal_type = {
+     AxdimmTensorType.simple.name: AxdimmTensorType.simple.name,
+     AxdimmTensorType.simple.secure.name: AxdimmTensorType.simple.secure.name,
+     AxdimmTensorType.simple.secure_tagged.name: AxdimmTensorType.simple.secure.name,
+-    AxdimmTensorType.simple.secure_sgx.name: AxdimmTensorType.simple.secure_sgx.name,
+-    AxdimmTensorType.simple.secure_sgx_tagged.name: AxdimmTensorType.simple.secure_sgx.name
+ }
+     
+ class AxdimmAllocPreference(enum.Enum):
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index 7a35b3b..833bd38 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -240,8 +240,7 @@ class DLRM_Net(nn.Module):
+ 
+     def create_axdimm_emb(self, m, ln):
+         print("Creating AXDIMM tensor of type:", self.axdimm_tensor_type)
+-        from_file = True if self.axdimm_tensor_type == AxdimmTensorType.secure_tagged.name \
+-        or self.axdimm_tensor_type == AxdimmTensorType.secure_sgx_tagged.name else False
++        from_file = self.axdimm_tensor_type == AxdimmTensorType.secure_tagged.name
+         axdimm_weights = []
+         v_W_l = []
+         rows = []
+-- 
+2.34.1
+

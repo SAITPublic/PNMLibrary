@@ -1,0 +1,96 @@
+From 16492ffbbbbca48da7f28d6b8f1afe2d8b45545b Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 5 Apr 2023 14:30:38 +0300
+Subject: [PATCH 091/161] [dba] Add spdx license identifier
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/dba_resource/dba_allocator.c   | 12 ++----------
+ drivers/dba_resource/dba_allocator.h   | 12 ++----------
+ drivers/dba_resource/dba_log.h         | 12 ++----------
+ drivers/dba_resource/resource_device.c | 12 ++----------
+ 4 files changed, 8 insertions(+), 40 deletions(-)
+
+diff --git a/drivers/dba_resource/dba_allocator.c b/drivers/dba_resource/dba_allocator.c
+index d49388cea..2a8dfead6 100644
+--- a/drivers/dba_resource/dba_allocator.c
++++ b/drivers/dba_resource/dba_allocator.c
+@@ -1,13 +1,5 @@
+-/*
+- * Copyright (C) 2023 Samsung Electronics Co. LTD
+- *
+- * This software is proprietary of Samsung Electronics.
+- * No part of this software, either material or conceptual may be copied or
+- * distributed, transmitted, transcribed, stored in a retrieval system or
+- * translated into any human or computer language in any form by any means,
+- * electronic, mechanical, manual or otherwise, or disclosed to third parties
+- * without the express written permission of Samsung Electronics.
+- */
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "dba_allocator.h"
+ #include "dba_log.h"
+diff --git a/drivers/dba_resource/dba_allocator.h b/drivers/dba_resource/dba_allocator.h
+index 3faf92750..16a8ead90 100644
+--- a/drivers/dba_resource/dba_allocator.h
++++ b/drivers/dba_resource/dba_allocator.h
+@@ -1,13 +1,5 @@
+-/*
+- * Copyright (C) 2023 Samsung Electronics Co. LTD
+- *
+- * This software is proprietary of Samsung Electronics.
+- * No part of this software, either material or conceptual may be copied or
+- * distributed, transmitted, transcribed, stored in a retrieval system or
+- * translated into any human or computer language in any form by any means,
+- * electronic, mechanical, manual or otherwise, or disclosed to third parties
+- * without the express written permission of Samsung Electronics.
+- */
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __DBA_ALLOCATOR_H__
+ #define __DBA_ALLOCATOR_H__
+diff --git a/drivers/dba_resource/dba_log.h b/drivers/dba_resource/dba_log.h
+index f133da5ed..ee9a964fb 100644
+--- a/drivers/dba_resource/dba_log.h
++++ b/drivers/dba_resource/dba_log.h
+@@ -1,13 +1,5 @@
+-/*
+- * Copyright (C) 2023 Samsung Electronics Co. LTD
+- *
+- * This software is proprietary of Samsung Electronics.
+- * No part of this software, either material or conceptual may be copied or
+- * distributed, transmitted, transcribed, stored in a retrieval system or
+- * translated into any human or computer language in any form by any means,
+- * electronic, mechanical, manual or otherwise, or disclosed to third parties
+- * without the express written permission of Samsung Electronics.
+- */
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __DBA_LOG_H__
+ #define __DBA_LOG_H__
+diff --git a/drivers/dba_resource/resource_device.c b/drivers/dba_resource/resource_device.c
+index f81a84be3..f74494289 100644
+--- a/drivers/dba_resource/resource_device.c
++++ b/drivers/dba_resource/resource_device.c
+@@ -1,13 +1,5 @@
+-/*
+- * Copyright (C) 2023 Samsung Electronics Co. LTD
+- *
+- * This software is proprietary of Samsung Electronics.
+- * No part of this software, either material or conceptual may be copied or
+- * distributed, transmitted, transcribed, stored in a retrieval system or
+- * translated into any human or computer language in any form by any means,
+- * electronic, mechanical, manual or otherwise, or disclosed to third parties
+- * without the express written permission of Samsung Electronics.
+- */
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "dba_log.h"
+ #include "dba_allocator.h"
+-- 
+2.34.1
+

@@ -1,0 +1,196 @@
+From 969c87221097902eb6dcfb0a3e3062a0461461b8 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@partner.samsung.com>
+Date: Wed, 28 Sep 2022 12:50:25 +0300
+Subject: [PATCH 044/161] [drivers/dax/axdimm] remove cdev axdmem_info
+
+As we used sysfs interface, axdmem_info cdev is no longer needed
+
+Resolves: AXDIMM-397
+
+Signed-off-by: Savelii Motov <s.motov@partner.samsung.com>
+---
+ drivers/dax/axdimm-private.h   |  7 ++-
+ drivers/dax/axdimm.c           | 81 ----------------------------------
+ drivers/dax/axdimm_allocator.h |  2 +
+ include/uapi/linux/libaxdimm.h |  8 ----
+ 4 files changed, 7 insertions(+), 91 deletions(-)
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index 534340818..d154e5392 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -57,11 +57,14 @@ struct axdimm_device_data {
+ 	int channel;
+ };
+ 
++struct axdmem_info {
++	uint64_t mem_offset[NUM_OF_CS][AXDIMM_BLOCK_MAX];
++	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
++};
++
+ struct axdimm_dev {
+ 	struct semaphore sem_axdimm; /* semaphore */
+ 	struct axdmem_info mem_info; /* memory info */
+-	struct cdev axdimm_meminfo_cdev; /* char device for AXDIMM meminfo */
+-	dev_t axdimm_meminfo_dev_no; /* char device number for AXDIMM meminfo */
+ };
+ 
+ static inline int is_axdimm_range(u64 start, u64 end)
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 16688f36d..307f5aa8d 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -10,9 +10,7 @@
+ #include <linux/memremap.h>
+ #include <linux/pagemap.h>
+ #include <linux/module.h>
+-#include <linux/device.h>
+ #include <linux/pfn_t.h>
+-#include <linux/cdev.h>
+ #include <linux/slab.h>
+ #include <linux/dax.h>
+ #include <linux/fs.h>
+@@ -26,77 +24,10 @@ MODULE_VERSION(AXDIMM_DRIVER_VERSION);
+ 
+ #define AXDIMM_SEM_VALUE 1
+ 
+-typedef struct axdmem_info axdmem_info;
+-
+ struct axdimm_allocator axdimm_allocator;
+ struct axdimm_rank_scheduler axdimm_rank_sched;
+ struct axdimm_dev axdimm_device;
+ 
+-/* A custom class for meminfo char devices */
+-static struct class *axdimm_meminfo_class = NULL;
+-
+-ssize_t axdimm_meminfo_read(struct file *filp, char __user *buf, size_t count,
+-			    loff_t *f_pos)
+-{
+-	ssize_t retval = 0;
+-
+-	if (*f_pos != 0) {
+-		AXDIMM_WRN("Wrong file offset. Operation aborted\n");
+-		return -EINVAL;
+-	}
+-
+-	if (count != sizeof(axdmem_info)) {
+-		AXDIMM_WRN(
+-			"Truncating axdimm read meminfo parameters: requested: %zu, read: %zu.\n",
+-			count, sizeof(axdmem_info));
+-	}
+-
+-	AXDIMM_COPY_TO_USER(retval, buf, &axdimm_device.mem_info,
+-			    sizeof(axdmem_info));
+-	if (likely(!retval)) {
+-		AXDIMM_INF("Read axdimm mem_info.\n");
+-		retval = sizeof(axdmem_info);
+-	}
+-
+-	return retval;
+-}
+-
+-struct file_operations axdimm_info_fops = {
+-	.owner = THIS_MODULE,
+-	.read = axdimm_meminfo_read,
+-};
+-
+-static void axdimm_setup_meminfo_cdev(struct axdimm_dev *dev)
+-{
+-	dev_t dev_num;
+-	int N_MINORS = 1;
+-
+-	/* Request the kernel for N_MINOR devices */
+-	alloc_chrdev_region(&dev_num, 0, N_MINORS, "axdimm_meminfo");
+-
+-	/* Create a class : appears at /sys/class */
+-	axdimm_meminfo_class = class_create(THIS_MODULE, "axdimm_meminfo");
+-
+-	/* Initialize and create each of the device(cdev) */
+-	/* Associate the cdev with a set of file_operations */
+-	cdev_init(&dev->axdimm_meminfo_cdev, &axdimm_info_fops);
+-
+-	/* Build up the current device number. To be used further */
+-	dev->axdimm_meminfo_dev_no = MKDEV(MAJOR(dev_num), MINOR(dev_num));
+-
+-	/* Create a device node for this device. Look, the class is
+-	 * being used here. The same class is associated with N_MINOR
+-	 * devices. Once the function returns, device nodes will be
+-	 * created as /dev/my_dev0, /dev/my_dev1,... You can also view
+-	 * the devices under /sys/class/my_driver_class.
+-	 */
+-	device_create(axdimm_meminfo_class, NULL, dev->axdimm_meminfo_dev_no,
+-		      NULL, "%s", "axdimm_meminfo");
+-
+-	/* Now make the device live for the users to access */
+-	cdev_add(&dev->axdimm_meminfo_cdev, dev->axdimm_meminfo_dev_no, 1);
+-}
+-
+ static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+ 				     int bank, int row, int column)
+ {
+@@ -414,9 +345,6 @@ int init_axdimm_device(struct dev_dax *dev_dax)
+ 	if (err)
+ 		return err;
+ 
+-	/* Setup meminfo char device */
+-	axdimm_setup_meminfo_cdev(&axdimm_device);
+-
+ 	/* Setup dev_dax ranges for AXDIMM, this is needed for proper
+ 	 * devdax <-> system-ram transitions (devdax <-> kmem).
+ 	 */
+@@ -437,13 +365,4 @@ void cleanup_axdimm_device()
+ 
+ 	/* Remove test attribute */
+ 	destroy_axdimm_sysfs();
+-
+-	/* Destroy meminfo cdev */
+-	device_destroy(axdimm_meminfo_class,
+-		       axdimm_device.axdimm_meminfo_dev_no);
+-	cdev_del(&axdimm_device.axdimm_meminfo_cdev);
+-
+-	/* Destroy device class for meminfo cdev */
+-	class_destroy(axdimm_meminfo_class);
+-	axdimm_meminfo_class = NULL;
+ }
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+index c15446082..a68d660b1 100644
+--- a/drivers/dax/axdimm_allocator.h
++++ b/drivers/dax/axdimm_allocator.h
+@@ -4,6 +4,8 @@
+ #ifndef __AXDIMM_ALLOCATOR_H__
+ #define __AXDIMM_ALLOCATOR_H__
+ 
++#include "axdimm-private.h"
++
+ #include <linux/mutex.h>
+ #include <linux/libaxdimm.h>
+ #include <linux/list.h>
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index a6a54055d..2c23304a9 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -70,9 +70,6 @@
+ /* Path of DAX device */
+ #define DAX_PATH "/dev/dax0.0"
+ 
+-/* Path to AXDIMM meminfo DD interface */
+-#define MEMINFO_PATH "/dev/axdimm_meminfo"
+-
+ /* Path to dax sysfs root */
+ #define DAX_SYSFS_ROOT "/sys/bus/dax/drivers/device_dax"
+ 
+@@ -119,11 +116,6 @@ typedef enum _axd_mem_blocks_e {
+ 	AXDIMM_BLOCK_MAX = 4
+ } axd_mem_blocks_e;
+ 
+-struct axdmem_info {
+-	uint64_t mem_offset[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+-	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+-};
+-
+ /* The enumeration of table allocation preferences */
+ typedef enum _axd_user_preferences {
+ 	AXDIMM_ALLOC_AUTO = 0,
+-- 
+2.34.1
+

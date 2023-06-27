@@ -1,0 +1,428 @@
+From b29ec06944aa06c3248a9f09251d9f766abda32b Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Tue, 13 Sep 2022 13:30:40 +0300
+Subject: [PATCH 17/33] Catch child aborts in DeepRecSys.
+
+This commit fixes the bug in the DeepRecSys application when the main
+process hangs forever if an inference engine running in a child process
+crashes. It also fixes another, related bug, when the child inference
+processes had to be terminated forcibly from the main process, since
+they never finished on their own.
+
+This commit is deliberately kept as minimal as possible to optimize the
+review and simplify potential submission into the upstream version.
+In particular, no refactoring beyond the absolutely necessary level was
+performed.
+
+Resolves: AXDIMM-279
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ DeepRecSys.py      | 235 ++++++++++++++++++++++++++++++---------------
+ inferenceEngine.py |  30 ++++--
+ 2 files changed, 182 insertions(+), 83 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index 5f36c82..e661201 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -8,7 +8,11 @@ from inferenceEngine import inferenceEngine
+ from accelInferenceEngine import accelInferenceEngine
+ from loadGenerator   import loadGenerator
+ 
++from dataclasses import dataclass
+ from multiprocessing import Process, Queue
++from multiprocessing.connection import wait
++from threading import Thread
++from typing import Any, Dict, List
+ import csv
+ import sys
+ import os
+@@ -19,6 +23,95 @@ import signal
+ 
+ from caffe2.python import workspace
+ 
++class InferenceEngineAbortedError(Exception):
++  def __init__(self, pid, exit_code):
++    was_terminated_by_signal = exit_code < 0
++
++    if was_terminated_by_signal:
++      sig = -exit_code
++      message = "was terminated by signal {sig} ({desc})".format(
++        sig=sig,
++        desc=signal.strsignal(sig),
++      )
++    else:
++      message = "exited with error code {code}".format(code=exit_code)
++
++    super().__init__("Inference engine aborted: process {pid} {message}".format(
++      pid=pid,
++      message=message,
++    ))
++    self.pid = pid
++    self.exit_code = exit_code
++
++@dataclass
++class ExecutionResults:
++  response_latencies: List[float]
++  final_response_latencies: List[float]
++  responses_list: List[Dict[str, Any]]
++
++# Function that runs in a separate thread and handles the results from the
++# response queue as they arrive, saving information and statistics about
++# them into `results`.
++def response_queue_handler(
++  response_queue: Queue,
++  pid_queue: Queue,
++  results: ExecutionResults,
++  request_granularity: int,
++  num_inference_engines: int,
++):
++  inference_engines_finished = 0
++  response_sets = {}
++  
++  while inference_engines_finished < num_inference_engines:
++    response = response_queue.get()
++
++    # Process responses to determine what the running tail latency is and
++    # send new batch-size to loadGenerator
++    if response is None:
++      inference_engines_finished += 1
++      print("Joined ", inference_engines_finished, " inference engines")
++      sys.stdout.flush()
++      continue
++
++    key = (response.epoch, response.batch_id, response.exp_packet)
++    if key in response_sets.keys(): # Response already in the list
++      curr_val = response_sets[key]
++
++      val      = (response.arrival_time,
++                  response.inference_end_time,
++                  response.total_sub_batches)
++
++      arr = min(curr_val[0], val[0])
++      inf = max(curr_val[1], val[1])
++      remain = curr_val[2]-1
++      response_sets[ (response.epoch, response.batch_id, response.exp_packet) ] = (arr, inf, remain)
++    else: # New response!
++      arr = response.arrival_time
++      inf = response.inference_end_time
++      remain = response.total_sub_batches - 1
++
++      response_sets[ (response.epoch, response.batch_id, response.exp_packet) ] = (arr, inf, remain)
++
++    # If this request is over then we can go ahead and compute the
++    # request latency in order to guide batch-scheduler
++    if remain == 0:
++      results.response_latencies.append( inf - arr )
++
++      # If we are done finding the optimum batching and accelerator
++      # partitioning threshold then we log the response latency to
++      # measure packets later
++      if not response.exp_packet:
++          results.final_response_latencies.append( inf - arr )
++
++      if len(results.response_latencies) % request_granularity == 0:
++        latency = np.percentile(results.response_latencies[int(-1 * request_granularity):], 95) * 1000.
++        print("Running latency: {}".format(latency))
++        sys.stdout.flush()
++        pid_queue.put(latency)
++
++    # Add responses to final list
++    results.responses_list.append(response.__dict__)
++
+ def DeepRecSys():
+   print("Running DeepRecSys")
+ 
+@@ -56,16 +149,14 @@ def DeepRecSys():
+     requestQueue    = Queue(maxsize=1024)
+     accelRequestQueue = Queue(maxsize=32)
+     pidQueue        = Queue()
+-    responseQueues  = []
++    responseQueue   = Queue()
+     inferenceEngineReadyQueue = Queue()
+ 
+-    for _ in range(args.inference_engines):
+-      responseQueues.append(Queue())
+-
+     # Create load generator to mimic per-server load
+     loadGeneratorReturnQueue = Queue()
+     DeepRecLoadGenerator = Process( target = loadGenerator,
+-                        args   = (args, requestQueue, loadGeneratorReturnQueue, inferenceEngineReadyQueue, pidQueue, accelRequestQueue)
++                        args   = (args, requestQueue, loadGeneratorReturnQueue, inferenceEngineReadyQueue, pidQueue, accelRequestQueue),
++                        daemon = True,
+                       )
+ 
+     # Create backend inference engines that consume requests from load
+@@ -74,11 +165,11 @@ def DeepRecSys():
+     for i in range(args.inference_engines):
+       if (args.model_accel) and (i == (args.inference_engines - 1)):
+         p = Process( target = accelInferenceEngine,
+-                     args   = (args, accelRequestQueue, i, responseQueues[i], inferenceEngineReadyQueue)
++                     args   = (args, accelRequestQueue, i, responseQueue, inferenceEngineReadyQueue),
+                    )
+       else:
+         p = Process( target = inferenceEngine,
+-                     args   = (args, requestQueue, i, responseQueues[i], inferenceEngineReadyQueue, tables_descriptor)
++                     args   = (args, requestQueue, i, responseQueue, inferenceEngineReadyQueue, tables_descriptor),
+                    )
+       p.daemon = True
+       DeepRecEngines.append(p)
+@@ -89,68 +180,62 @@ def DeepRecSys():
+ 
+     DeepRecLoadGenerator.start()
+ 
+-    responses_list = []
+-    inference_engines_finished = 0
+-
+-    response_sets = {}
+-    response_latencies = []
+-    final_response_latencies = []
+-
+-    request_granularity = int(args.req_granularity)
+-
+-    while inference_engines_finished != args.inference_engines:
+-      for i in range(args.inference_engines):
+-        if (responseQueues[i].qsize()):
+-          response = responseQueues[i].get()
+-
+-          # Process responses to determine what the running tail latency is and
+-          # send new batch-size to loadGenerator
+-          if response == None:
+-            inference_engines_finished += 1
+-            print("Joined ", inference_engines_finished, " inference engines")
+-            sys.stdout.flush()
+-          else:
+-            key = (response.epoch, response.batch_id, response.exp_packet)
+-            if key in response_sets.keys(): # Response already in the list
+-              curr_val = response_sets[key]
+-
+-              val      = (response.arrival_time,
+-                          response.inference_end_time,
+-                          response.total_sub_batches)
+-
+-              arr = min(curr_val[0], val[0])
+-              inf = max(curr_val[1], val[1])
+-              remain = curr_val[2]-1
+-              response_sets[ (response.epoch, response.batch_id, response.exp_packet) ] = (arr, inf, remain)
+-            else: # New response!
+-              arr = response.arrival_time
+-              inf = response.inference_end_time
+-              remain = response.total_sub_batches - 1
+-
+-              response_sets[ (response.epoch, response.batch_id, response.exp_packet) ] = (arr, inf, remain)
+-
+-            # If this request is over then we can go ahead and compute the
+-            # request latency in order to guide batch-scheduler
+-            if remain == 0:
+-              response_latencies.append( inf - arr )
+-
+-              # If we are done finding the optimum batching and accelerator
+-              # partitioning threshold then we log the response latency to
+-              # measure packets later
+-              if not response.exp_packet:
+-                  final_response_latencies.append( inf - arr )
+-
+-              if len(response_latencies) % request_granularity == 0:
+-                print("Running latency: ", np.percentile(response_latencies[int(-1 * request_granularity):], 95) * 1000.)
+-                sys.stdout.flush()
+-                # Add
+-                pidQueue.put ( np.percentile(response_latencies[int(-1 * request_granularity):], 95) * 1000. )
+-
+-            # Add responses to final list
+-            responses_list.append(response.__dict__)
+-
+-    print("Finished runing over the inference engines")
+-    sys.stdout.flush()
++    # Thread safety note: `results` is only accesed from the current thread
++    # before the queue handler thread starts and after it is joined, so no
++    # race conditions can occur.
++    results = ExecutionResults(
++      response_latencies=[],
++      final_response_latencies=[],
++      responses_list=[],
++    )
++
++    # Handle incoming `Response`s in a separate thread, since the current one
++    # will be waiting for child processes to complete.
++    queue_handler_thread = Thread(
++        target=response_queue_handler,
++        kwargs=dict(
++          response_queue=responseQueue,
++          pid_queue=pidQueue,
++          request_granularity=int(args.req_granularity),
++          results=results,
++          num_inference_engines=args.inference_engines,
++        ),
++        daemon=True,
++    )
++    queue_handler_thread.start()
++
++    # Maps sentinels of running engines to the engines themselves.
++    sentinel_to_engine_dict = {engine.sentinel: engine for engine in DeepRecEngines}
++
++    try:
++      # Keep waiting until no active engines are left.
++      while len(sentinel_to_engine_dict) > 0:
++        # Wait until one or more inference engines finish.
++        sentinels_finished = wait(sentinel_to_engine_dict.keys())
++        for sentinel in sentinels_finished:
++          engine = sentinel_to_engine_dict[sentinel]
++
++          # `wait()` seems to return before the process status is updated in the
++          # `engine` object. Avoid race condition by calling `join`.
++          engine.join()
++
++          # Engine must have finished by now.
++          assert engine.exitcode is not None
++          # Remove sentinels of finished engines.
++          del sentinel_to_engine_dict[sentinel]
++
++          if engine.exitcode != 0:
++            raise InferenceEngineAbortedError(pid=engine.pid, exit_code=engine.exitcode)
++    except Exception:
++      print("Exception was raised, terminating all inference engines")
++      for engine in DeepRecEngines:
++        engine.terminate()
++      raise
++
++    print("Finished running over the inference engines")
++
++    queue_handler_thread.join()
++    print("Joined the query handler thread")
+ 
+     log_dir = reduce(lambda x, y: x + y, args.log_file.split("/")[:-1])
+ 
+@@ -158,7 +243,7 @@ def DeepRecSys():
+         os.makedirs(log_dir)
+ 
+     with open(args.log_file, "w") as f:
+-        for response in responses_list:
++        for response in results.responses_list:
+           f.writelines(str(response) + "\n")
+ 
+     # Join/end all processes
+@@ -171,25 +256,25 @@ def DeepRecSys():
+ 
+     agg_requests     = cpu_sub_requests + accel_requests
+ 
+-    print("Exiting DeepRecSys after printing ", len(responses_list), "/" , agg_requests)
++    print("Exiting DeepRecSys after printing ", len(results.responses_list), "/" , agg_requests)
+ 
+     print("CPU sub requests ", cpu_sub_requests, "/" , agg_requests)
+     print("CPU requests ", cpu_requests)
+     print("Accel requests ", accel_requests, "/" , agg_requests)
+ 
+-    meas_qps_responses = list(filter(lambda x: (not x['exp_packet']) and (x['sub_id'] == 0), responses_list))
++    meas_qps_responses = list(filter(lambda x: (not x['exp_packet']) and (x['sub_id'] == 0), results.responses_list))
+ 
+     initial_time = meas_qps_responses[0]['inference_end_time']
+     end_time     = meas_qps_responses[-1]['inference_end_time']
+ 
+     print("Measured QPS: ",  (len(meas_qps_responses)) / (end_time - initial_time))
+-    print("Measured p95 tail-latency: ",  np.percentile(final_response_latencies, 95) * 1000., " ms")
+-    print("Measured p99 tail-latency: ",  np.percentile(final_response_latencies, 99) * 1000., " ms")
++    print("Measured p95 tail-latency: ",  np.percentile(results.final_response_latencies, 95) * 1000., " ms")
++    print("Measured p99 tail-latency: ",  np.percentile(results.final_response_latencies, 99) * 1000., " ms")
+ 
+     sys.stdout.flush()
+ 
+     for i in range(args.inference_engines):
+-      DeepRecEngines[i].terminate()
++      assert not DeepRecEngines[i].is_alive()
+ 
+     status = 0
+     # [AXDIMM caffe2 backend] Destroy AXDIMM for parent process.
+diff --git a/inferenceEngine.py b/inferenceEngine.py
+index 177ee27..3bdd523 100644
+--- a/inferenceEngine.py
++++ b/inferenceEngine.py
+@@ -56,7 +56,7 @@ def python_profiling_stop():
+ 
+ # ========== Python profiling end ==========
+ 
+-def run_model(model, args, internal_logging, responseQueue):
++def run_model(model, args, internal_logging, responseQueue, completion_queue):
+ 
+     # Uncomment for profiling with perf tool.
+     # wait_time = 10
+@@ -66,6 +66,13 @@ def run_model(model, args, internal_logging, responseQueue):
+     top_fc_layers = args.arch_mlp_top.split("-")
+     fc_tag = "top:::fc" + str(len(top_fc_layers)-1) + "_z"
+     while True:
++        # Stop if the main IE thread signals that there are no more tasks.
++        # This explicit signalling is needed because the input data only
++        # gets to this thread indirectly, via `model.run_queues()`,
++        # and there is no easy way to signal completion via this mechanism.
++        has_completed = completion_queue.get()
++        if has_completed:
++          break
+ 
+         if args.model_type == "dlrm":
+           model.dlrm.run()
+@@ -82,9 +89,6 @@ def run_model(model, args, internal_logging, responseQueue):
+ 
+         response                    = internal_logging.get()
+ 
+-        if response == None:
+-            return
+-
+         inference_end_time          = time.time()
+         response.inference_end_time = inference_end_time
+         #out_size = np.array(workspace.FetchBlob(fc_tag)).size / int(top_fc_layers[-2])
+@@ -103,7 +107,6 @@ def inferenceEngine(args,
+                     responseQueue=None,
+                     inferenceEngineReadyQueue=None,
+                     tables_descriptor=None):
+-
+   q_inference_logging = Queue()
+   q_inference_done    = Queue()
+ 
+@@ -215,14 +218,17 @@ def inferenceEngine(args,
+     print("Total execution time: ***", total_time / (args.nepochs * nbatches), " ms/iter")
+ 
+   else:
++    completion_queue = Queue()
+     # Run DLRM model inferences in a separate thread in order to decouple input
+     # and inference run-times (non-blocking FeedBlob() caffe2 call)
+     inference_thread = threading.Thread( target=run_model,
+                                          args = (model,
+                                                  args,
+                                                  q_inference_logging,
+-                                                 responseQueue
+-                                                )
++                                                 responseQueue,
++                                                 completion_queue,
++                                                ),
++                                         daemon = True,
+                                        )
+     inference_thread.start()
+ 
+@@ -235,8 +241,12 @@ def inferenceEngine(args,
+       if request is None:
+         if args.enable_profiling:
+             python_profiling_stop()
+-        q_inference_logging.put(None)
++
++        # Tell the model running thread and the main process that we are done.
+         responseQueue.put(None)
++        completion_queue.put(True)
++
++        # Cleanup.
+         inference_thread.join()
+         return
+ 
+@@ -272,6 +282,10 @@ def inferenceEngine(args,
+ 
+       q_inference_logging.put(response)
+ 
++      # We are not done, and the model running thread should proceed with the
++      # next batch that we have just fed into the network.
++      completion_queue.put(False)
++
+   return
+ 
+ 
+-- 
+2.34.1
+

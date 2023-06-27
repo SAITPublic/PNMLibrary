@@ -1,0 +1,26 @@
+From 88f846930114da99e36f8b66837c1f29267c74cb Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 9 Nov 2021 11:41:25 +0900
+Subject: [PATCH 023/128] [caffe2/operators] Remove unneeded undef from
+ lengths_reducer_ops_axdimm.cc
+
+The '#undef USE_FBGEMM' is not requires since now compiler passes correct
+flags to AXDIMM src files.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index cfebf47e..81a242be 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -1,4 +1,3 @@
+-#undef USE_FBGEMM
+ #include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/core/context.h"
+ #include "caffe2/core/operator.h"
+-- 
+2.34.1
+

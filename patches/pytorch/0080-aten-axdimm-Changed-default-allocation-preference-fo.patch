@@ -1,0 +1,38 @@
+From 388f1fc2957c4511e153111ee8881e876b808224 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Tue, 25 Oct 2022 00:24:01 +0300
+Subject: [PATCH 080/128] [aten,axdimm] Changed default allocation preference
+ for AxdimmTensor
+
+Resolves: AXDIMM-452
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ aten/src/ATen/native/axdimm/AxdimmTensor.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index 40261e67..e8d64d72 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -60,7 +60,7 @@ class AxdimmTensor {
+ 
+   AxdimmTensor(
+       const at::Tensor& weights,
+-      ::axd_user_preferences preference = AXDIMM_ALLOC_AUTO) {
++      ::axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL) {
+     load(weights, preference);
+   }
+ 
+@@ -105,7 +105,7 @@ class AxdimmTensor {
+  private:
+   void load(
+       const at::Tensor& weights,
+-      ::axd_user_preferences preference = AXDIMM_ALLOC_AUTO);
++      ::axd_user_preferences preference);
+   void load(
+       const at::Tensor& weights,
+       uint32_t num_tables,
+-- 
+2.34.1
+

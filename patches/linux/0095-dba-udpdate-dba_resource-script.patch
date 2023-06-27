@@ -1,0 +1,30 @@
+From 8a9ea76dea9f8289393ba2044da986d9d5d8e17b Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Fri, 7 Apr 2023 16:44:49 +0300
+Subject: [PATCH 095/161] [dba] udpdate dba_resource script
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ install_dba_resource.sh | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/install_dba_resource.sh b/install_dba_resource.sh
+index cbe25fdb0..f2680b61e 100755
+--- a/install_dba_resource.sh
++++ b/install_dba_resource.sh
+@@ -2,9 +2,9 @@
+ 
+ set -e
+ 
+-sudo cp -v drivers/dba_resource/*.ko /lib/modules/`uname -r`/kernel/drivers/dba_resource/
++sudo cp -v drivers/pnm/dba_resource/*.ko /lib/modules/`uname -r`/kernel/drivers/pnm/dba_resource/
+ sudo cp -v include/uapi/linux/dba_resources.h /usr/include/linux
+ sudo cp -v include/uapi/linux/dba_resources.h /usr/src/linux-headers-`uname -r`/include/uapi/linux
+ 
+-#sudo rmmod dba_resource
+-sudo modprobe dba_resource "$@"
++lsmod | grep dba_resource > /dev/null && sudo rmmod dba_resource
++sudo modprobe -v dba_resource "$@"
+-- 
+2.34.1
+

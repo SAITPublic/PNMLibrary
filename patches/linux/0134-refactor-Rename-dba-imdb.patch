@@ -1,0 +1,2916 @@
+From ea5e66f9650b335f6e8fe891ee9d2bb446d0c9c9 Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Thu, 6 Jul 2023 22:07:54 +0300
+Subject: [PATCH 134/161] [refactor] Rename dba -> imdb
+
+Everything related to our library was renamed:
+- file names
+- structures
+- variables
+- configs
+- comments
+- etc.
+
+Refers to MCS23-1205
+
+Signed-off-by: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+---
+ MAINTAINERS                                   |   4 +-
+ PNM_HOW_TO_BUILD.md                           |  12 +-
+ config-pnm                                    |   6 +-
+ drivers/cxl/Kconfig                           |  22 +-
+ drivers/cxl/Makefile                          |   4 +-
+ drivers/cxl/core/Makefile                     |   2 +-
+ drivers/cxl/core/core.h                       |   6 +-
+ drivers/cxl/core/cxldba.c                     | 183 ---------------
+ drivers/cxl/core/cxlimdb.c                    | 183 +++++++++++++++
+ drivers/cxl/core/port.c                       |   8 +-
+ drivers/cxl/cxl.h                             |   2 +-
+ drivers/cxl/cxldba.h                          |  31 ---
+ drivers/cxl/cxlimdb.h                         |  31 +++
+ drivers/cxl/{dba.c => imdb.c}                 |  14 +-
+ drivers/cxl/pci.c                             |   8 +-
+ drivers/dax/Kconfig                           |   8 +-
+ drivers/dax/dba-private.h                     |  22 --
+ drivers/dax/device.c                          |   4 +-
+ drivers/dax/imdb-private.h                    |  22 ++
+ drivers/pnm/Kconfig                           |  32 +--
+ drivers/pnm/Makefile                          |   2 +-
+ drivers/pnm/dba_resource/Makefile             |   9 -
+ drivers/pnm/dba_resource/dba_log.h            |  19 --
+ drivers/pnm/dba_resource/dba_private.h        |  21 --
+ drivers/pnm/dba_resource/dba_proc_mgr.h       |  31 ---
+ drivers/pnm/dba_resource/dba_thread_sched.c   | 171 --------------
+ .../{dba_resource => imdb_resource}/Kconfig   |   2 +-
+ drivers/pnm/imdb_resource/Makefile            |   9 +
+ .../imdb_allocator.c}                         |  68 +++---
+ .../imdb_allocator.h}                         |  12 +-
+ drivers/pnm/imdb_resource/imdb_log.h          |  19 ++
+ drivers/pnm/imdb_resource/imdb_private.h      |  21 ++
+ .../imdb_proc_mgr.c}                          | 210 +++++++++---------
+ drivers/pnm/imdb_resource/imdb_proc_mgr.h     |  31 +++
+ .../imdb_sysfs.c}                             |  54 ++---
+ .../imdb_sysfs.h}                             |   4 +-
+ drivers/pnm/imdb_resource/imdb_thread_sched.c | 171 ++++++++++++++
+ .../imdb_thread_sched.h}                      |  12 +-
+ .../resource_device.c                         | 100 ++++-----
+ include/uapi/linux/dba_resources.h            |  52 -----
+ include/uapi/linux/imdb_resources.h           |  52 +++++
+ install_dba_resource.sh                       |  11 -
+ install_imdb_resource.sh                      |  11 +
+ 43 files changed, 848 insertions(+), 848 deletions(-)
+ delete mode 100644 drivers/cxl/core/cxldba.c
+ create mode 100644 drivers/cxl/core/cxlimdb.c
+ delete mode 100644 drivers/cxl/cxldba.h
+ create mode 100644 drivers/cxl/cxlimdb.h
+ rename drivers/cxl/{dba.c => imdb.c} (58%)
+ delete mode 100644 drivers/dax/dba-private.h
+ create mode 100644 drivers/dax/imdb-private.h
+ delete mode 100644 drivers/pnm/dba_resource/Makefile
+ delete mode 100644 drivers/pnm/dba_resource/dba_log.h
+ delete mode 100644 drivers/pnm/dba_resource/dba_private.h
+ delete mode 100644 drivers/pnm/dba_resource/dba_proc_mgr.h
+ delete mode 100644 drivers/pnm/dba_resource/dba_thread_sched.c
+ rename drivers/pnm/{dba_resource => imdb_resource}/Kconfig (94%)
+ create mode 100644 drivers/pnm/imdb_resource/Makefile
+ rename drivers/pnm/{dba_resource/dba_allocator.c => imdb_resource/imdb_allocator.c} (75%)
+ rename drivers/pnm/{dba_resource/dba_allocator.h => imdb_resource/imdb_allocator.h} (73%)
+ create mode 100644 drivers/pnm/imdb_resource/imdb_log.h
+ create mode 100644 drivers/pnm/imdb_resource/imdb_private.h
+ rename drivers/pnm/{dba_resource/dba_proc_mgr.c => imdb_resource/imdb_proc_mgr.c} (52%)
+ create mode 100644 drivers/pnm/imdb_resource/imdb_proc_mgr.h
+ rename drivers/pnm/{dba_resource/dba_sysfs.c => imdb_resource/imdb_sysfs.c} (82%)
+ rename drivers/pnm/{dba_resource/dba_sysfs.h => imdb_resource/imdb_sysfs.h} (56%)
+ create mode 100644 drivers/pnm/imdb_resource/imdb_thread_sched.c
+ rename drivers/pnm/{dba_resource/dba_thread_sched.h => imdb_resource/imdb_thread_sched.h} (76%)
+ rename drivers/pnm/{dba_resource => imdb_resource}/resource_device.c (52%)
+ delete mode 100644 include/uapi/linux/dba_resources.h
+ create mode 100644 include/uapi/linux/imdb_resources.h
+ delete mode 100755 install_dba_resource.sh
+ create mode 100755 install_imdb_resource.sh
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 0609adaaa..7851900b6 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -5237,13 +5237,13 @@ S:	Maintained
+ F:	PNM_HOW_TO_BUILD.md
+ F:	config-pnm
+ F:	drivers/pnm/
+-F:	include/uapi/linux/dba_resources.h
++F:	include/uapi/linux/imdb_resources.h
+ F:	include/uapi/linux/libaxdimm.h
+ F:	include/uapi/linux/sls_resources.h
+ F:	install_sls_headers.sh
+ F:	install_sls_resource.sh
+ F:	install_dax_drivers.sh
+-F:	install_dba_resource.sh
++F:	install_imdb_resource.sh
+ F:	install_debs.sh
+ 
+ CONEXANT ACCESSRUNNER USB DRIVER
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index ed84b5ea5..76a3e6b0c 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -18,9 +18,9 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+     A base physical address of SLS range in gigabytes (SLS_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
+     A scale of SLS memory range (SLS_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 1 for simulation 32GB range, 0 for FPGA)
+ *
+-* DBA Resource Manager
++* IMDB Resource Manager
+ *
+-DBA Resource Manager (DBA_RESOURCE) [M/n/y/?] m
++IMDB Resource Manager (IMDB_RESOURCE) [M/n/y/?] m
+   A scale of IMDB memory range (IMDB_MEMORY_SCALE) [0] (NEW) 0 -> choose IMDB scale here (0 for 32GB, 1 for 16GB, 2 for 8GB and etc)
+ ```
+ 
+@@ -52,15 +52,15 @@ Built drivers can then be installed with `install_sls_resource` script:
+ $ ./install_sls_resource.sh
+ ```
+ 
+-# DBA resource driver only
++# IMDB resource driver only
+ 
+ ```bash
+-$ make M=drivers/pnm/dba_resource/ -j32
++$ make M=drivers/pnm/imdb_resource/ -j32
+ ```
+ 
+-Built drivers can then be installed with `install_dba_resource` script:
++Built drivers can then be installed with `install_imdb_resource` script:
+ ```bash
+-$ ./install_dba_resource.sh
++$ ./install_imdb_resource.sh
+ ```
+ 
+ # Install SLS headers only
+diff --git a/config-pnm b/config-pnm
+index 933986256..eb56b3b25 100644
+--- a/config-pnm
++++ b/config-pnm
+@@ -2192,7 +2192,7 @@ CONFIG_CXL_MEM=m
+ CONFIG_CXL_PORT=m
+ CONFIG_CXL_SUSPEND=y
+ CONFIG_CXL_REGION=y
+-CONFIG_CXL_DBA=m
++CONFIG_CXL_IMDB=m
+ CONFIG_PCCARD=m
+ CONFIG_PCMCIA=m
+ CONFIG_PCMCIA_LOAD_CIS=y
+@@ -10013,8 +10013,8 @@ CONFIG_DEV_DAX_HMEM_DEVICES=y
+ CONFIG_DEV_DAX_KMEM=m
+ CONFIG_DEV_SLS=y
+ CONFIG_SLS_RESOURCE=m
+-CONFIG_DBA=y
+-CONFIG_DBA_RESOURCE=m
++CONFIG_IMDB=y
++CONFIG_IMDB_RESOURCE=m
+ 
+ #CONFIG_PNM_ZSWAP is not set
+ #CONFIG_PNM_ZSWAP_MODIFY_ZBUD is not set
+diff --git a/drivers/cxl/Kconfig b/drivers/cxl/Kconfig
+index c62ac7517..29eae12c8 100644
+--- a/drivers/cxl/Kconfig
++++ b/drivers/cxl/Kconfig
+@@ -103,6 +103,17 @@ config CXL_SUSPEND
+ 	def_bool y
+ 	depends on SUSPEND && CXL_MEM
+ 
++config CXL_IMDB
++	tristate "In-memory database accelerator"
++	default m
++	depends on CXL_BUS && CXL_MEM
++	help
++	  Enable IMDB accelerator support.
++
++	  IMDB accelerator is a Type 2 CXL device - a PNM
++	  device. It is incorporated into memory attached
++	  through the CXL interface.
++
+ config CXL_REGION
+ 	bool
+ 	default CXL_BUS
+@@ -111,15 +122,4 @@ config CXL_REGION
+ 	select MEMREGION
+ 	select GET_FREE_REGION
+ 
+-config CXL_DBA
+-	tristate "Database accelerator"
+-	default m
+-	depends on CXL_BUS && CXL_MEM
+-	help
+-	  Enable DBA accelerator support.
+-
+-	  DBA accelerator is a Type 2 CXL device - a PNM
+-	  device. It is incorporated into memory attached
+-	  through the CXL interface.
+-
+ endif
+diff --git a/drivers/cxl/Makefile b/drivers/cxl/Makefile
+index f14044766..4321ecba6 100644
+--- a/drivers/cxl/Makefile
++++ b/drivers/cxl/Makefile
+@@ -5,11 +5,11 @@ obj-$(CONFIG_CXL_MEM) += cxl_mem.o
+ obj-$(CONFIG_CXL_ACPI) += cxl_acpi.o
+ obj-$(CONFIG_CXL_PMEM) += cxl_pmem.o
+ obj-$(CONFIG_CXL_PORT) += cxl_port.o
+-obj-$(CONFIG_CXL_DBA) += cxl_dba.o
++obj-$(CONFIG_CXL_IMDB) += cxl_imdb.o
+ 
+ cxl_mem-y := mem.o
+ cxl_pci-y := pci.o
+ cxl_acpi-y := acpi.o
+ cxl_pmem-y := pmem.o
+ cxl_port-y := port.o
+-cxl_dba-y := dba.o
++cxl_imdb-y := imdb.o
+diff --git a/drivers/cxl/core/Makefile b/drivers/cxl/core/Makefile
+index 9bf7e4f4c..ef272ec54 100644
+--- a/drivers/cxl/core/Makefile
++++ b/drivers/cxl/core/Makefile
+@@ -11,4 +11,4 @@ cxl_core-y += mbox.o
+ cxl_core-y += pci.o
+ cxl_core-y += hdm.o
+ cxl_core-$(CONFIG_CXL_REGION) += region.o
+-cxl_core-y += cxldba.o
++cxl_core-y += cxlimdb.o
+diff --git a/drivers/cxl/core/core.h b/drivers/cxl/core/core.h
+index 8825dfc6e..fce952ee1 100644
+--- a/drivers/cxl/core/core.h
++++ b/drivers/cxl/core/core.h
+@@ -72,8 +72,8 @@ void cxl_memdev_exit(void);
+ void cxl_mbox_init(void);
+ 
+ 
+-int is_cxl_dba(struct device *dev);
+-int cxl_dba_init(void);
+-void cxl_dba_exit(void);
++int is_cxl_imdb(struct device *dev);
++int cxl_imdb_init(void);
++void cxl_imdb_exit(void);
+ 
+ #endif /* __CXL_CORE_H__ */
+diff --git a/drivers/cxl/core/cxldba.c b/drivers/cxl/core/cxldba.c
+deleted file mode 100644
+index 8ed8b6fa1..000000000
+--- a/drivers/cxl/core/cxldba.c
++++ /dev/null
+@@ -1,183 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+-
+-#include <linux/device.h>
+-#include <linux/slab.h>
+-#include <linux/pci.h>
+-
+-#include <cxldba.h>
+-#include "core.h"
+-
+-#define CXL_PNM_MAX_DEVS 65535
+-
+-static dev_t cxl_pnm_major;
+-
+-static int cxl_dba_open(struct inode *inode, struct file *file)
+-{
+-	struct cxl_dba *dba = container_of(inode->i_cdev, struct cxl_dba, cdev);
+-
+-	file->private_data = dba;
+-
+-	dev_dbg(&dba->dev, "Open device");
+-
+-	get_device(&dba->dev);
+-
+-	return 0;
+-}
+-
+-static int cxl_dba_close(struct inode *inode, struct file *file)
+-{
+-	struct cxl_dba *dba = file->private_data;
+-
+-	dev_dbg(&dba->dev, "Close device");
+-
+-	put_device(&dba->dev);
+-
+-	return 0;
+-}
+-
+-static int __cxl_dba_mmap(struct cxl_dba *dba, struct file *filp,
+-			  struct vm_area_struct *vma)
+-{
+-	struct resource *reg_res = dba->csr_regs;
+-
+-	size_t mapping_size = vma->vm_end - vma->vm_start;
+-
+-	if (mapping_size > DBA_CSR_SIZE) {
+-		dev_err(&dba->dev, "Range 0x%lx is too big\n",
+-			mapping_size);
+-		return -EINVAL;
+-	}
+-
+-	vma->vm_page_prot = pgprot_device(vma->vm_page_prot);
+-	vma->vm_pgoff += ((reg_res->start + DBA_CSR_OFFSET) >> PAGE_SHIFT);
+-
+-	dev_info(&dba->dev, "Device mmap Offset 0x%lx, Size 0x%lx with prot 0x%lx\n",
+-		 vma->vm_pgoff, mapping_size, vma->vm_page_prot.pgprot);
+-
+-	if (io_remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,
+-			       mapping_size, vma->vm_page_prot)) {
+-		dev_err(&dba->dev, "Device mmap failed\n");
+-		return -EAGAIN;
+-	}
+-	dev_dbg(&dba->dev, "Device mmap okay\n");
+-	return 0;
+-}
+-
+-static int cxl_dba_mmap(struct file *filp, struct vm_area_struct *vma)
+-{
+-	struct cxl_dba *cxlmd;
+-	int rc = -ENXIO;
+-
+-	cxlmd = filp->private_data;
+-
+-	rc = __cxl_dba_mmap(cxlmd, filp, vma);
+-
+-	return rc;
+-}
+-
+-static const struct file_operations cxl_dba_fops = { .owner = THIS_MODULE,
+-						     .open = cxl_dba_open,
+-						     .release = cxl_dba_close,
+-						     .llseek = noop_llseek,
+-						     .mmap = cxl_dba_mmap };
+-
+-static char *cxl_dba_devnode(struct device *dev, umode_t *mode, kuid_t *uid,
+-			     kgid_t *gid)
+-{
+-	return kasprintf(GFP_KERNEL, "cxl/%s", dev_name(dev));
+-}
+-
+-static void cxl_dba_release(struct device *dev)
+-{
+-	struct cxl_dba *dba = container_of(dev, struct cxl_dba, dev);
+-
+-	kfree(dba);
+-}
+-
+-static const struct device_type cxl_dba_type = {
+-	.name = "dba",
+-	.devnode = cxl_dba_devnode,
+-	.release = cxl_dba_release,
+-};
+-
+-static void cxl_dba_unregister(void *_dba)
+-{
+-	struct cxl_dba *dba = _dba;
+-
+-	cdev_device_del(&dba->cdev, &dba->dev);
+-	put_device(&dba->dev);
+-}
+-
+-int is_cxl_dba(struct device *dev)
+-{
+-	return dev->type == &cxl_dba_type;
+-}
+-
+-int cxl_add_dba(struct device *parent, int id)
+-{
+-	struct pci_dev *pdev;
+-	struct cxl_dba *dba;
+-	struct device *dev;
+-	struct cdev *cdev;
+-	int rc = 0;
+-
+-	dba = kzalloc(sizeof(*dba), GFP_KERNEL);
+-	if (!dba)
+-		return -ENOMEM;
+-
+-	pdev = to_pci_dev(parent);
+-
+-	dba->id = id;
+-	dba->csr_regs = &pdev->resource[DBA_CSR_RESNO];
+-
+-	dev = &dba->dev;
+-	device_initialize(dev);
+-
+-	dev->bus = &cxl_bus_type;
+-	dev->type = &cxl_dba_type;
+-	dev->parent = parent;
+-	dev->devt = MKDEV(cxl_pnm_major, dev->id);
+-
+-	cdev = &dba->cdev;
+-	cdev_init(cdev, &cxl_dba_fops);
+-
+-	rc = dev_set_name(dev, "dba%d", dba->id);
+-	if (rc)
+-		goto cxl_add_dba_free;
+-
+-	rc = cdev_device_add(cdev, dev);
+-	if (rc)
+-		goto cxl_add_dba_free;
+-
+-	rc = devm_add_action_or_reset(parent, cxl_dba_unregister, dba);
+-	if (rc)
+-		goto cxl_add_dba_free;
+-
+-	return rc;
+-
+-cxl_add_dba_free:
+-	kfree(dba);
+-
+-	return rc;
+-}
+-EXPORT_SYMBOL_NS(cxl_add_dba, CXL);
+-
+-__init int cxl_dba_init(void)
+-{
+-	dev_t devt;
+-	int rc;
+-
+-	rc = alloc_chrdev_region(&devt, 0, CXL_PNM_MAX_DEVS, "pnm");
+-	if (rc)
+-		return rc;
+-
+-	cxl_pnm_major = MAJOR(devt);
+-
+-	return 0;
+-}
+-
+-void cxl_dba_exit(void)
+-{
+-	unregister_chrdev_region(MKDEV(cxl_pnm_major, 0), CXL_PNM_MAX_DEVS);
+-}
+diff --git a/drivers/cxl/core/cxlimdb.c b/drivers/cxl/core/cxlimdb.c
+new file mode 100644
+index 000000000..4c0c4d033
+--- /dev/null
++++ b/drivers/cxl/core/cxlimdb.c
+@@ -0,0 +1,183 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include <linux/device.h>
++#include <linux/slab.h>
++#include <linux/pci.h>
++
++#include <cxlimdb.h>
++#include "core.h"
++
++#define CXL_PNM_MAX_DEVS 65535
++
++static dev_t cxl_pnm_major;
++
++static int cxl_imdb_open(struct inode *inode, struct file *file)
++{
++	struct cxl_imdb *imdb = container_of(inode->i_cdev, struct cxl_imdb, cdev);
++
++	file->private_data = imdb;
++
++	dev_dbg(&imdb->dev, "Open device");
++
++	get_device(&imdb->dev);
++
++	return 0;
++}
++
++static int cxl_imdb_close(struct inode *inode, struct file *file)
++{
++	struct cxl_imdb *imdb = file->private_data;
++
++	dev_dbg(&imdb->dev, "Close device");
++
++	put_device(&imdb->dev);
++
++	return 0;
++}
++
++static int __cxl_imdb_mmap(struct cxl_imdb *imdb, struct file *filp,
++			  struct vm_area_struct *vma)
++{
++	struct resource *reg_res = imdb->csr_regs;
++
++	size_t mapping_size = vma->vm_end - vma->vm_start;
++
++	if (mapping_size > IMDB_CSR_SIZE) {
++		dev_err(&imdb->dev, "Range 0x%lx is too big\n",
++			mapping_size);
++		return -EINVAL;
++	}
++
++	vma->vm_page_prot = pgprot_device(vma->vm_page_prot);
++	vma->vm_pgoff += ((reg_res->start + IMDB_CSR_OFFSET) >> PAGE_SHIFT);
++
++	dev_info(&imdb->dev, "Device mmap Offset 0x%lx, Size 0x%lx with prot 0x%lx\n",
++		 vma->vm_pgoff, mapping_size, vma->vm_page_prot.pgprot);
++
++	if (io_remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,
++			       mapping_size, vma->vm_page_prot)) {
++		dev_err(&imdb->dev, "Device mmap failed\n");
++		return -EAGAIN;
++	}
++	dev_dbg(&imdb->dev, "Device mmap okay\n");
++	return 0;
++}
++
++static int cxl_imdb_mmap(struct file *filp, struct vm_area_struct *vma)
++{
++	struct cxl_imdb *cxlmd;
++	int rc = -ENXIO;
++
++	cxlmd = filp->private_data;
++
++	rc = __cxl_imdb_mmap(cxlmd, filp, vma);
++
++	return rc;
++}
++
++static const struct file_operations cxl_imdb_fops = { .owner = THIS_MODULE,
++						     .open = cxl_imdb_open,
++						     .release = cxl_imdb_close,
++						     .llseek = noop_llseek,
++						     .mmap = cxl_imdb_mmap };
++
++static char *cxl_imdb_devnode(struct device *dev, umode_t *mode, kuid_t *uid,
++			     kgid_t *gid)
++{
++	return kasprintf(GFP_KERNEL, "cxl/%s", dev_name(dev));
++}
++
++static void cxl_imdb_release(struct device *dev)
++{
++	struct cxl_imdb *imdb = container_of(dev, struct cxl_imdb, dev);
++
++	kfree(imdb);
++}
++
++static const struct device_type cxl_imdb_type = {
++	.name = "imdb",
++	.devnode = cxl_imdb_devnode,
++	.release = cxl_imdb_release,
++};
++
++static void cxl_imdb_unregister(void *_imdb)
++{
++	struct cxl_imdb *imdb = _imdb;
++
++	cdev_device_del(&imdb->cdev, &imdb->dev);
++	put_device(&imdb->dev);
++}
++
++int is_cxl_imdb(struct device *dev)
++{
++	return dev->type == &cxl_imdb_type;
++}
++
++int cxl_add_imdb(struct device *parent, int id)
++{
++	struct pci_dev *pdev;
++	struct cxl_imdb *imdb;
++	struct device *dev;
++	struct cdev *cdev;
++	int rc = 0;
++
++	imdb = kzalloc(sizeof(*imdb), GFP_KERNEL);
++	if (!imdb)
++		return -ENOMEM;
++
++	pdev = to_pci_dev(parent);
++
++	imdb->id = id;
++	imdb->csr_regs = &pdev->resource[IMDB_CSR_RESNO];
++
++	dev = &imdb->dev;
++	device_initialize(dev);
++
++	dev->bus = &cxl_bus_type;
++	dev->type = &cxl_imdb_type;
++	dev->parent = parent;
++	dev->devt = MKDEV(cxl_pnm_major, dev->id);
++
++	cdev = &imdb->cdev;
++	cdev_init(cdev, &cxl_imdb_fops);
++
++	rc = dev_set_name(dev, "imdb%d", imdb->id);
++	if (rc)
++		goto cxl_add_imdb_free;
++
++	rc = cdev_device_add(cdev, dev);
++	if (rc)
++		goto cxl_add_imdb_free;
++
++	rc = devm_add_action_or_reset(parent, cxl_imdb_unregister, imdb);
++	if (rc)
++		goto cxl_add_imdb_free;
++
++	return rc;
++
++cxl_add_imdb_free:
++	kfree(imdb);
++
++	return rc;
++}
++EXPORT_SYMBOL_NS(cxl_add_imdb, CXL);
++
++__init int cxl_imdb_init(void)
++{
++	dev_t devt;
++	int rc;
++
++	rc = alloc_chrdev_region(&devt, 0, CXL_PNM_MAX_DEVS, "pnm");
++	if (rc)
++		return rc;
++
++	cxl_pnm_major = MAJOR(devt);
++
++	return 0;
++}
++
++void cxl_imdb_exit(void)
++{
++	unregister_chrdev_region(MKDEV(cxl_pnm_major, 0), CXL_PNM_MAX_DEVS);
++}
+diff --git a/drivers/cxl/core/port.c b/drivers/cxl/core/port.c
+index 791e35bab..2f0b49a1c 100644
+--- a/drivers/cxl/core/port.c
++++ b/drivers/cxl/core/port.c
+@@ -55,8 +55,8 @@ static int cxl_device_id(struct device *dev)
+ 		return CXL_DEVICE_MEMORY_EXPANDER;
+ 	if (dev->type == CXL_REGION_TYPE())
+ 		return CXL_DEVICE_REGION;
+-	if (is_cxl_dba(dev))
+-		return CXL_DEVICE_DBA;
++	if (is_cxl_imdb(dev))
++		return CXL_DEVICE_IMDB;
+ 	return 0;
+ }
+ 
+@@ -1868,7 +1868,7 @@ static __init int cxl_core_init(void)
+ 	if (rc)
+ 		return rc;
+ 
+-	rc = cxl_dba_init();
++	rc = cxl_imdb_init();
+ 	if (rc)
+ 		return rc;
+ 
+@@ -1903,7 +1903,7 @@ static void cxl_core_exit(void)
+ 	bus_unregister(&cxl_bus_type);
+ 	destroy_workqueue(cxl_bus_wq);
+ 	cxl_memdev_exit();
+-	cxl_dba_exit();
++	cxl_imdb_exit();
+ 	debugfs_remove_recursive(cxl_debugfs);
+ }
+ 
+diff --git a/drivers/cxl/cxl.h b/drivers/cxl/cxl.h
+index e1d646c13..e0aecbd2d 100644
+--- a/drivers/cxl/cxl.h
++++ b/drivers/cxl/cxl.h
+@@ -627,7 +627,7 @@ void cxl_driver_unregister(struct cxl_driver *cxl_drv);
+ #define CXL_DEVICE_MEMORY_EXPANDER	5
+ #define CXL_DEVICE_REGION		6
+ #define CXL_DEVICE_PMEM_REGION		7
+-#define CXL_DEVICE_DBA			8
++#define CXL_DEVICE_IMDB			8
+ 
+ #define MODULE_ALIAS_CXL(type) MODULE_ALIAS("cxl:t" __stringify(type) "*")
+ #define CXL_MODALIAS_FMT "cxl:t%d"
+diff --git a/drivers/cxl/cxldba.h b/drivers/cxl/cxldba.h
+deleted file mode 100644
+index 71e9d10e2..000000000
+--- a/drivers/cxl/cxldba.h
++++ /dev/null
+@@ -1,31 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0-only */
+-/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __CXL_DBA_H__
+-#define __CXL_DBA_H__
+-
+-#include <linux/cdev.h>
+-#include <linux/pci_ids.h>
+-#include "cxlmem.h"
+-#include "cxl.h"
+-
+-#define DBA_CSR_RESNO 4
+-#define DBA_CSR_OFFSET 0x30000
+-#define DBA_CSR_SIZE 0x2000
+-#define DBA_DEVICE_ID 0x3300
+-
+-struct cxl_dba {
+-	struct device dev;
+-	struct cdev cdev;
+-	struct resource *csr_regs;
+-	int id;
+-};
+-
+-static inline int cxl_is_dba(__u32 vendor_id, __u32 device_id)
+-{
+-	return vendor_id == PCI_VENDOR_ID_SAMSUNG  && device_id == DBA_DEVICE_ID;
+-}
+-
+-int cxl_add_dba(struct device *parent, int id);
+-
+-#endif //__CXL_DBA_H__
+diff --git a/drivers/cxl/cxlimdb.h b/drivers/cxl/cxlimdb.h
+new file mode 100644
+index 000000000..3de0f849c
+--- /dev/null
++++ b/drivers/cxl/cxlimdb.h
+@@ -0,0 +1,31 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __CXL_IMDB_H__
++#define __CXL_IMDB_H__
++
++#include <linux/cdev.h>
++#include <linux/pci_ids.h>
++#include "cxlmem.h"
++#include "cxl.h"
++
++#define IMDB_CSR_RESNO 4
++#define IMDB_CSR_OFFSET 0x30000
++#define IMDB_CSR_SIZE 0x2000
++#define IMDB_DEVICE_ID 0x3300
++
++struct cxl_imdb {
++	struct device dev;
++	struct cdev cdev;
++	struct resource *csr_regs;
++	int id;
++};
++
++static inline int cxl_is_imdb(__u32 vendor_id, __u32 device_id)
++{
++	return vendor_id == PCI_VENDOR_ID_SAMSUNG  && device_id == IMDB_DEVICE_ID;
++}
++
++int cxl_add_imdb(struct device *parent, int id);
++
++#endif //__CXL_IMDB_H__
+diff --git a/drivers/cxl/dba.c b/drivers/cxl/imdb.c
+similarity index 58%
+rename from drivers/cxl/dba.c
+rename to drivers/cxl/imdb.c
+index 2601ebfe6..5854e2b88 100644
+--- a/drivers/cxl/dba.c
++++ b/drivers/cxl/imdb.c
+@@ -5,20 +5,20 @@
+ #include <linux/module.h>
+ #include <linux/pci.h>
+ 
+-#include "cxldba.h"
++#include "cxlimdb.h"
+ 
+ // According to CXL_BUS probe function, this function should be defined
+-static int cxl_dba_probe(struct device *dev)
++static int cxl_imdb_probe(struct device *dev)
+ {
+ 	dev_dbg(dev, "start probing device");
+ 	return 0;
+ }
+ 
+-static struct cxl_driver dba_driver = { .name = "cxl_dba",
+-					.probe = cxl_dba_probe,
+-					.id = CXL_DEVICE_DBA };
++static struct cxl_driver imdb_driver = { .name = "cxl_imdb",
++					.probe = cxl_imdb_probe,
++					.id = CXL_DEVICE_IMDB };
+ 
+-module_cxl_driver(dba_driver);
++module_cxl_driver(imdb_driver);
+ MODULE_LICENSE("GPL");
+ MODULE_IMPORT_NS(CXL);
+-MODULE_ALIAS_CXL(CXL_DEVICE_DBA);
++MODULE_ALIAS_CXL(CXL_DEVICE_IMDB);
+diff --git a/drivers/cxl/pci.c b/drivers/cxl/pci.c
+index bd736a086..0bfa135c0 100644
+--- a/drivers/cxl/pci.c
++++ b/drivers/cxl/pci.c
+@@ -11,7 +11,7 @@
+ #include <linux/pci-doe.h>
+ #include <linux/io.h>
+ #include "cxlmem.h"
+-#include "cxldba.h"
++#include "cxlimdb.h"
+ #include "cxlpci.h"
+ #include "cxl.h"
+ 
+@@ -502,9 +502,9 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 	if (resource_size(&cxlds->pmem_res) && IS_ENABLED(CONFIG_CXL_PMEM))
+ 		rc = devm_cxl_add_nvdimm(&pdev->dev, cxlmd);
+ 
+-	if (cxl_is_dba(pdev->vendor, pdev->device)) {
+-		dev_dbg(&pdev->dev, "Detected DBA device");
+-		rc = cxl_add_dba(&pdev->dev, cxlmd->id);
++	if (cxl_is_imdb(pdev->vendor, pdev->device)) {
++		dev_dbg(&pdev->dev, "Detected IMDB device");
++		rc = cxl_add_imdb(&pdev->dev, cxlmd->id);
+ 	}
+ 
+ 	return rc;
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 26dfbe07d..5d6bc87ab 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -110,13 +110,13 @@ endif
+ 
+ endif
+ 
+-config DBA
++config IMDB
+        bool "Database Accelerator"
+-       depends on (DEV_DAX || DEV_DAX=m) && (CXL_DBA || CXL_DBA=m)
++       depends on (DEV_DAX || DEV_DAX=m) && (CXL_IMDB || CXL_IMDB=m)
+        default n
+        help
+-	 Enable support for CXL DBA memory accelerator.
++	 Enable support for CXL IMDB memory accelerator.
+ 
+-	 DBA accelerator is a PNM device. It is attached through
++	 IMDB accelerator is a PNM device. It is attached through
+ 	 the CXL interface. This option will enable allocation of a
+ 	 DAX region for use by this device.
+diff --git a/drivers/dax/dba-private.h b/drivers/dax/dba-private.h
+deleted file mode 100644
+index 80a3c6c98..000000000
+--- a/drivers/dax/dba-private.h
++++ /dev/null
+@@ -1,22 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+-
+-#ifndef _DBA_PRIVATE_H_
+-#define _DBA_PRIVATE_H_
+-
+-/* For normal inclusion dax-private.h requires this header */
+-/* Put the header here not to change original dax-private.h */
+-#include "dax-private.h"
+-
+-/* Total Memory size for DBA region */
+-#define DBA_MEMORY_SIZE ((uint64_t)32 << 30)
+-
+-/* Start address of DBA memory range */
+-#define DBA_BASE_ADDR ((uint64_t)66 << 30)
+-
+-static inline int is_dba_range(u64 start, u64 end)
+-{
+-	return start == DBA_BASE_ADDR &&
+-	       end == DBA_BASE_ADDR + DBA_MEMORY_SIZE - 1;
+-}
+-#endif
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index beb7507eb..b3c609302 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -17,8 +17,8 @@
+ #ifdef CONFIG_DEV_SLS
+ #include "sls_dax.h"
+ #endif
+-#ifdef CONFIG_DBA
+-#include "dba-private.h"
++#ifdef CONFIG_IMDB
++#include "imdb-private.h"
+ #endif
+ #include "bus.h"
+ 
+diff --git a/drivers/dax/imdb-private.h b/drivers/dax/imdb-private.h
+new file mode 100644
+index 000000000..089e60457
+--- /dev/null
++++ b/drivers/dax/imdb-private.h
+@@ -0,0 +1,22 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
++
++#ifndef _IMDB_PRIVATE_H_
++#define _IMDB_PRIVATE_H_
++
++/* For normal inclusion dax-private.h requires this header */
++/* Put the header here not to change original dax-private.h */
++#include "dax-private.h"
++
++/* Total Memory size for IMDB region */
++#define IMDB_MEMORY_SIZE ((uint64_t)32 << 30)
++
++/* Start address of IMDB memory range */
++#define IMDB_BASE_ADDR ((uint64_t)66 << 30)
++
++static inline int is_imdb_range(u64 start, u64 end)
++{
++	return start == IMDB_BASE_ADDR &&
++	       end == IMDB_BASE_ADDR + IMDB_MEMORY_SIZE - 1;
++}
++#endif
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 659c42dac..332ba5391 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -1,20 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+-menuconfig DBA_RESOURCE
+-	tristate "DBA Resource Manager"
+-	help
+-	  Support for management of CXL-DBA device resources
+-
+-	  Create /dev/pnm/dba_resourceX device that provides IOCTL
+-	  interface to handle DBA resources like memory, threads and
+-	  cores.
+-
+-
+-if DBA_RESOURCE
+-
+-source "drivers/pnm/dba_resource/Kconfig"
+-
+-endif
+-
+ config SLS_RESOURCE
+ 	tristate "SLS Resource Manager"
+ 	help
+@@ -56,3 +40,19 @@ config PNM_ZSWAP_NUMA_NODE
+ 	  This value is used by zbud allocator to make allocation on selected
+ 	  NUMA node. It's required by simulation logic where we use whole NUMA
+ 	  node to emulate device memory.
++
++menuconfig IMDB_RESOURCE
++	tristate "IMDB Resource Manager"
++	help
++	  Support for management of CXL-IMDB device resources
++
++	  Create /dev/pnm/imdb_resourceX device that provides IOCTL
++	  interface to handle IMDB resources like memory, threads and
++	  cores.
++
++
++if IMDB_RESOURCE
++
++source "drivers/pnm/imdb_resource/Kconfig"
++
++endif
+diff --git a/drivers/pnm/Makefile b/drivers/pnm/Makefile
+index 2b419a74c..0d2cd5252 100644
+--- a/drivers/pnm/Makefile
++++ b/drivers/pnm/Makefile
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource/
+-obj-$(CONFIG_DBA_RESOURCE) += dba_resource/
++obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource/
+ obj-$(CONFIG_PNM_ZSWAP) += zswap/
+diff --git a/drivers/pnm/dba_resource/Makefile b/drivers/pnm/dba_resource/Makefile
+deleted file mode 100644
+index 2d953e29e..000000000
+--- a/drivers/pnm/dba_resource/Makefile
++++ /dev/null
+@@ -1,9 +0,0 @@
+-# SPDX-License-Identifier: GPL-2.0
+-
+-obj-$(CONFIG_DBA_RESOURCE) += dba_resource.o
+-
+-dba_resource-y := resource_device.o
+-dba_resource-y += dba_allocator.o
+-dba_resource-y += dba_thread_sched.o
+-dba_resource-y += dba_sysfs.o
+-dba_resource-y += dba_proc_mgr.o
+diff --git a/drivers/pnm/dba_resource/dba_log.h b/drivers/pnm/dba_resource/dba_log.h
+deleted file mode 100644
+index 888d812a6..000000000
+--- a/drivers/pnm/dba_resource/dba_log.h
++++ /dev/null
+@@ -1,19 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __DBA_LOG_H__
+-#define __DBA_LOG_H__
+-
+-#include <linux/kernel.h>
+-
+-#define DBA_DD_MARK "[DBA_RESOURCE_MGR]"
+-
+-#define DBA_PRINT(level, fmt, ...)                                 \
+-	pr_##level(DBA_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
+-		   ##__VA_ARGS__)
+-#define DBA_ERR(fmt, ...) DBA_PRINT(err, fmt, ##__VA_ARGS__)
+-#define DBA_WRN(fmt, ...) DBA_PRINT(warn, fmt, ##__VA_ARGS__)
+-#define DBA_INF(fmt, ...) DBA_PRINT(info, fmt, ##__VA_ARGS__)
+-#define DBA_DBG(fmt, ...) DBA_PRINT(debug, fmt, ##__VA_ARGS__)
+-
+-#endif /* __DBA_LOG_H__ */
+diff --git a/drivers/pnm/dba_resource/dba_private.h b/drivers/pnm/dba_resource/dba_private.h
+deleted file mode 100644
+index d3d4d4b88..000000000
+--- a/drivers/pnm/dba_resource/dba_private.h
++++ /dev/null
+@@ -1,21 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __DBA_PRIVATE_H__
+-#define __DBA_PRIVATE_H__
+-
+-#include <linux/dba_resources.h>
+-#include <linux/pgtable.h>
+-
+-/*
+- * The default alignment for DBA device in DAX is PMD_SIZE as hmem,
+- * commonly it's 2MB
+- */
+-#define DBA_MEMORY_ADDRESS_ALIGN PMD_SIZE
+-
+-#define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
+-#define DBA_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
+-#define DBA_RANK_SIZE (DBA_MEMORY_TOTAL_SIZE / DBA_NUM_OF_RANK)
+-#define DBA_RW_MODE 0666
+-
+-#endif /* __DBA_PRIVATE_H__ */
+diff --git a/drivers/pnm/dba_resource/dba_proc_mgr.h b/drivers/pnm/dba_resource/dba_proc_mgr.h
+deleted file mode 100644
+index 889b314af..000000000
+--- a/drivers/pnm/dba_resource/dba_proc_mgr.h
++++ /dev/null
+@@ -1,31 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __DBA_PROC_MGR_H__
+-#define __DBA_PROC_MGR_H__
+-
+-#include <linux/dba_resources.h>
+-
+-#define DBA_ENABLE_CLEANUP 1
+-#define DBA_DISABLE_CLEANUP 0
+-
+-int dba_register_process(void);
+-int dba_release_process(void);
+-
+-int dba_register_allocation(const struct dba_allocation *allocation);
+-int dba_unregister_allocation(const struct dba_allocation *allocation);
+-
+-int dba_register_thread(uint8_t thread);
+-int dba_unregister_thread(uint8_t thread);
+-
+-uint64_t dba_get_leaked(void);
+-
+-int dba_enable_cleanup(void);
+-void dba_disable_cleanup(void);
+-bool dba_get_proc_manager(void);
+-
+-int dba_reset_proc_manager(void);
+-
+-void dba_destroy_proc_manager(void);
+-
+-#endif /* __DBA_PROC_MGR_H__ */
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.c b/drivers/pnm/dba_resource/dba_thread_sched.c
+deleted file mode 100644
+index e9cba81ec..000000000
+--- a/drivers/pnm/dba_resource/dba_thread_sched.c
++++ /dev/null
+@@ -1,171 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+-
+-#include "dba_thread_sched.h"
+-#include "dba_log.h"
+-#include "dba_proc_mgr.h"
+-
+-#include <linux/kernel.h>
+-#include <linux/fs.h>
+-#include <linux/dba_resources.h>
+-
+-static struct dba_thread_sched dba_thread_sched = {
+-	.threads = {},
+-	.lock = __MUTEX_INITIALIZER(dba_thread_sched.lock),
+-	.wq = __WAIT_QUEUE_HEAD_INITIALIZER(dba_thread_sched.wq)
+-};
+-
+-/* When free engine found, return true, otherwise return false
+- * If engine not found, `out` parameter would be invalid
+- */
+-static bool dba_find_free_thread(uint8_t *out)
+-{
+-	bool found_free_thread = false;
+-	uint8_t thread = 0;
+-
+-	mutex_lock(&dba_thread_sched.lock);
+-
+-	for (; thread < DBA_THREAD_NUM; ++thread) {
+-		if (dba_thread_sched.threads[thread].state == DBA_THREAD_IDLE) {
+-			dba_thread_sched.threads[thread].state =
+-				DBA_THREAD_BUSY;
+-			found_free_thread = true;
+-			break;
+-		}
+-	}
+-
+-	mutex_unlock(&dba_thread_sched.lock);
+-
+-	*out = thread;
+-
+-	return found_free_thread;
+-}
+-
+-static int dba_release_thread(unsigned long __user arg)
+-{
+-	int rc = 0;
+-	uint8_t thread = arg;
+-
+-	if (thread >= DBA_THREAD_NUM) {
+-		DBA_DBG("Invalid thread");
+-		return -EINVAL;
+-	}
+-
+-	mutex_lock(&dba_thread_sched.lock);
+-
+-	if (dba_thread_sched.threads[thread].state == DBA_THREAD_BUSY) {
+-		dba_thread_sched.threads[thread].state = DBA_THREAD_IDLE;
+-	} else {
+-		DBA_ERR("Thread is already IDLE");
+-		rc = -EINVAL;
+-	}
+-
+-	mutex_unlock(&dba_thread_sched.lock);
+-
+-	wake_up_interruptible(&dba_thread_sched.wq);
+-
+-	return rc;
+-}
+-
+-static int dba_get_thread(void)
+-{
+-	int rc = 0;
+-	uint8_t thread = 0;
+-
+-	rc = wait_event_interruptible(dba_thread_sched.wq,
+-				      dba_find_free_thread(&thread));
+-
+-	if (unlikely(rc)) {
+-		DBA_WRN("Process interrupted, try to release thread");
+-		dba_release_thread(thread);
+-		return rc;
+-	}
+-
+-	if (unlikely(thread >= DBA_THREAD_NUM)) {
+-		DBA_ERR("Invalid thread, skip acquiring");
+-		return -EFAULT;
+-	}
+-
+-	return thread;
+-}
+-
+-bool get_thread_state(uint8_t thread)
+-{
+-	bool state = false;
+-
+-	mutex_lock(&dba_thread_sched.lock);
+-
+-	state = dba_thread_sched.threads[thread].state == DBA_THREAD_BUSY;
+-
+-	mutex_unlock(&dba_thread_sched.lock);
+-
+-	return state;
+-}
+-
+-int reset_thread_sched(void)
+-{
+-	int rc = 0;
+-	uint8_t thread = 0;
+-
+-	DBA_INF("Thread scheduler reset");
+-
+-	mutex_lock(&dba_thread_sched.lock);
+-
+-	for (; thread < DBA_THREAD_NUM; ++thread) {
+-		if (dba_thread_sched.threads[thread].state == DBA_THREAD_BUSY)
+-			DBA_WRN("Busy thread hard reset %u", thread);
+-
+-		dba_thread_sched.threads[thread].state = DBA_THREAD_IDLE;
+-	}
+-
+-	mutex_unlock(&dba_thread_sched.lock);
+-
+-	wake_up_interruptible(&dba_thread_sched.wq);
+-
+-	return rc;
+-}
+-
+-int init_thread_sched(void)
+-{
+-	return reset_thread_sched();
+-}
+-
+-void destroy_thread_sched(void)
+-{
+-	mutex_destroy(&dba_thread_sched.lock);
+-}
+-
+-int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
+-{
+-	int rc = -EFAULT;
+-	int thread = 0;
+-
+-	switch (cmd) {
+-	case DBA_IOCTL_GET_THREAD: {
+-		rc = dba_get_thread();
+-		if (rc < 0)
+-			break;
+-
+-		thread = rc;
+-
+-		rc = dba_register_thread(thread);
+-		if (likely(!rc))
+-			rc = thread;
+-
+-		break;
+-	}
+-	case DBA_IOCTL_RELEASE_THREAD: {
+-		rc = dba_release_thread(arg);
+-		if (likely(!rc))
+-			rc = dba_unregister_thread(arg);
+-		break;
+-	}
+-	}
+-
+-	return rc;
+-}
+-
+-int thread_sched_clear_res(uint8_t thread)
+-{
+-	return dba_release_thread(thread);
+-}
+diff --git a/drivers/pnm/dba_resource/Kconfig b/drivers/pnm/imdb_resource/Kconfig
+similarity index 94%
+rename from drivers/pnm/dba_resource/Kconfig
+rename to drivers/pnm/imdb_resource/Kconfig
+index 9a486f2ec..842e55a76 100644
+--- a/drivers/pnm/dba_resource/Kconfig
++++ b/drivers/pnm/imdb_resource/Kconfig
+@@ -1,6 +1,6 @@
+ config IMDB_MEMORY_SCALE
+ 	int "A scale of IMDB memory range"
+-	depends on DBA_RESOURCE
++	depends on IMDB_RESOURCE
+ 	range 0 4
+ 	default 0
+ 	help
+diff --git a/drivers/pnm/imdb_resource/Makefile b/drivers/pnm/imdb_resource/Makefile
+new file mode 100644
+index 000000000..37cd0d1b1
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/Makefile
+@@ -0,0 +1,9 @@
++# SPDX-License-Identifier: GPL-2.0
++
++obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource.o
++
++imdb_resource-y := resource_device.o
++imdb_resource-y += imdb_allocator.o
++imdb_resource-y += imdb_thread_sched.o
++imdb_resource-y += imdb_sysfs.o
++imdb_resource-y += imdb_proc_mgr.o
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/imdb_resource/imdb_allocator.c
+similarity index 75%
+rename from drivers/pnm/dba_resource/dba_allocator.c
+rename to drivers/pnm/imdb_resource/imdb_allocator.c
+index f311f54a6..eb9f3cbb3 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/imdb_resource/imdb_allocator.c
+@@ -1,12 +1,12 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "dba_allocator.h"
+-#include "dba_log.h"
+-#include "dba_proc_mgr.h"
+-#include "dba_private.h"
++#include "imdb_allocator.h"
++#include "imdb_log.h"
++#include "imdb_proc_mgr.h"
++#include "imdb_private.h"
+ 
+-#include <linux/dba_resources.h>
++#include <linux/imdb_resources.h>
+ #include <linux/genalloc.h>
+ #include <linux/kernel.h>
+ #include <linux/log2.h>
+@@ -17,7 +17,7 @@
+ #include <linux/uaccess.h>
+ 
+ static struct MemoryAllocator general_alloc = {
+-	.gran = DBA_MEMORY_ADDRESS_ALIGN,
++	.gran = IMDB_MEMORY_ADDRESS_ALIGN,
+ };
+ 
+ DEFINE_MUTEX(allocator_lock);
+@@ -30,21 +30,21 @@ static int init_rank_pool(struct MemoryAllocator *alloc, uint8_t rank,
+ 		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
+ 
+ 	if (!pool) {
+-		DBA_ERR("gen_pool_create failed for rank pool[%hhu], gran = [%llu]\n",
++		IMDB_ERR("gen_pool_create failed for rank pool[%hhu], gran = [%llu]\n",
+ 			rank, alloc->gran);
+ 		return -ENOMEM;
+ 	}
+ 
+ 	err_code = gen_pool_add(pool, start, size, NUMA_NO_NODE);
+ 	if (err_code < 0) {
+-		DBA_ERR("Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
++		IMDB_ERR("Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
+ 			rank, size, err_code);
+ 		gen_pool_destroy(pool);
+ 		return err_code;
+ 	}
+ 	gen_pool_set_algo(pool, gen_pool_best_fit, NULL);
+ 
+-	DBA_INF("Memory rank pool[%hhu] initialized: gran = [%llu], size = [%llu]\n",
++	IMDB_INF("Memory rank pool[%hhu] initialized: gran = [%llu], size = [%llu]\n",
+ 		rank, alloc->gran, size);
+ 
+ 	alloc->pools[rank] = pool;
+@@ -65,15 +65,15 @@ static void cleanup_memory_pools(struct MemoryAllocator *alloc)
+ 	uint8_t rank;
+ 	struct gen_pool *pool;
+ 
+-	for (rank = 0; rank < DBA_NUM_OF_RANK; ++rank) {
++	for (rank = 0; rank < IMDB_NUM_OF_RANK; ++rank) {
+ 		pool = alloc->pools[rank];
+ 		if (!pool) {
+-			DBA_WRN("Trying to cleanup memory rank pool[%hhu] that was not created\n",
++			IMDB_WRN("Trying to cleanup memory rank pool[%hhu] that was not created\n",
+ 				rank);
+ 			continue;
+ 		}
+ 		if (gen_pool_avail(pool) != gen_pool_size(pool)) {
+-			DBA_ERR("pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
++			IMDB_ERR("pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
+ 				rank, gen_pool_size(pool),
+ 				gen_pool_avail(pool));
+ 			/*
+@@ -87,7 +87,7 @@ static void cleanup_memory_pools(struct MemoryAllocator *alloc)
+ 		}
+ 		gen_pool_destroy(pool);
+ 		alloc->pools[rank] = NULL;
+-		DBA_INF("Memory rank pool[%hhu] is destroyed\n", rank);
++		IMDB_INF("Memory rank pool[%hhu] is destroyed\n", rank);
+ 	}
+ }
+ 
+@@ -106,21 +106,21 @@ static int init_memory_pools(struct MemoryAllocator *alloc)
+ 	uint8_t rank = 0;
+ 
+ 	if (!is_power_of_2(alloc->gran)) {
+-		DBA_ERR("Memory granularity should be a power of 2!\n");
++		IMDB_ERR("Memory granularity should be a power of 2!\n");
+ 		return -EINVAL;
+ 	}
+ 
+-	for (; rank < DBA_NUM_OF_RANK; ++rank)
++	for (; rank < IMDB_NUM_OF_RANK; ++rank)
+ 		if (alloc->pools[rank]) {
+-			DBA_ERR("Not cleaned pool[%hhu] in initialization!\n",
++			IMDB_ERR("Not cleaned pool[%hhu] in initialization!\n",
+ 				rank);
+ 			alloc->pools[rank] = NULL;
+-			DBA_ERR("pool[%hhu] ptr forcefully reset to zero\n",
++			IMDB_ERR("pool[%hhu] ptr forcefully reset to zero\n",
+ 				rank);
+ 		}
+ 
+-	for (rank = 0; rank < DBA_NUM_OF_RANK; ++rank, start += DBA_RANK_SIZE) {
+-		err_code = init_rank_pool(alloc, rank, start, DBA_RANK_SIZE);
++	for (rank = 0; rank < IMDB_NUM_OF_RANK; ++rank, start += IMDB_RANK_SIZE) {
++		err_code = init_rank_pool(alloc, rank, start, IMDB_RANK_SIZE);
+ 		if (err_code) {
+ 			cleanup_memory_pools(alloc);
+ 			return err_code;
+@@ -136,7 +136,7 @@ static uint8_t get_rank_most_free(void)
+ 	uint8_t rank_most_free = 0;
+ 	uint8_t rank = 1;
+ 
+-	for (; rank < DBA_NUM_OF_RANK; ++rank)
++	for (; rank < IMDB_NUM_OF_RANK; ++rank)
+ 		if (max_avail < gen_pool_avail(general_alloc.pools[rank])) {
+ 			max_avail = gen_pool_avail(general_alloc.pools[rank]);
+ 			rank_most_free = rank;
+@@ -144,20 +144,20 @@ static uint8_t get_rank_most_free(void)
+ 	return rank_most_free;
+ }
+ 
+-static int allocate_memory(struct dba_allocation *req)
++static int allocate_memory(struct imdb_allocation *req)
+ {
+ 	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
+ 	int result = 0;
+ 
+ 	mutex_lock(&allocator_lock);
+ 
+-	if (req->rank == DBA_NUM_OF_RANK)
++	if (req->rank == IMDB_NUM_OF_RANK)
+ 		req->rank = get_rank_most_free();
+ 
+ 	req->address =
+ 		gen_pool_alloc(general_alloc.pools[req->rank], aligned_size);
+ 	if (req->address == 0) {
+-		DBA_ERR("Fail to allocate %llu bytes.", req->size);
++		IMDB_ERR("Fail to allocate %llu bytes.", req->size);
+ 		result = -ENOMEM;
+ 	} else {
+ 		/*
+@@ -171,7 +171,7 @@ static int allocate_memory(struct dba_allocation *req)
+ 	return result;
+ }
+ 
+-static void deallocate_memory(const struct dba_allocation *req)
++static void deallocate_memory(const struct imdb_allocation *req)
+ {
+ 	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
+ 	const auto uint64_t real_address = req->address + general_alloc.gran;
+@@ -182,7 +182,7 @@ static void deallocate_memory(const struct dba_allocation *req)
+ 	mutex_unlock(&allocator_lock);
+ }
+ 
+-int allocator_clear_res(const struct dba_allocation *allocation)
++int allocator_clear_res(const struct imdb_allocation *allocation)
+ {
+ 	deallocate_memory(allocation);
+ 	return 0;
+@@ -190,25 +190,25 @@ int allocator_clear_res(const struct dba_allocation *allocation)
+ 
+ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ {
+-	struct dba_allocation req;
++	struct imdb_allocation req;
+ 
+ 	int rc = !!copy_from_user(&req, (void __user *)arg, sizeof(req));
+ 
+ 	if (rc)
+ 		return -EFAULT;
+ 
+-	if (req.rank > DBA_NUM_OF_RANK)
++	if (req.rank > IMDB_NUM_OF_RANK)
+ 		return -EINVAL;
+ 
+ 	switch (cmd) {
+-	case DBA_IOCTL_ALLOCATE:
++	case IMDB_IOCTL_ALLOCATE:
+ 		rc = allocate_memory(&req);
+ 		if (!rc)
+-			rc = dba_register_allocation(&req);
++			rc = imdb_register_allocation(&req);
+ 		break;
+-	case DBA_IOCTL_DEALLOCATE:
++	case IMDB_IOCTL_DEALLOCATE:
+ 		deallocate_memory(&req);
+-		rc = dba_unregister_allocation(&req);
++		rc = imdb_unregister_allocation(&req);
+ 
+ 		break;
+ 	}
+@@ -231,7 +231,7 @@ uint64_t get_avail_size(void)
+ 
+ 	mutex_lock(&allocator_lock);
+ 
+-	for (; rank < DBA_NUM_OF_RANK; ++rank)
++	for (; rank < IMDB_NUM_OF_RANK; ++rank)
+ 		value += gen_pool_avail(general_alloc.pools[rank]);
+ 
+ 	mutex_unlock(&allocator_lock);
+@@ -241,7 +241,7 @@ uint64_t get_avail_size(void)
+ 
+ uint64_t get_mem_size(void)
+ {
+-	return DBA_MEMORY_TOTAL_SIZE;
++	return IMDB_MEMORY_TOTAL_SIZE;
+ }
+ 
+ uint64_t get_granularity(void)
+@@ -283,7 +283,7 @@ int reset_memory_allocator(void)
+ {
+ 	int result = 0;
+ 
+-	DBA_INF("Reset allocator");
++	IMDB_INF("Reset allocator");
+ 	mutex_lock(&allocator_lock);
+ 
+ 	cleanup_memory_pools(&general_alloc);
+diff --git a/drivers/pnm/dba_resource/dba_allocator.h b/drivers/pnm/imdb_resource/imdb_allocator.h
+similarity index 73%
+rename from drivers/pnm/dba_resource/dba_allocator.h
+rename to drivers/pnm/imdb_resource/imdb_allocator.h
+index 61b901a0b..e3b2a1148 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.h
++++ b/drivers/pnm/imdb_resource/imdb_allocator.h
+@@ -1,10 +1,10 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#ifndef __DBA_ALLOCATOR_H__
+-#define __DBA_ALLOCATOR_H__
++#ifndef __IMDB_ALLOCATOR_H__
++#define __IMDB_ALLOCATOR_H__
+ 
+-#include <linux/dba_resources.h>
++#include <linux/imdb_resources.h>
+ #include <linux/genalloc.h>
+ 
+ struct MemoryAllocator {
+@@ -12,10 +12,10 @@ struct MemoryAllocator {
+ 	uint64_t gran;
+ 	/* GenAlloc memory pools for each rank, each pool has it's own virtual
+ 	 * range, currently this range is not bound to the real memory by PA,
+-	 * Range: [reserved_indent == DBA_MEMORY_ADDRESS_ALIGN,
++	 * Range: [reserved_indent == IMDB_MEMORY_ADDRESS_ALIGN,
+ 	 * rank_size - reserved_indent]
+ 	 */
+-	struct gen_pool *pools[DBA_NUM_OF_RANK];
++	struct gen_pool *pools[IMDB_NUM_OF_RANK];
+ };
+ 
+ int initialize_memory_allocator(void);
+@@ -23,7 +23,7 @@ void destroy_memory_allocator(void);
+ int reset_memory_allocator(void);
+ 
+ int allocator_ioctl(unsigned int cmd, unsigned long __user arg);
+-int allocator_clear_res(const struct dba_allocation *allocation);
++int allocator_clear_res(const struct imdb_allocation *allocation);
+ 
+ uint64_t get_avail_size(void);
+ 
+diff --git a/drivers/pnm/imdb_resource/imdb_log.h b/drivers/pnm/imdb_resource/imdb_log.h
+new file mode 100644
+index 000000000..c3be6370e
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/imdb_log.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __IMDB_LOG_H__
++#define __IMDB_LOG_H__
++
++#include <linux/kernel.h>
++
++#define IMDB_DD_MARK "[IMDB_RESOURCE_MGR]"
++
++#define IMDB_PRINT(level, fmt, ...)                                 \
++	pr_##level(IMDB_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
++		   ##__VA_ARGS__)
++#define IMDB_ERR(fmt, ...) IMDB_PRINT(err, fmt, ##__VA_ARGS__)
++#define IMDB_WRN(fmt, ...) IMDB_PRINT(warn, fmt, ##__VA_ARGS__)
++#define IMDB_INF(fmt, ...) IMDB_PRINT(info, fmt, ##__VA_ARGS__)
++#define IMDB_DBG(fmt, ...) IMDB_PRINT(debug, fmt, ##__VA_ARGS__)
++
++#endif /* __IMDB_LOG_H__ */
+diff --git a/drivers/pnm/imdb_resource/imdb_private.h b/drivers/pnm/imdb_resource/imdb_private.h
+new file mode 100644
+index 000000000..3b1bb5085
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/imdb_private.h
+@@ -0,0 +1,21 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __IMDB_PRIVATE_H__
++#define __IMDB_PRIVATE_H__
++
++#include <linux/imdb_resources.h>
++#include <linux/pgtable.h>
++
++/*
++ * The default alignment for IMDB device in DAX is PMD_SIZE as hmem,
++ * commonly it's 2MB
++ */
++#define IMDB_MEMORY_ADDRESS_ALIGN PMD_SIZE
++
++#define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
++#define IMDB_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
++#define IMDB_RANK_SIZE (IMDB_MEMORY_TOTAL_SIZE / IMDB_NUM_OF_RANK)
++#define IMDB_RW_MODE 0666
++
++#endif /* __IMDB_PRIVATE_H__ */
+diff --git a/drivers/pnm/dba_resource/dba_proc_mgr.c b/drivers/pnm/imdb_resource/imdb_proc_mgr.c
+similarity index 52%
+rename from drivers/pnm/dba_resource/dba_proc_mgr.c
+rename to drivers/pnm/imdb_resource/imdb_proc_mgr.c
+index c7a4b48ad..ff5072805 100644
+--- a/drivers/pnm/dba_resource/dba_proc_mgr.c
++++ b/drivers/pnm/imdb_resource/imdb_proc_mgr.c
+@@ -1,13 +1,13 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright(c) 2023 Samsung LTD. All rights reserved.
+ 
+-#include "dba_proc_mgr.h"
++#include "imdb_proc_mgr.h"
+ 
+-#include "dba_allocator.h"
+-#include "dba_log.h"
+-#include "dba_thread_sched.h"
++#include "imdb_allocator.h"
++#include "imdb_log.h"
++#include "imdb_thread_sched.h"
+ 
+-#include "linux/dba_resources.h"
++#include "linux/imdb_resources.h"
+ #include "linux/ioport.h"
+ #include "linux/stddef.h"
+ #include <linux/types.h>
+@@ -17,13 +17,13 @@
+ #include <linux/slab.h>
+ 
+ /* list of descriptors held by process */
+-struct dba_alloc_res {
+-	struct dba_allocation allocation;
++struct imdb_alloc_res {
++	struct imdb_allocation allocation;
+ 	struct list_head list;
+ };
+ 
+ /* resources allocated for particular process */
+-struct dba_proc_res {
++struct imdb_proc_res {
+ 	pid_t pid;
+ 	struct list_head alloc_res; //[TODO: s.motov] use rb-tree
+ 	uint8_t threads_mask;
+@@ -41,7 +41,7 @@ struct dba_proc_res {
+  * data structure for tracking device resources, allocated to user space
+  * processes
+  */
+-struct dba_proc_mgr {
++struct imdb_proc_mgr {
+ 	struct list_head active_process_list; //[TODO: s.motov] use rb-tree
+ 	struct list_head leaked_process_list; //[TODO: s.motov] use rb-tree
+ 	atomic64_t leaked;
+@@ -50,12 +50,12 @@ struct dba_proc_mgr {
+ 	struct mutex lock;
+ };
+ 
+-static struct dba_proc_mgr dba_proc_mgr = {
+-	.active_process_list = LIST_HEAD_INIT(dba_proc_mgr.active_process_list),
+-	.leaked_process_list = LIST_HEAD_INIT(dba_proc_mgr.leaked_process_list),
++static struct imdb_proc_mgr imdb_proc_mgr = {
++	.active_process_list = LIST_HEAD_INIT(imdb_proc_mgr.active_process_list),
++	.leaked_process_list = LIST_HEAD_INIT(imdb_proc_mgr.leaked_process_list),
+ 	.leaked = ATOMIC64_INIT(0),
+-	.enable_cleanup = ATOMIC64_INIT(DBA_DISABLE_CLEANUP),
+-	.lock = __MUTEX_INITIALIZER(dba_proc_mgr.lock),
++	.enable_cleanup = ATOMIC64_INIT(IMDB_DISABLE_CLEANUP),
++	.lock = __MUTEX_INITIALIZER(imdb_proc_mgr.lock),
+ };
+ 
+ static pid_t get_current_process_id(void)
+@@ -68,9 +68,9 @@ static pid_t get_current_process_id(void)
+ }
+ 
+ /* this function should be called with sync */
+-static struct dba_proc_res *find_current_proc_res(struct dba_proc_mgr *mgr)
++static struct imdb_proc_res *find_current_proc_res(struct imdb_proc_mgr *mgr)
+ {
+-	struct dba_proc_res *proc_res = NULL;
++	struct imdb_proc_res *proc_res = NULL;
+ 	const pid_t pid = get_current_process_id();
+ 
+ 	list_for_each_entry(proc_res, &mgr->active_process_list, list) {
+@@ -81,10 +81,10 @@ static struct dba_proc_res *find_current_proc_res(struct dba_proc_mgr *mgr)
+ 	return NULL;
+ }
+ 
+-static int clear_allocations(struct dba_proc_res *proc_res)
++static int clear_allocations(struct imdb_proc_res *proc_res)
+ {
+-	struct dba_alloc_res *alloc_res = NULL, *alloc_res_temp = NULL;
+-	struct dba_allocation *allocation = NULL;
++	struct imdb_alloc_res *alloc_res = NULL, *alloc_res_temp = NULL;
++	struct imdb_allocation *allocation = NULL;
+ 	uint64_t begin = 0;
+ 	uint64_t end = 0;
+ 	int rc = 0;
+@@ -94,7 +94,7 @@ static int clear_allocations(struct dba_proc_res *proc_res)
+ 		allocation = &alloc_res->allocation;
+ 		begin = allocation->address;
+ 		end = begin + allocation->size;
+-		DBA_DBG("Process manager release allocation [%llx, %llx], pid: %d, tid: %d\n",
++		IMDB_DBG("Process manager release allocation [%llx, %llx], pid: %d, tid: %d\n",
+ 			begin, end, get_current_process_id(), current->pid);
+ 
+ 		rc |= allocator_clear_res(allocation);
+@@ -103,7 +103,7 @@ static int clear_allocations(struct dba_proc_res *proc_res)
+ 	}
+ 
+ 	if (rc) {
+-		DBA_ERR("Can't clear allocations, pid %d, tid %d\n",
++		IMDB_ERR("Can't clear allocations, pid %d, tid %d\n",
+ 			get_current_process_id(), current->pid);
+ 		rc = -EINVAL;
+ 	}
+@@ -111,21 +111,21 @@ static int clear_allocations(struct dba_proc_res *proc_res)
+ 	return rc;
+ }
+ 
+-static int clear_threads(struct dba_proc_res *proc_res)
++static int clear_threads(struct imdb_proc_res *proc_res)
+ {
+ 	int rc = 0;
+ 	uint8_t it = 0;
+ 
+-	for (it = 0; it < DBA_THREAD_NUM; ++it) {
++	for (it = 0; it < IMDB_THREAD_NUM; ++it) {
+ 		if (proc_res->threads_mask & (1 << it)) {
+ 			rc |= thread_sched_clear_res(it);
+-			DBA_DBG("Process manager release thread[%d], pid: %d, tid: %d\n",
++			IMDB_DBG("Process manager release thread[%d], pid: %d, tid: %d\n",
+ 				it, get_current_process_id(), current->pid);
+ 		}
+ 	}
+ 
+ 	if (rc) {
+-		DBA_ERR("Can't clear threads, pid %d tid %d\n",
++		IMDB_ERR("Can't clear threads, pid %d tid %d\n",
+ 			get_current_process_id(), current->pid);
+ 		return -EINVAL;
+ 	}
+@@ -133,7 +133,7 @@ static int clear_threads(struct dba_proc_res *proc_res)
+ 	return rc;
+ }
+ 
+-static int clear_process_resource(struct dba_proc_res *proc_res)
++static int clear_process_resource(struct imdb_proc_res *proc_res)
+ {
+ 	int failed = 0;
+ 
+@@ -144,57 +144,57 @@ static int clear_process_resource(struct dba_proc_res *proc_res)
+ 	return failed ? -1 : 0;
+ }
+ 
+-static inline bool is_resource_empty(struct dba_proc_res *proc_res)
++static inline bool is_resource_empty(struct imdb_proc_res *proc_res)
+ {
+ 	return list_empty(&proc_res->alloc_res) && proc_res->threads_mask == 0;
+ }
+ 
+-int dba_register_allocation(const struct dba_allocation *allocation)
++int imdb_register_allocation(const struct imdb_allocation *allocation)
+ {
+-	struct dba_proc_res *proc_res = NULL;
+-	struct dba_alloc_res *dba_alloc = NULL;
++	struct imdb_proc_res *proc_res = NULL;
++	struct imdb_alloc_res *imdb_alloc = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&dba_proc_mgr);
++	proc_res = find_current_proc_res(&imdb_proc_mgr);
+ 
+ 	if (unlikely(!proc_res)) {
+-		DBA_ERR("Can't find resources, pid %d, tid %d\n",
++		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+ 			get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 		goto error;
+ 	}
+ 
+-	dba_alloc = kzalloc(sizeof(*dba_alloc), GFP_KERNEL);
++	imdb_alloc = kzalloc(sizeof(*imdb_alloc), GFP_KERNEL);
+ 
+-	if (dba_alloc) {
+-		dba_alloc->allocation = *allocation;
+-		INIT_LIST_HEAD(&dba_alloc->list);
+-		list_add(&dba_alloc->list, &proc_res->alloc_res);
++	if (imdb_alloc) {
++		imdb_alloc->allocation = *allocation;
++		INIT_LIST_HEAD(&imdb_alloc->list);
++		list_add(&imdb_alloc->list, &proc_res->alloc_res);
+ 	} else {
+ 		rc = -ENOMEM;
+ 	}
+ 
+ error:
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	return rc;
+ }
+ 
+-int dba_unregister_allocation(const struct dba_allocation *allocation)
++int imdb_unregister_allocation(const struct imdb_allocation *allocation)
+ {
+-	struct dba_alloc_res *alloc_res = NULL, *dba_alloc_tmp = NULL;
+-	struct dba_proc_res *proc_res = NULL;
++	struct imdb_alloc_res *alloc_res = NULL, *imdb_alloc_tmp = NULL;
++	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&dba_proc_mgr);
++	proc_res = find_current_proc_res(&imdb_proc_mgr);
+ 
+ 	if (likely(proc_res)) {
+ 		rc = -EINVAL;
+-		list_for_each_entry_safe(alloc_res, dba_alloc_tmp,
++		list_for_each_entry_safe(alloc_res, imdb_alloc_tmp,
+ 					 &proc_res->alloc_res, list) {
+ 			if (alloc_res->allocation.address ==
+ 				    allocation->address &&
+@@ -206,111 +206,111 @@ int dba_unregister_allocation(const struct dba_allocation *allocation)
+ 			}
+ 		}
+ 		if (rc)
+-			DBA_ERR("Allocation not found, pid %d, tid %d\n",
++			IMDB_ERR("Allocation not found, pid %d, tid %d\n",
+ 				get_current_process_id(), current->pid);
+ 	} else {
+-		DBA_ERR("Can't find resources, pid %d, tid %d\n",
++		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+ 			get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 	}
+ 
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	return rc;
+ }
+ 
+-int dba_register_thread(uint8_t thread)
++int imdb_register_thread(uint8_t thread)
+ {
+-	struct dba_proc_res *proc_res = NULL;
++	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 	const uint8_t thread_mask = 1 << thread;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&dba_proc_mgr);
++	proc_res = find_current_proc_res(&imdb_proc_mgr);
+ 
+ 	if (likely(proc_res)) {
+ 		proc_res->threads_mask |= thread_mask;
+ 	} else {
+-		DBA_ERR("Can't find resources, pid %d, tid %d\n",
++		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+ 			get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 	};
+ 
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	return rc;
+ }
+ 
+-int dba_unregister_thread(uint8_t thread)
++int imdb_unregister_thread(uint8_t thread)
+ {
+-	struct dba_proc_res *proc_res = NULL;
++	struct imdb_proc_res *proc_res = NULL;
+ 	const uint8_t thread_mask = ~(1 << thread);
+ 	int rc = 0;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&dba_proc_mgr);
++	proc_res = find_current_proc_res(&imdb_proc_mgr);
+ 
+ 	if (likely(proc_res)) {
+ 		proc_res->threads_mask &= thread_mask;
+ 	} else {
+-		DBA_ERR("Can't find resources, pid %d, tid %d\n",
++		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+ 			get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 	}
+ 
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	return rc;
+ }
+ 
+-int dba_register_process(void)
++int imdb_register_process(void)
+ {
+-	struct dba_proc_res *proc_res = NULL;
++	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&dba_proc_mgr);
++	proc_res = find_current_proc_res(&imdb_proc_mgr);
+ 
+ 	if (!proc_res) {
+ 		proc_res = kzalloc(sizeof(*proc_res), GFP_KERNEL);
+ 
+ 		if (unlikely(!proc_res)) {
+ 			rc = -ENOMEM;
+-			DBA_ERR("Can't allocate memory, pid %d, tid %d\n",
++			IMDB_ERR("Can't allocate memory, pid %d, tid %d\n",
+ 				get_current_process_id(), current->pid);
+ 			goto error;
+ 		}
+ 
+ 		proc_res->pid = get_current_process_id();
+ 		INIT_LIST_HEAD(&proc_res->alloc_res);
+-		list_add(&proc_res->list, &dba_proc_mgr.active_process_list);
+-		DBA_DBG("Registered process, pid: %d, tid: %d\n",
++		list_add(&proc_res->list, &imdb_proc_mgr.active_process_list);
++		IMDB_DBG("Registered process, pid: %d, tid: %d\n",
+ 			get_current_process_id(), current->pid);
+ 	}
+ 
+ 	proc_res->ref_cnt++;
+ 
+ error:
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	return rc;
+ }
+ 
+-int dba_release_process(void)
++int imdb_release_process(void)
+ {
+-	struct dba_proc_res *proc_res = NULL;
++	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 	bool delete_res = false;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&dba_proc_mgr);
++	proc_res = find_current_proc_res(&imdb_proc_mgr);
+ 
+ 	if (unlikely(!proc_res)) {
+-		DBA_ERR("Can't find resources, pid %d, tid %d\n",
++		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+ 			get_current_process_id(), current->pid);
+ 		delete_res = false;
+ 		rc = -ESRCH;
+@@ -328,58 +328,58 @@ int dba_release_process(void)
+ 	}
+ 
+ error:
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	if (delete_res) {
+ 		// Process manager is active or resources struct is empty
+ 		if (is_resource_empty(proc_res) ||
+-		    atomic64_read(&dba_proc_mgr.enable_cleanup)) {
++		    atomic64_read(&imdb_proc_mgr.enable_cleanup)) {
+ 			rc = clear_process_resource(proc_res);
+ 			if (rc)
+-				DBA_ERR("Can't clear process resources, pid %d, tid %d\n",
++				IMDB_ERR("Can't clear process resources, pid %d, tid %d\n",
+ 					get_current_process_id(), current->pid);
+ 
+ 			return rc;
+ 		}
+ 
+-		mutex_lock(&dba_proc_mgr.lock);
++		mutex_lock(&imdb_proc_mgr.lock);
+ 
+-		atomic64_inc(&dba_proc_mgr.leaked);
+-		list_add(&proc_res->list, &dba_proc_mgr.leaked_process_list);
+-		DBA_DBG("Tracked leakage by pid: %d, tid: %d; thread_mask: %x",
++		atomic64_inc(&imdb_proc_mgr.leaked);
++		list_add(&proc_res->list, &imdb_proc_mgr.leaked_process_list);
++		IMDB_DBG("Tracked leakage by pid: %d, tid: %d; thread_mask: %x",
+ 			get_current_process_id(), current->pid,
+ 			proc_res->threads_mask);
+-		mutex_unlock(&dba_proc_mgr.lock);
++		mutex_unlock(&imdb_proc_mgr.lock);
+ 	}
+ 
+ 	return rc;
+ }
+ 
+-uint64_t dba_get_leaked(void)
++uint64_t imdb_get_leaked(void)
+ {
+-	return atomic64_read(&dba_proc_mgr.leaked);
++	return atomic64_read(&imdb_proc_mgr.leaked);
+ }
+ 
+-void dba_disable_cleanup(void)
++void imdb_disable_cleanup(void)
+ {
+-	atomic64_set(&dba_proc_mgr.enable_cleanup, DBA_DISABLE_CLEANUP);
++	atomic64_set(&imdb_proc_mgr.enable_cleanup, IMDB_DISABLE_CLEANUP);
+ }
+ 
+-int dba_enable_cleanup(void)
++int imdb_enable_cleanup(void)
+ {
+ 	LIST_HEAD(list_tmp);
+-	struct dba_proc_res *proc_res = NULL, *proc_res_tmp = NULL;
++	struct imdb_proc_res *proc_res = NULL, *proc_res_tmp = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+-	atomic64_set(&dba_proc_mgr.enable_cleanup, DBA_ENABLE_CLEANUP);
++	atomic64_set(&imdb_proc_mgr.enable_cleanup, IMDB_ENABLE_CLEANUP);
+ 
+-	atomic64_set(&dba_proc_mgr.leaked, 0);
++	atomic64_set(&imdb_proc_mgr.leaked, 0);
+ 	// splice list for critical section minimization
+-	list_splice_init(&dba_proc_mgr.leaked_process_list, &list_tmp);
++	list_splice_init(&imdb_proc_mgr.leaked_process_list, &list_tmp);
+ 
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	list_for_each_entry_safe(proc_res, proc_res_tmp, &list_tmp, list) {
+ 		list_del(&proc_res->list);
+@@ -389,30 +389,30 @@ int dba_enable_cleanup(void)
+ 	return rc ? -1 : 0;
+ }
+ 
+-bool dba_get_proc_manager(void)
++bool imdb_get_proc_manager(void)
+ {
+-	return atomic64_read(&dba_proc_mgr.enable_cleanup) ==
+-	       DBA_ENABLE_CLEANUP;
++	return atomic64_read(&imdb_proc_mgr.enable_cleanup) ==
++	       IMDB_ENABLE_CLEANUP;
+ }
+ 
+-int dba_reset_proc_manager(void)
++int imdb_reset_proc_manager(void)
+ {
+ 	LIST_HEAD(list_active_tmp);
+ 	LIST_HEAD(list_leaked_tmp);
+ 
+-	struct dba_proc_res *proc_res = NULL, *proc_res_tmp = NULL;
++	struct imdb_proc_res *proc_res = NULL, *proc_res_tmp = NULL;
+ 
+ 	bool have_leaks = false;
+ 
+-	mutex_lock(&dba_proc_mgr.lock);
++	mutex_lock(&imdb_proc_mgr.lock);
+ 
+ 	// splice list for critical section minimization
+-	list_splice_init(&dba_proc_mgr.active_process_list, &list_active_tmp);
+-	list_splice_init(&dba_proc_mgr.leaked_process_list, &list_leaked_tmp);
++	list_splice_init(&imdb_proc_mgr.active_process_list, &list_active_tmp);
++	list_splice_init(&imdb_proc_mgr.leaked_process_list, &list_leaked_tmp);
+ 
+-	have_leaks = atomic64_read(&dba_proc_mgr.leaked) != 0;
++	have_leaks = atomic64_read(&imdb_proc_mgr.leaked) != 0;
+ 
+-	mutex_unlock(&dba_proc_mgr.lock);
++	mutex_unlock(&imdb_proc_mgr.lock);
+ 
+ 	list_for_each_entry_safe(proc_res, proc_res_tmp, &list_active_tmp,
+ 				 list) {
+@@ -427,8 +427,8 @@ int dba_reset_proc_manager(void)
+ 	return have_leaks ? -1 : 0;
+ }
+ 
+-void dba_destroy_proc_manager(void)
++void imdb_destroy_proc_manager(void)
+ {
+-	dba_reset_proc_manager();
+-	mutex_destroy(&dba_proc_mgr.lock);
++	imdb_reset_proc_manager();
++	mutex_destroy(&imdb_proc_mgr.lock);
+ }
+diff --git a/drivers/pnm/imdb_resource/imdb_proc_mgr.h b/drivers/pnm/imdb_resource/imdb_proc_mgr.h
+new file mode 100644
+index 000000000..b380aa551
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/imdb_proc_mgr.h
+@@ -0,0 +1,31 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __IMDB_PROC_MGR_H__
++#define __IMDB_PROC_MGR_H__
++
++#include <linux/imdb_resources.h>
++
++#define IMDB_ENABLE_CLEANUP 1
++#define IMDB_DISABLE_CLEANUP 0
++
++int imdb_register_process(void);
++int imdb_release_process(void);
++
++int imdb_register_allocation(const struct imdb_allocation *allocation);
++int imdb_unregister_allocation(const struct imdb_allocation *allocation);
++
++int imdb_register_thread(uint8_t thread);
++int imdb_unregister_thread(uint8_t thread);
++
++uint64_t imdb_get_leaked(void);
++
++int imdb_enable_cleanup(void);
++void imdb_disable_cleanup(void);
++bool imdb_get_proc_manager(void);
++
++int imdb_reset_proc_manager(void);
++
++void imdb_destroy_proc_manager(void);
++
++#endif /* __IMDB_PROC_MGR_H__ */
+diff --git a/drivers/pnm/dba_resource/dba_sysfs.c b/drivers/pnm/imdb_resource/imdb_sysfs.c
+similarity index 82%
+rename from drivers/pnm/dba_resource/dba_sysfs.c
+rename to drivers/pnm/imdb_resource/imdb_sysfs.c
+index 76d012a30..77e971131 100644
+--- a/drivers/pnm/dba_resource/dba_sysfs.c
++++ b/drivers/pnm/imdb_resource/imdb_sysfs.c
+@@ -1,28 +1,28 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright(c) 2023 Samsung LTD. All rights reserved.
+ 
+-#include "dba_sysfs.h"
++#include "imdb_sysfs.h"
+ 
+-#include "dba_allocator.h"
+-#include "dba_log.h"
+-#include "dba_proc_mgr.h"
+-#include "dba_thread_sched.h"
++#include "imdb_allocator.h"
++#include "imdb_log.h"
++#include "imdb_proc_mgr.h"
++#include "imdb_thread_sched.h"
+ 
+ #include "linux/types.h"
+ #include <linux/stringify.h>
+ #include <linux/kobject.h>
+ #include <linux/device.h>
+ #include <linux/sysfs.h>
+-#include <linux/dba_resources.h>
++#include <linux/imdb_resources.h>
+ 
+ #define THREAD_ATTR_COUNT 1
+ #define WITH_NULL_TERM(var) ((var) + 1)
+-#define DBA_RESET 1
++#define IMDB_RESET 1
+ 
+ static ssize_t cleanup_show(struct device *device,
+ 			    struct device_attribute *attr, char *buf)
+ {
+-	const uint64_t value = dba_get_proc_manager();
++	const uint64_t value = imdb_get_proc_manager();
+ 
+ 	return sysfs_emit(buf, "%llu\n", value);
+ }
+@@ -33,12 +33,12 @@ static ssize_t cleanup_store(struct device *device,
+ {
+ 	int rc = 0;
+ 
+-	if (sysfs_streq(buf, __stringify(DBA_DISABLE_CLEANUP))) {
+-		dba_disable_cleanup();
+-	} else if (sysfs_streq(buf, __stringify(DBA_ENABLE_CLEANUP))) {
+-		rc = dba_enable_cleanup();
++	if (sysfs_streq(buf, __stringify(IMDB_DISABLE_CLEANUP))) {
++		imdb_disable_cleanup();
++	} else if (sysfs_streq(buf, __stringify(IMDB_ENABLE_CLEANUP))) {
++		rc = imdb_enable_cleanup();
+ 		if (rc) {
+-			DBA_ERR("Can't enable process manager\n");
++			IMDB_ERR("Can't enable process manager\n");
+ 			return rc;
+ 		}
+ 	}
+@@ -50,7 +50,7 @@ static DEVICE_ATTR_RW(cleanup);
+ static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+ 			   char *buf)
+ {
+-	const uint64_t value = dba_get_leaked();
++	const uint64_t value = imdb_get_leaked();
+ 
+ 	return sysfs_emit(buf, "%llu\n", value);
+ }
+@@ -89,22 +89,22 @@ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ {
+ 	int rc = 0;
+ 
+-	if (sysfs_streq(buf, __stringify(DBA_RESET))) {
++	if (sysfs_streq(buf, __stringify(IMDB_RESET))) {
+ 		rc = reset_memory_allocator();
+ 		if (unlikely(rc)) {
+-			DBA_ERR("DBA allocator reset failed\n");
++			IMDB_ERR("IMDB allocator reset failed\n");
+ 			return rc;
+ 		}
+ 
+ 		rc = reset_thread_sched();
+ 		if (unlikely(rc)) {
+-			DBA_ERR("DBA threads scheduler reset failed\n");
++			IMDB_ERR("IMDB threads scheduler reset failed\n");
+ 			return rc;
+ 		}
+ 
+-		rc = dba_reset_proc_manager();
++		rc = imdb_reset_proc_manager();
+ 		if (unlikely(rc)) {
+-			DBA_ERR("DBA process manager reset failed\n");
++			IMDB_ERR("IMDB process manager reset failed\n");
+ 			return rc;
+ 		}
+ 	}
+@@ -143,7 +143,7 @@ struct thread_sysfs {
+ 	struct attribute_group group;
+ 	const struct attribute_group *groups[WITH_NULL_TERM(THREAD_ATTR_COUNT)];
+ 	struct kobject thread_kobj;
+-} thread_sysfs[DBA_THREAD_NUM];
++} thread_sysfs[IMDB_THREAD_NUM];
+ 
+ static const char *const thread_attr_name[] = {
+ 	"state",
+@@ -159,7 +159,7 @@ ssize_t thread_show(struct thread_attribute *attr, char *buf)
+ 		return sprintf(buf, "%d\n", state);
+ 	}
+ 
+-	DBA_ERR("Invalid Thread attribute\n");
++	IMDB_ERR("Invalid Thread attribute\n");
+ 
+ 	return 0;
+ }
+@@ -220,11 +220,11 @@ static int build_thread_sysfs(struct kobject *parent)
+ 	int rc = 0;
+ 	uint8_t thread = 0;
+ 
+-	for (thread = 0; thread < DBA_THREAD_NUM; ++thread) {
++	for (thread = 0; thread < IMDB_THREAD_NUM; ++thread) {
+ 		tsysfs = &thread_sysfs[thread];
+ 		rc = create_thread_kobject(tsysfs, parent, thread);
+ 		if (unlikely(rc)) {
+-			DBA_ERR("Can't create thread kobject\n");
++			IMDB_ERR("Can't create thread kobject\n");
+ 			return -EFAULT;
+ 		}
+ 
+@@ -236,7 +236,7 @@ static int build_thread_sysfs(struct kobject *parent)
+ 
+ 		rc = sysfs_create_groups(&tsysfs->thread_kobj, tsysfs->groups);
+ 		if (unlikely(rc)) {
+-			DBA_ERR("Can't create thread group\n");
++			IMDB_ERR("Can't create thread group\n");
+ 			return -EFAULT;
+ 		}
+ 	}
+@@ -244,7 +244,7 @@ static int build_thread_sysfs(struct kobject *parent)
+ 	return rc;
+ }
+ 
+-int dba_build_sysfs(struct device *dev)
++int imdb_build_sysfs(struct device *dev)
+ {
+ 	int rc = 0;
+ 
+@@ -258,13 +258,13 @@ int dba_build_sysfs(struct device *dev)
+ 	return rc;
+ }
+ 
+-void dba_destroy_sysfs(struct device *dev)
++void imdb_destroy_sysfs(struct device *dev)
+ {
+ 	struct kobject *kobj = &dev->kobj;
+ 	struct thread_sysfs *tsysfs = NULL;
+ 	uint8_t thread = 0;
+ 
+-	for (thread = 0; thread < DBA_THREAD_NUM; ++thread) {
++	for (thread = 0; thread < IMDB_THREAD_NUM; ++thread) {
+ 		tsysfs = thread_sysfs + thread;
+ 		sysfs_remove_groups(kobj, thread_sysfs->groups);
+ 		kobject_del(&tsysfs->thread_kobj);
+diff --git a/drivers/pnm/dba_resource/dba_sysfs.h b/drivers/pnm/imdb_resource/imdb_sysfs.h
+similarity index 56%
+rename from drivers/pnm/dba_resource/dba_sysfs.h
+rename to drivers/pnm/imdb_resource/imdb_sysfs.h
+index 67319651a..b6126a4c8 100644
+--- a/drivers/pnm/dba_resource/dba_sysfs.h
++++ b/drivers/pnm/imdb_resource/imdb_sysfs.h
+@@ -3,5 +3,5 @@
+ 
+ #include <linux/device.h>
+ 
+-int dba_build_sysfs(struct device *dba_resource);
+-void dba_destroy_sysfs(struct device *dev);
++int imdb_build_sysfs(struct device *imdb_resource);
++void imdb_destroy_sysfs(struct device *dev);
+diff --git a/drivers/pnm/imdb_resource/imdb_thread_sched.c b/drivers/pnm/imdb_resource/imdb_thread_sched.c
+new file mode 100644
+index 000000000..074d6d1a1
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/imdb_thread_sched.c
+@@ -0,0 +1,171 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include "imdb_thread_sched.h"
++#include "imdb_log.h"
++#include "imdb_proc_mgr.h"
++
++#include <linux/kernel.h>
++#include <linux/fs.h>
++#include <linux/imdb_resources.h>
++
++static struct imdb_thread_sched imdb_thread_sched = {
++	.threads = {},
++	.lock = __MUTEX_INITIALIZER(imdb_thread_sched.lock),
++	.wq = __WAIT_QUEUE_HEAD_INITIALIZER(imdb_thread_sched.wq)
++};
++
++/* When free engine found, return true, otherwise return false
++ * If engine not found, `out` parameter would be invalid
++ */
++static bool imdb_find_free_thread(uint8_t *out)
++{
++	bool found_free_thread = false;
++	uint8_t thread = 0;
++
++	mutex_lock(&imdb_thread_sched.lock);
++
++	for (; thread < IMDB_THREAD_NUM; ++thread) {
++		if (imdb_thread_sched.threads[thread].state == IMDB_THREAD_IDLE) {
++			imdb_thread_sched.threads[thread].state =
++				IMDB_THREAD_BUSY;
++			found_free_thread = true;
++			break;
++		}
++	}
++
++	mutex_unlock(&imdb_thread_sched.lock);
++
++	*out = thread;
++
++	return found_free_thread;
++}
++
++static int imdb_release_thread(unsigned long __user arg)
++{
++	int rc = 0;
++	uint8_t thread = arg;
++
++	if (thread >= IMDB_THREAD_NUM) {
++		IMDB_DBG("Invalid thread");
++		return -EINVAL;
++	}
++
++	mutex_lock(&imdb_thread_sched.lock);
++
++	if (imdb_thread_sched.threads[thread].state == IMDB_THREAD_BUSY) {
++		imdb_thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
++	} else {
++		IMDB_ERR("Thread is already IDLE");
++		rc = -EINVAL;
++	}
++
++	mutex_unlock(&imdb_thread_sched.lock);
++
++	wake_up_interruptible(&imdb_thread_sched.wq);
++
++	return rc;
++}
++
++static int imdb_get_thread(void)
++{
++	int rc = 0;
++	uint8_t thread = 0;
++
++	rc = wait_event_interruptible(imdb_thread_sched.wq,
++				      imdb_find_free_thread(&thread));
++
++	if (unlikely(rc)) {
++		IMDB_WRN("Process interrupted, try to release thread");
++		imdb_release_thread(thread);
++		return rc;
++	}
++
++	if (unlikely(thread >= IMDB_THREAD_NUM)) {
++		IMDB_ERR("Invalid thread, skip acquiring");
++		return -EFAULT;
++	}
++
++	return thread;
++}
++
++bool get_thread_state(uint8_t thread)
++{
++	bool state = false;
++
++	mutex_lock(&imdb_thread_sched.lock);
++
++	state = imdb_thread_sched.threads[thread].state == IMDB_THREAD_BUSY;
++
++	mutex_unlock(&imdb_thread_sched.lock);
++
++	return state;
++}
++
++int reset_thread_sched(void)
++{
++	int rc = 0;
++	uint8_t thread = 0;
++
++	IMDB_INF("Thread scheduler reset");
++
++	mutex_lock(&imdb_thread_sched.lock);
++
++	for (; thread < IMDB_THREAD_NUM; ++thread) {
++		if (imdb_thread_sched.threads[thread].state == IMDB_THREAD_BUSY)
++			IMDB_WRN("Busy thread hard reset %u", thread);
++
++		imdb_thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
++	}
++
++	mutex_unlock(&imdb_thread_sched.lock);
++
++	wake_up_interruptible(&imdb_thread_sched.wq);
++
++	return rc;
++}
++
++int init_thread_sched(void)
++{
++	return reset_thread_sched();
++}
++
++void destroy_thread_sched(void)
++{
++	mutex_destroy(&imdb_thread_sched.lock);
++}
++
++int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
++{
++	int rc = -EFAULT;
++	int thread = 0;
++
++	switch (cmd) {
++	case IMDB_IOCTL_GET_THREAD: {
++		rc = imdb_get_thread();
++		if (rc < 0)
++			break;
++
++		thread = rc;
++
++		rc = imdb_register_thread(thread);
++		if (likely(!rc))
++			rc = thread;
++
++		break;
++	}
++	case IMDB_IOCTL_RELEASE_THREAD: {
++		rc = imdb_release_thread(arg);
++		if (likely(!rc))
++			rc = imdb_unregister_thread(arg);
++		break;
++	}
++	}
++
++	return rc;
++}
++
++int thread_sched_clear_res(uint8_t thread)
++{
++	return imdb_release_thread(thread);
++}
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.h b/drivers/pnm/imdb_resource/imdb_thread_sched.h
+similarity index 76%
+rename from drivers/pnm/dba_resource/dba_thread_sched.h
+rename to drivers/pnm/imdb_resource/imdb_thread_sched.h
+index 8da709ca0..71675314b 100644
+--- a/drivers/pnm/dba_resource/dba_thread_sched.h
++++ b/drivers/pnm/imdb_resource/imdb_thread_sched.h
+@@ -1,18 +1,18 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#ifndef __dba_thread_sched_H__
+-#define __dba_thread_sched_H__
++#ifndef __imdb_thread_sched_H__
++#define __imdb_thread_sched_H__
+ 
+ #include <linux/wait.h>
+-#include <linux/dba_resources.h>
++#include <linux/imdb_resources.h>
+ #include <linux/mutex.h>
+ 
+-struct dba_thread_sched {
++struct imdb_thread_sched {
+ 	struct {
+ 		uint8_t state;
+ 		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
+-	} threads[DBA_THREAD_NUM];
++	} threads[IMDB_THREAD_NUM];
+ 	struct mutex lock;
+ 	uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(struct mutex)];
+ 	struct wait_queue_head wq;
+@@ -27,4 +27,4 @@ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg);
+ bool get_thread_state(uint8_t thread);
+ 
+ int thread_sched_clear_res(uint8_t thread);
+-#endif //__dba_thread_sched_H__
++#endif //__imdb_thread_sched_H__
+diff --git a/drivers/pnm/dba_resource/resource_device.c b/drivers/pnm/imdb_resource/resource_device.c
+similarity index 52%
+rename from drivers/pnm/dba_resource/resource_device.c
+rename to drivers/pnm/imdb_resource/resource_device.c
+index ffabe6553..5d4edcaba 100644
+--- a/drivers/pnm/dba_resource/resource_device.c
++++ b/drivers/pnm/imdb_resource/resource_device.c
+@@ -1,12 +1,12 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "dba_allocator.h"
+-#include "dba_log.h"
+-#include "dba_proc_mgr.h"
+-#include "dba_private.h"
+-#include "dba_thread_sched.h"
+-#include "dba_sysfs.h"
++#include "imdb_allocator.h"
++#include "imdb_log.h"
++#include "imdb_proc_mgr.h"
++#include "imdb_private.h"
++#include "imdb_thread_sched.h"
++#include "imdb_sysfs.h"
+ 
+ #include <linux/init.h>
+ #include <linux/module.h>
+@@ -14,50 +14,50 @@
+ #include <linux/fs.h>
+ #include <linux/cdev.h>
+ #include <linux/device.h>
+-#include <linux/dba_resources.h>
++#include <linux/imdb_resources.h>
+ 
+-static long dba_ioctl(struct file *file, unsigned int cmd,
++static long imdb_ioctl(struct file *file, unsigned int cmd,
+ 		      unsigned long __user arg)
+ {
+ 	int result = 0;
+ 
+-	if (_IOC_TYPE(cmd) != DBA_RESOURCE_IOC_MAGIC) {
+-		DBA_ERR("Wrong ioctl request: %d", cmd);
++	if (_IOC_TYPE(cmd) != IMDB_RESOURCE_IOC_MAGIC) {
++		IMDB_ERR("Wrong ioctl request: %d", cmd);
+ 		return -ENOTTY;
+ 	}
+ 
+ 	switch (cmd) {
+-	case DBA_IOCTL_ALLOCATE:
+-	case DBA_IOCTL_DEALLOCATE:
++	case IMDB_IOCTL_ALLOCATE:
++	case IMDB_IOCTL_DEALLOCATE:
+ 		result = allocator_ioctl(cmd, arg);
+ 		break;
+-	case DBA_IOCTL_GET_THREAD:
+-	case DBA_IOCTL_RELEASE_THREAD:
++	case IMDB_IOCTL_GET_THREAD:
++	case IMDB_IOCTL_RELEASE_THREAD:
+ 		result = thread_sched_ioctl(cmd, arg);
+ 		break;
+ 	default:
+ 		result = -ENOTTY;
+-		DBA_ERR("Unknown ioctl: %d", cmd);
++		IMDB_ERR("Unknown ioctl: %d", cmd);
+ 	}
+ 
+ 	return result;
+ }
+ 
+-static int dba_open(struct inode *inode, struct file *file)
++static int imdb_open(struct inode *inode, struct file *file)
+ {
+-	return dba_register_process();
++	return imdb_register_process();
+ }
+ 
+-static int dba_close(struct inode *inode, struct file *file)
++static int imdb_close(struct inode *inode, struct file *file)
+ {
+-	return dba_release_process();
++	return imdb_release_process();
+ }
+ 
+-static const struct file_operations dba_resource_operation = {
+-	.open = dba_open,
+-	.release = dba_close,
++static const struct file_operations imdb_resource_operation = {
++	.open = imdb_open,
++	.release = imdb_close,
+ 	.owner = THIS_MODULE,
+-	.unlocked_ioctl = dba_ioctl,
++	.unlocked_ioctl = imdb_ioctl,
+ 	.llseek = noop_llseek
+ };
+ static int device_major_number = -1;
+@@ -68,7 +68,7 @@ static struct device *device;
+ static void destroy_resource_device(int device_created)
+ {
+ 	if (device_created) {
+-		DBA_INF("Destroy DBA resource device");
++		IMDB_INF("Destroy IMDB resource device");
+ 		device_destroy(device_class, device_major_number);
+ 		cdev_del(&resource_device);
+ 	}
+@@ -85,7 +85,7 @@ static char *devnode_func(struct device *dev, umode_t *mode)
+ 	if (!mode)
+ 		return NULL;
+ 
+-	*mode = DBA_RW_MODE;
++	*mode = IMDB_RW_MODE;
+ 	return NULL;
+ }
+ 
+@@ -93,39 +93,39 @@ static int create_resource_device(void)
+ {
+ 	int device_created = 0;
+ 
+-	DBA_INF("Trying to create resource device...");
++	IMDB_INF("Trying to create resource device...");
+ 
+ 	if (alloc_chrdev_region(&device_major_number, 0, 1,
+-				DBA_RESOURCE_DEVICE_NAME) < 0) {
+-		DBA_ERR("Fail to allocate chrdev region");
++				IMDB_RESOURCE_DEVICE_NAME) < 0) {
++		IMDB_ERR("Fail to allocate chrdev region");
+ 		goto fail;
+ 	}
+ 
+-	device_class = class_create(THIS_MODULE, DBA_RESOURCE_CLASS_NAME);
++	device_class = class_create(THIS_MODULE, IMDB_RESOURCE_CLASS_NAME);
+ 	if (unlikely(!device_class)) {
+-		DBA_ERR("Fail to create device class");
++		IMDB_ERR("Fail to create device class");
+ 		goto fail;
+ 	}
+ 
+ 	device_class->devnode = devnode_func;
+ 
+ 	device = device_create(device_class, NULL, device_major_number, NULL,
+-			       DBA_RESOURCE_DEVICE_NAME);
++			       IMDB_RESOURCE_DEVICE_NAME);
+ 
+ 	if (unlikely(!device)) {
+-		DBA_ERR("Fail to create device in /dev/*");
++		IMDB_ERR("Fail to create device in /dev/*");
+ 		goto fail;
+ 	}
+ 
+ 	device_created = 1;
+-	cdev_init(&resource_device, &dba_resource_operation);
++	cdev_init(&resource_device, &imdb_resource_operation);
+ 
+ 	if (cdev_add(&resource_device, device_major_number, 1) == -1) {
+-		DBA_ERR("Fail to add device.");
++		IMDB_ERR("Fail to add device.");
+ 		goto fail;
+ 	}
+ 
+-	DBA_INF("The resource device is created.");
++	IMDB_INF("The resource device is created.");
+ 
+ 	return 0;
+ 
+@@ -134,41 +134,41 @@ static int create_resource_device(void)
+ 	return -1;
+ }
+ 
+-static int __init init_dba_resource_module(void)
++static int __init init_imdb_resource_module(void)
+ {
+ 	int result = 0;
+ 
+-	DBA_INF("Begin DBA Resource Manager initialization...");
++	IMDB_INF("Begin IMDB Resource Manager initialization...");
+ 
+ 	result = create_resource_device();
+ 
+ 	if (unlikely(result < 0)) {
+-		DBA_ERR("DBA Resource Manager initialization failed");
++		IMDB_ERR("IMDB Resource Manager initialization failed");
+ 		goto resource_device_fail;
+ 	}
+ 
+ 	result = initialize_memory_allocator();
+ 
+ 	if (unlikely(result < 0)) {
+-		DBA_ERR("Fail to initialize memory allocator.");
++		IMDB_ERR("Fail to initialize memory allocator.");
+ 		goto allocator_fail;
+ 	}
+ 
+ 	result = init_thread_sched();
+ 
+ 	if (unlikely(result)) {
+-		DBA_ERR("Fail to initialize memory threads scheduler.");
++		IMDB_ERR("Fail to initialize memory threads scheduler.");
+ 		goto thread_sched_fail;
+ 	}
+ 
+-	result = dba_build_sysfs(device);
++	result = imdb_build_sysfs(device);
+ 
+ 	if (unlikely(result)) {
+-		DBA_ERR("Fail to build sysfs.");
++		IMDB_ERR("Fail to build sysfs.");
+ 		goto build_sysfs_fail;
+ 	}
+ 
+-	DBA_INF("Initialization is done");
++	IMDB_INF("Initialization is done");
+ 	return 0;
+ 
+ build_sysfs_fail:
+@@ -181,9 +181,9 @@ static int __init init_dba_resource_module(void)
+ 	return result;
+ }
+ 
+-static void __exit exit_dba_resource_module(void)
++static void __exit exit_imdb_resource_module(void)
+ {
+-	dba_destroy_sysfs(device);
++	imdb_destroy_sysfs(device);
+ 
+ 	destroy_resource_device(1);
+ 
+@@ -191,13 +191,13 @@ static void __exit exit_dba_resource_module(void)
+ 
+ 	destroy_thread_sched();
+ 
+-	dba_destroy_proc_manager();
++	imdb_destroy_proc_manager();
+ 
+-	DBA_INF("DBA Resource Manager unloaded.");
++	IMDB_INF("IMDB Resource Manager unloaded.");
+ }
+ 
+ MODULE_LICENSE("GPL");
+-MODULE_DESCRIPTION("DBA Resource Manager");
++MODULE_DESCRIPTION("IMDB Resource Manager");
+ 
+-module_init(init_dba_resource_module);
+-module_exit(exit_dba_resource_module);
++module_init(init_imdb_resource_module);
++module_exit(exit_imdb_resource_module);
+diff --git a/include/uapi/linux/dba_resources.h b/include/uapi/linux/dba_resources.h
+deleted file mode 100644
+index e681edd80..000000000
+--- a/include/uapi/linux/dba_resources.h
++++ /dev/null
+@@ -1,52 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+-/*
+- * Copyright (C) 2023 Samsung Electronics Co. LTD
+- *
+- * This software is proprietary of Samsung Electronics.
+- * No part of this software, either material or conceptual may be copied or
+- * distributed, transmitted, transcribed, stored in a retrieval system or
+- * translated into any human or computer language in any form by any means,
+- * electronic, mechanical, manual or otherwise, or disclosed to third parties
+- * without the express written permission of Samsung Electronics.
+- */
+-#ifndef __DBA_RESOURCES_H__
+-#define __DBA_RESOURCES_H__
+-
+-#ifdef __KERNEL__
+-#include <linux/types.h>
+-#else
+-#include <stdint.h> // for uint64_t
+-#endif
+-
+-// [TODO: y-lavrinenko] Should be merged with libimdb.h when the last is on kernel
+-
+-#define DBA_RESOURCE_CLASS_NAME "dba_resource"
+-#define DBA_RESOURCE_DEVICE_NAME "pnm/" DBA_RESOURCE_CLASS_NAME
+-#define DBA_RESOURCE_DEVICE_PATH "/dev/" DBA_RESOURCE_DEVICE_NAME
+-
+-#define DBA_SYSFS_PATH "/sys/class/"DBA_RESOURCE_CLASS_NAME"/pnm!"DBA_RESOURCE_CLASS_NAME
+-
+-#define DBA_THREAD_NUM 3
+-#define DBA_NUM_OF_RANK 2
+-
+-#define DBA_THREAD_BUSY 1
+-#define DBA_THREAD_IDLE 0
+-
+-#pragma pack(push, 1)
+-struct dba_allocation {
+-	uint64_t address;
+-	uint64_t size;
+-	uint8_t rank;
+-};
+-#pragma pack(pop)
+-
+-#define DBA_RESOURCE_IOC_MAGIC 'D'
+-
+-#define DBA_IOCTL_ALLOCATE \
+-	_IOWR(DBA_RESOURCE_IOC_MAGIC, 1, struct dba_allocation)
+-#define DBA_IOCTL_DEALLOCATE \
+-	_IOW(DBA_RESOURCE_IOC_MAGIC, 2, struct dba_allocation)
+-#define DBA_IOCTL_GET_THREAD _IO(DBA_RESOURCE_IOC_MAGIC, 3)
+-#define DBA_IOCTL_RELEASE_THREAD _IOW(DBA_RESOURCE_IOC_MAGIC, 4, uint8_t)
+-
+-#endif /* __DBA_RESOURCES_H__ */
+diff --git a/include/uapi/linux/imdb_resources.h b/include/uapi/linux/imdb_resources.h
+new file mode 100644
+index 000000000..57edd9074
+--- /dev/null
++++ b/include/uapi/linux/imdb_resources.h
+@@ -0,0 +1,52 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++/*
++ * Copyright (C) 2023 Samsung Electronics Co. LTD
++ *
++ * This software is proprietary of Samsung Electronics.
++ * No part of this software, either material or conceptual may be copied or
++ * distributed, transmitted, transcribed, stored in a retrieval system or
++ * translated into any human or computer language in any form by any means,
++ * electronic, mechanical, manual or otherwise, or disclosed to third parties
++ * without the express written permission of Samsung Electronics.
++ */
++#ifndef __IMDB_RESOURCES_H__
++#define __IMDB_RESOURCES_H__
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stdint.h> // for uint64_t
++#endif
++
++// [TODO: y-lavrinenko] Should be merged with libimdb.h when the last is on kernel
++
++#define IMDB_RESOURCE_CLASS_NAME "imdb_resource"
++#define IMDB_RESOURCE_DEVICE_NAME "pnm/" IMDB_RESOURCE_CLASS_NAME
++#define IMDB_RESOURCE_DEVICE_PATH "/dev/" IMDB_RESOURCE_DEVICE_NAME
++
++#define IMDB_SYSFS_PATH "/sys/class/"IMDB_RESOURCE_CLASS_NAME"/pnm!"IMDB_RESOURCE_CLASS_NAME
++
++#define IMDB_THREAD_NUM 3
++#define IMDB_NUM_OF_RANK 2
++
++#define IMDB_THREAD_BUSY 1
++#define IMDB_THREAD_IDLE 0
++
++#pragma pack(push, 1)
++struct imdb_allocation {
++	uint64_t address;
++	uint64_t size;
++	uint8_t rank;
++};
++#pragma pack(pop)
++
++#define IMDB_RESOURCE_IOC_MAGIC 'D'
++
++#define IMDB_IOCTL_ALLOCATE \
++	_IOWR(IMDB_RESOURCE_IOC_MAGIC, 1, struct imdb_allocation)
++#define IMDB_IOCTL_DEALLOCATE \
++	_IOW(IMDB_RESOURCE_IOC_MAGIC, 2, struct imdb_allocation)
++#define IMDB_IOCTL_GET_THREAD _IO(IMDB_RESOURCE_IOC_MAGIC, 3)
++#define IMDB_IOCTL_RELEASE_THREAD _IOW(IMDB_RESOURCE_IOC_MAGIC, 4, uint8_t)
++
++#endif /* __IMDB_RESOURCES_H__ */
+diff --git a/install_dba_resource.sh b/install_dba_resource.sh
+deleted file mode 100755
+index 5cfb06e63..000000000
+--- a/install_dba_resource.sh
++++ /dev/null
+@@ -1,11 +0,0 @@
+-#!/bin/sh
+-# SPDX-License-Identifier: GPL-2.0
+-
+-set -e
+-
+-sudo cp -v drivers/pnm/dba_resource/*.ko /lib/modules/`uname -r`/kernel/drivers/pnm/dba_resource/
+-sudo cp -v include/uapi/linux/dba_resources.h /usr/include/linux
+-sudo cp -v include/uapi/linux/dba_resources.h /usr/src/linux-headers-`uname -r`/include/uapi/linux
+-
+-lsmod | grep dba_resource > /dev/null && sudo rmmod dba_resource
+-sudo modprobe -v dba_resource "$@"
+diff --git a/install_imdb_resource.sh b/install_imdb_resource.sh
+new file mode 100755
+index 000000000..9d11af76e
+--- /dev/null
++++ b/install_imdb_resource.sh
+@@ -0,0 +1,11 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++
++set -e
++
++sudo cp -v drivers/pnm/imdb_resource/*.ko /lib/modules/`uname -r`/kernel/drivers/pnm/imdb_resource/
++sudo cp -v include/uapi/linux/imdb_resources.h /usr/include/linux
++sudo cp -v include/uapi/linux/imdb_resources.h /usr/src/linux-headers-`uname -r`/include/uapi/linux
++
++lsmod | grep imdb_resource > /dev/null && sudo rmmod imdb_resource
++sudo modprobe -v imdb_resource "$@"
+-- 
+2.34.1
+

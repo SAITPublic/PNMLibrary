@@ -1,0 +1,47 @@
+From c79c39179e61cfa560d30e94eff0124c926ad242 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Mon, 29 May 2023 12:24:22 +0300
+Subject: [PATCH 29/33] Move driver contents to the root
+
+* Build script rename: build_drv.sh -> build.sh
+* Includes checker rename: check_driver_includes.sh -> check_includes.h
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ debug/init.gdb                      | 2 +-
+ debug/{axdimm-gdb.py => pnm-gdb.py} | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+ rename debug/{axdimm-gdb.py => pnm-gdb.py} (97%)
+
+diff --git a/debug/init.gdb b/debug/init.gdb
+index 724211f..dca80ee 100644
+--- a/debug/init.gdb
++++ b/debug/init.gdb
+@@ -14,7 +14,7 @@ set schedule-multiple on
+ set pagination off
+ 
+ # The script that keeps child processes running.
+-source debug/axdimm-gdb.py
++source debug/pnm-gdb.py
+ 
+ # Set a flag on quit so that the script doesn't cause GDB to crash.
+ # Yes, GDB is a bit fragile.
+diff --git a/debug/axdimm-gdb.py b/debug/pnm-gdb.py
+similarity index 97%
+rename from debug/axdimm-gdb.py
+rename to debug/pnm-gdb.py
+index bbf123a..7a70a91 100644
+--- a/debug/axdimm-gdb.py
++++ b/debug/pnm-gdb.py
+@@ -42,7 +42,7 @@ def find_library(library_name):
+   hard-coded relative path (based on the project layout), which can be
+   overridden by an environment variable.
+   """
+-  search_path = Path(os.getenv('AXDIMM_LIBS_PATH', '../../driver/build'))
++  search_path = Path(os.getenv('PNM_LIBS_PATH', '../../build'))
+ 
+   # In the build directory, the libraries are likely to be in different
+   # subdirectories (e.g. `build/ai/libPnmAI.so`, `build/secure/libPnmAISecure.so`).
+-- 
+2.34.1
+

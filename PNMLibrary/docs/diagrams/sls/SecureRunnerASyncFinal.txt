@@ -1,0 +1,75 @@
+@startuml
+title axdimm::secure::ProdConsCPURunner
+box "SecNDP runtime" #LightYellow
+    participant ":DLRM" as in <<E, #990000>>
+    participant "::SecureRunner" as SR <<C, #00AA00>>
+
+    participant "::OperationExecutor" as OE <<C, #00AA00>>
+    participant "::DLRMPreprocessor" as DPRE <<C, #AAAA00>>
+    participant "::DLRMPostprocessor" as DPOST <<C, #AAAA00>>
+    participant "Encryption/Decryption Core" as EDC <<I, #00AAFF>>
+
+    participant "::ProdConsRunner" as PCR <<C, #00AA00>>
+    participant "::UntrustedAxdimmDevice" as UAD <<C, #00AA00>>
+    participant "NDP Hardware" as TS <<I, #00AAFF>>
+end box
+
+skinparam backgroundColor transparent
+group "Init stage"
+in -> SR **: Create
+SR -> PCR **: Create
+PCR -> PCR: Open action queue
+SR -> OE **: Create
+OE -> DPRE **
+OE -> DPOST **
+OE -> UAD **
+end group
+
+group "Load stage"
+in -> SR ++: load_tables(...)
+    SR -> OE ++: load_tables(...)
+        OE -> DPRE ++: load_tables(...)
+            alt verification_enabled
+                DPRE -> DPRE: add_tags(tables_data)
+            end
+            DPRE -> EDC ++: encrypt(...)
+            return encrypted data
+            return preprocessed data
+            OE -> UAD ++: load(preprocessed data)
+                UAD ->o TS: store data
+            return
+        return
+    return
+return
+end group
+
+group "SLS run stage"
+in -> SR ++: run(indices)
+    SR -> OE ++: run_sls(indices)
+        OE -> OE: initialize OTP buffers
+        OE -[#red]> PCR ++: process_opts(indices) // Process OTPs on CPU
+        OE -[#green]> UAD ++: device_.run(indices) // SLS on NDP device
+            par
+                loop "for i = 0 ... num_tables"
+                    OE -> PCR : run_sls_over_otps(indices[i])
+                    PCR -> EDC ++: offset_transform_reduce(indices[i])
+                    return EPSum[i]
+                end
+            end
+            UAD -> TS : execute SLS on device
+            TS -> UAD
+            OE -> UAD: Wait for CPsum
+            return CPSum
+            OE -> PCR: Wait for EPsum
+            return EPsum
+            OE -> DPOST ++: decrypt(CPsum, EPsum, ...)
+                DPOST -> DPOST: psum = CPsum + EPsum
+                alt verification_enabled
+                    DPOST -> DPOST: perform_verification(...)
+                end
+            return psum
+    return psum
+return psum
+end group
+
+@enduml

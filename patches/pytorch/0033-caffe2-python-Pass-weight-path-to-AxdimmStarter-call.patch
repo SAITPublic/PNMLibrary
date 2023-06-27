@@ -1,0 +1,37 @@
+From e30652df7ca5877de35ab610aac98c6f9d91f2a3 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 24 Nov 2021 17:50:33 +0900
+Subject: [PATCH 033/128] [caffe2/python] Pass weight path to 'AxdimmStarter'
+ call
+
+Now AXDIMM library expects weight path to be passed from python, support this
+in python bindings.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/python/pybind_state_axdimm.cc | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index c6db7553..0866558d 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -32,9 +32,12 @@ REGISTER_BLOB_FEEDER(AXDIMM, TensorFeeder<AXDIMMContext>);
+ namespace py = pybind11;
+ 
+ void addAXDIMMGlobalMethods(py::module& m) {
+-  m.def("axdimm_starter", [](unsigned num_inference_engines) {
+-    return static_cast<int>(axdimm::axdimm_starter(num_inference_engines));
+-  });
++  m.def(
++      "axdimm_starter",
++      [](unsigned num_inference_engines, const std::string& weight_path) {
++        return static_cast<int>(
++            axdimm::axdimm_starter(num_inference_engines, weight_path));
++      });
+   m.def("axdimm_closer", []() {
+     return static_cast<int>(axdimm::axdimm_closer());
+   });
+-- 
+2.34.1
+

@@ -1,0 +1,902 @@
+From fc322ef54bf7101d4185e7898cfc9287b2a0773e Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Wed, 12 Oct 2022 17:05:44 +0300
+Subject: [PATCH 056/161] [driver/dax/axdimm] Memory allocator: refactoring
+
+* Replace memory allocation concept with objects package.
+Actually there is a confusion between the request for a pack
+of object allocations, objects and the object allocation itself.
+In fact, the real rank allocation is only the object allocation.
+The objects package only indirectly contains metadata for real
+object allocation pointers.
+* Fix a memory leak when the objects package couldn't be created,
+but the objects did.
+* Fix a memory leak when we allocate the memory, but can't pass
+the descriptor to user.
+* Fix kmalloc bug about zero size allocation.
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/dax/axdimm_allocator.c       | 510 +++++++++++++++------------
+ drivers/dax/axdimm_allocator.h       |  35 +-
+ drivers/dax/axdimm_process_manager.h |   3 +
+ drivers/dax/axdimm_sysfs.c           |   2 +-
+ 4 files changed, 304 insertions(+), 246 deletions(-)
+
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 0f6cf6bde..ce254fca3 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -13,6 +13,87 @@
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
++static int init_rank_pool(struct axdimm_allocator *alloc, uint8_t rank,
++			  uint64_t size)
++{
++	int err_code;
++	struct gen_pool *pool =
++		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
++
++	if (unlikely(!pool)) {
++		AXDIMM_ERR(
++			"gen_pool_create failed for rank pool[%hhu], granularity = [%llu]\n",
++			rank, alloc->gran);
++		err_code = -ENOMEM;
++		goto init_rank_pool_out;
++	}
++
++	/* The reason why PAGE_SIZE is given below in init_memory_pools */
++	err_code = gen_pool_add(pool, PAGE_SIZE, size, NUMA_NO_NODE);
++	if (unlikely(err_code < 0)) {
++		AXDIMM_ERR(
++			"Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
++			rank, size, err_code);
++		gen_pool_destroy(pool);
++		goto init_rank_pool_out;
++	}
++
++	AXDIMM_INF(
++		"Memory rank pool[%hhu] initialized: granularity = [%llu], size = [%llu]\n",
++		rank, alloc->gran, size);
++	alloc->mem_pools[rank] = pool;
++
++init_rank_pool_out:
++	return err_code;
++}
++
++/* Make each pool chunk size == 0 */
++static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
++					  struct gen_pool_chunk *chunk,
++					  void *data)
++{
++	chunk->end_addr = chunk->start_addr - 1;
++}
++
++static void cleanup_memory_pools(struct axdimm_allocator *alloc)
++{
++	uint8_t rank;
++	struct gen_pool *pool;
++
++	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++		pool = alloc->mem_pools[rank];
++		if (unlikely(!pool)) {
++			AXDIMM_WRN(
++				"Trying to cleanup memory rank pool[%hhu] that was not created\n",
++				rank);
++			continue;
++		}
++		if (unlikely(gen_pool_avail(pool) != gen_pool_size(pool))) {
++			AXDIMM_ERR(
++				"Memory rank pool[%hhu]: non-deallocated objects exist, size: %zu, avail: %zu\n",
++				rank, gen_pool_size(pool),
++				gen_pool_avail(pool));
++			/*
++			 * To destroy memory pool gen_pool_destroy checks
++			 * outstanding allocations up to the kernel panic.
++			 * Mark all our memory chunks with zero size for
++			 * forced deallocation ignoring that.
++			 */
++			gen_pool_for_each_chunk(
++				pool, mem_pool_mark_zero_chunk_size, NULL);
++		}
++		gen_pool_destroy(pool);
++		AXDIMM_INF("Memory rank pool[%hhu] is destroyed\n", rank);
++	}
++	memset(alloc->mem_pools, 0, SIZEOF_ARRAY(alloc->mem_pools));
++}
++
++static inline uint64_t get_rank_size(struct axdmem_info *mem_info, uint8_t rank)
++{
++	return mem_info->mem_size[rank % NUM_OF_CS][AXDIMM_BLOCK_BASE] /
++	       NUM_RANKS_PER_CS;
++}
++
+ static int init_memory_pools(struct axdimm_allocator *alloc,
+ 			     struct axdmem_info *mem_info)
+ {
+@@ -20,57 +101,40 @@ static int init_memory_pools(struct axdimm_allocator *alloc,
+ 	uint64_t rank_size;
+ 	int err_code;
+ 
+-	if (unlikely(!is_power_of_2(alloc->granularity))) {
++	if (unlikely(!is_power_of_2(alloc->gran))) {
+ 		AXDIMM_ERR("Memory granularity should be a power of 2!\n");
+ 		return -EINVAL;
+ 	}
+ 
+-	memset(alloc->rank_mem_pools, 0, SIZEOF_ARRAY(alloc->rank_mem_pools));
++	memset(alloc->mem_pools, 0, SIZEOF_ARRAY(alloc->mem_pools));
+ 	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
+-		alloc->rank_mem_pools[rank] = gen_pool_create(
+-			ilog2(alloc->granularity), NUMA_NO_NODE);
+-		if (unlikely(!alloc->rank_mem_pools[rank])) {
+-			AXDIMM_ERR(
+-				"gen_pool_create failed for rank pool[%hhu], granularity = [%llu]\n",
+-				rank, alloc->granularity);
+-			err_code = -ENOMEM;
+-			goto init_mem_pools_err;
+-		}
+-
+ 		/*
+-		 * PAGE_SIZE size reserve from start to eliminate allocator
++		 * reserve PAGE_SIZE size from start to eliminate allocator
+ 		 * ambiguity, technically we could back off by just 1 byte,
+ 		 * but given the alignment, the page size is preferred.
+ 		 * Otherwise, the allocator may return 0 as a pointer to
+ 		 * the real allocation, and we'll not be able to distinguish
+ 		 * the result from the allocator fail.
+ 		 */
+-		rank_size =
+-			mem_info->mem_size[rank % NUM_OF_CS][AXDIMM_BLOCK_BASE] /
+-				NUM_RANKS_PER_CS -
+-			PAGE_SIZE;
+-		err_code = gen_pool_add(alloc->rank_mem_pools[rank], PAGE_SIZE,
+-					rank_size, NUMA_NO_NODE);
+-		if (unlikely(err_code < 0)) {
+-			AXDIMM_ERR(
+-				"Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
+-				rank, rank_size, err_code);
+-			goto init_mem_pools_err;
++		rank_size = get_rank_size(mem_info, rank) - PAGE_SIZE;
++		err_code = init_rank_pool(alloc, rank, rank_size);
++		if (unlikely(err_code)) {
++			cleanup_memory_pools(alloc);
++			return err_code;
+ 		}
+-
+-		AXDIMM_INF(
+-			"Memory rank pool[%hhu] initialized: granularity = [%llu], size = [%llu]\n",
+-			rank, alloc->granularity, rank_size);
+ 	}
+ 
+ 	return 0;
++}
+ 
+-init_mem_pools_err:
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank)
+-		if (alloc->rank_mem_pools[rank])
+-			gen_pool_destroy(alloc->rank_mem_pools[rank]);
+-	memset(alloc->rank_mem_pools, 0, SIZEOF_ARRAY(alloc->rank_mem_pools));
+-	return err_code;
++/* General preinitializing allocator part, reset/init independent */
++static int preinit_axdimm_allocator(struct axdimm_allocator *alloc,
++				    struct axdmem_info *mem_info)
++{
++	alloc->pack_counter = 0;
++	alloc->gran = PAGE_SIZE; // [TODO: @p.bred] make configurable
++	memset(alloc->mem_pools, 0, SIZEOF_ARRAY(alloc->mem_pools));
++	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
+ }
+ 
+ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+@@ -81,40 +145,37 @@ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+ 
+ 	AXDIMM_DBG("Initializing AXDIMM allocator\n");
+ 
+-	alloc->descriptor_counter = 0;
+-	alloc->granularity = PAGE_SIZE; // [TODO: @p.bred] make configurable
+-
+-	err_code = init_memory_pools(alloc, mem_info);
++	err_code = preinit_axdimm_allocator(alloc, mem_info);
+ 	if (unlikely(err_code))
+-		goto init_allocator_out;
++		return err_code;
+ 
+-	INIT_LIST_HEAD(&alloc->alloc_list);
++	INIT_LIST_HEAD(&alloc->obj_pack_list);
+ 
+ 	alloc->proc_mgr = proc_mgr;
+ 
+ 	/* Protect memory allocation operations */
+ 	mutex_init(&alloc->memory_mutex);
+ 
+-init_allocator_out:
+-	return err_code;
++	return 0;
+ }
+ 
+-static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+-					  struct gen_pool_chunk *chunk,
+-					  void *data)
++/* Cleanup memory object packages storage */
++static void cleanup_obj_packs(struct axdimm_allocator *alloc)
+ {
+-	/* make chunk size == 0 */
+-	chunk->end_addr = chunk->start_addr - 1;
++	struct list_head *cur, *n;
++	struct obj_pack *entry;
++
++	list_for_each_safe(cur, n, &alloc->obj_pack_list) {
++		entry = list_entry(cur, struct obj_pack, list);
++		kfree(entry->objects);
++		list_del(cur);
++		kfree(entry);
++	}
+ }
+ 
+ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ 			   struct axdmem_info *mem_info)
+ {
+-	struct list_head *cur, *n;
+-	struct axdimm_allocation *entry;
+-	uint8_t rank;
+-	struct gen_pool *pool;
+-
+ 	AXDIMM_DBG("Resetting AXDIMM allocator\n");
+ 
+ 	if (unlikely(mutex_is_locked(&alloc->memory_mutex))) {
+@@ -122,45 +183,10 @@ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ 		mutex_unlock(&alloc->memory_mutex);
+ 	}
+ 
+-	alloc->descriptor_counter = 0;
+-	alloc->granularity = PAGE_SIZE; // [TODO: @p.bred] make configurable
++	cleanup_obj_packs(alloc);
++	cleanup_memory_pools(alloc);
+ 
+-	/* Cleanup allocation storage */
+-	list_for_each_safe(cur, n, &alloc->alloc_list) {
+-		entry = list_entry(cur, struct axdimm_allocation, list);
+-		kfree(entry->objects);
+-		list_del(cur);
+-		kfree(entry);
+-	}
+-
+-	/* Cleanup memory rank pools */
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
+-		pool = alloc->rank_mem_pools[rank];
+-		if (unlikely(!pool)) {
+-			AXDIMM_WRN("Memory rank pool[%hhu] is not created\n",
+-				   rank);
+-			continue;
+-		}
+-		if (unlikely(gen_pool_avail(pool) != gen_pool_size(pool))) {
+-			AXDIMM_ERR(
+-				"Memory rank pool[%hhu]: non-deallocated objects exist, size: %zu, avail: %zu\n",
+-				rank, gen_pool_size(pool),
+-				gen_pool_avail(pool));
+-			/*
+-			 * To destroy memory pool gen_pool_destroy checks
+-			 * outstanding allocations up to the kernel panic.
+-			 * Mark all our memory chunks with zero size for
+-			 * forced deallocation ignoring that.
+-			 */
+-			gen_pool_for_each_chunk(
+-				pool, mem_pool_mark_zero_chunk_size, NULL);
+-		}
+-		gen_pool_destroy(pool);
+-		AXDIMM_INF("Memory rank pool[%hhu] is destroyed\n", rank);
+-	}
+-	memset(alloc->rank_mem_pools, 0, SIZEOF_ARRAY(alloc->rank_mem_pools));
+-
+-	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
++	return preinit_axdimm_allocator(alloc, mem_info);
+ }
+ 
+ void cleanup_axdimm_allocator(struct axdimm_allocator *alloc)
+@@ -170,32 +196,27 @@ void cleanup_axdimm_allocator(struct axdimm_allocator *alloc)
+ 	mutex_destroy(&alloc->memory_mutex);
+ }
+ 
+-static inline int save_new_allocation(struct axdimm_allocator *alloc,
+-				      struct axd_memory_object *objects,
+-				      uint64_t num_obj)
++static int add_obj_pack(struct axdimm_allocator *alloc,
++			struct axd_memory_object *objects, uint64_t num_obj)
+ {
+-	int err_code = 0;
+-	struct axdimm_allocation *allocation =
+-		kmalloc(sizeof(struct axdimm_allocation), GFP_KERNEL);
++	struct obj_pack *pack = kmalloc(sizeof(struct obj_pack), GFP_KERNEL);
+ 
+-	if (unlikely(!allocation)) {
+-		AXDIMM_ERR("kmalloc failed for axdimm_allocation [%zu]\n",
+-			   sizeof(struct axdimm_allocation));
+-		err_code = -ENOMEM;
+-		goto new_alloc_out;
++	if (unlikely(!pack)) {
++		AXDIMM_ERR("kmalloc failed for obj_pack [%zu]\n",
++			   sizeof(struct obj_pack));
++		return -ENOMEM;
+ 	}
+ 
+-	/* Set descriptor for this allocation */
+-	allocation->descriptor = ++alloc->descriptor_counter;
+-	/* Set objects count for this allocation */
+-	allocation->num_obj = num_obj;
+-	/* Set memory objects for this allocation */
+-	allocation->objects = objects;
++	/* Set descriptor for this objects package */
++	pack->desc = ++alloc->pack_counter;
++	/* Set objects count */
++	pack->num_obj = num_obj;
++	/* Set memory objects */
++	pack->objects = objects;
+ 
+-	list_add_tail(&allocation->list, &alloc->alloc_list);
++	list_add_tail(&pack->list, &alloc->obj_pack_list);
+ 
+-new_alloc_out:
+-	return err_code;
++	return 0;
+ }
+ 
+ /* Get total number of allocated objects depends on user memory policy. */
+@@ -258,7 +279,6 @@ static int pool_alloc_mem_obj(struct axdimm_allocator *alloc, uint64_t obj_idx,
+ 			      struct axd_memory_object *objects,
+ 			      struct axd_memory_alloc_request *request)
+ {
+-	int err_code = 0;
+ 	uint64_t user_obj_size, offset;
+ 	const uint64_t user_obj_idx = get_user_obj_idx(
+ 		obj_idx, rank, rank_num_obj, request->preference);
+@@ -267,8 +287,7 @@ static int pool_alloc_mem_obj(struct axdimm_allocator *alloc, uint64_t obj_idx,
+ 		AXDIMM_ERR(
+ 			"user_obj_idx >= num_user_objects, user_obj_idx = [%llu], num_user_objects = [%llu]\n",
+ 			user_obj_idx, request->num_user_objects);
+-		err_code = -EINVAL;
+-		goto pool_alloc_out;
++		return -EINVAL;
+ 	}
+ 
+ 	user_obj_size = request->user_objects_sizes[user_obj_idx];
+@@ -276,17 +295,15 @@ static int pool_alloc_mem_obj(struct axdimm_allocator *alloc, uint64_t obj_idx,
+ 		AXDIMM_ERR(
+ 			"Memory object size is zero, user_obj_idx = [%llu]\n",
+ 			user_obj_idx);
+-		err_code = -EINVAL;
+-		goto pool_alloc_out;
++		return -EINVAL;
+ 	}
+ 
+-	offset = gen_pool_alloc(alloc->rank_mem_pools[rank], user_obj_size);
++	offset = gen_pool_alloc(alloc->mem_pools[rank], user_obj_size);
+ 	if (unlikely(!offset)) {
+ 		AXDIMM_ERR(
+ 			"No free memory for user_object_id = [%llu], user_obj_size = [%llu] at pool[%hhu]\n",
+ 			user_obj_idx, user_obj_size, rank);
+-		err_code = -ENOMEM;
+-		goto pool_alloc_out;
++		return -ENOMEM;
+ 	}
+ 
+ 	AXDIMM_DBG(
+@@ -298,8 +315,7 @@ static int pool_alloc_mem_obj(struct axdimm_allocator *alloc, uint64_t obj_idx,
+ 	objects[obj_idx].offset = offset;
+ 	objects[obj_idx].length = user_obj_size;
+ 
+-pool_alloc_out:
+-	return err_code;
++	return 0;
+ }
+ 
+ static int deallocate_objects(struct axdimm_allocator *alloc,
+@@ -315,15 +331,15 @@ static int deallocate_objects(struct axdimm_allocator *alloc,
+ 		rank = objects[obj_count].rank;
+ 		addr = objects[obj_count].offset;
+ 		size = objects[obj_count].length;
+-		if (unlikely(!gen_pool_has_addr(alloc->rank_mem_pools[rank],
+-						addr, size))) {
++		if (unlikely(!gen_pool_has_addr(alloc->mem_pools[rank], addr,
++						size))) {
+ 			AXDIMM_ERR(
+-				"Derelicted memory object: rank = [%hhu], addr = [%llu], size = [%llu]\n",
++				"Trying to deallocate object from a pool[%hhu] that doesn't contain it: addr = [%llu], size = [%llu]\n",
+ 				rank, addr, size);
+ 			err_code = -EINVAL;
+ 			continue;
+ 		}
+-		gen_pool_free(alloc->rank_mem_pools[rank], addr, size);
++		gen_pool_free(alloc->mem_pools[rank], addr, size);
+ 	}
+ 
+ 	return err_code;
+@@ -347,26 +363,60 @@ static int allocate_in_ranks(uint64_t num_obj, struct axdimm_allocator *alloc,
+ 						      rank_num_obj, objects,
+ 						      request);
+ 			if (unlikely(err_code)) {
+-				*actual_num = idx;
+ 				goto alloc_ranks_out;
+ 			}
+ 		}
+ 	}
+ 
+ alloc_ranks_out:
++	*actual_num = idx;
+ 	return err_code;
+ }
+ 
+-static int allocate_memory(struct axdimm_allocator *alloc,
+-			   struct axd_memory_alloc_request *request,
+-			   uint64_t *descriptor)
++static int allocate_objects(struct axdimm_allocator *alloc,
++			    struct axd_memory_alloc_request *request,
++			    uint64_t *desc, uint64_t num_obj,
++			    struct axd_memory_object *objects)
+ {
+ 	int err_code = 0;
+ 	uint64_t actual_num = 0;
++
++	mutex_lock(&alloc->memory_mutex);
++	err_code = allocate_in_ranks(num_obj, alloc, objects, request,
++				     &actual_num);
++	if (unlikely(err_code)) {
++		if (deallocate_objects(alloc, objects, actual_num))
++			AXDIMM_ERR("Failed partial deallocation\n");
++		goto alloc_obj_out;
++	}
++
++	err_code = add_obj_pack(alloc, objects, num_obj);
++	if (unlikely(err_code)) {
++		AXDIMM_ERR("Failed to add objects package\n");
++		goto alloc_obj_out;
++	}
++
++	/* Return new descriptor to user space */
++	*desc = alloc->pack_counter;
++
++	AXDIMM_DBG(
++		"Allocation succeeded, returning package descriptor = [%llu]\n",
++		*desc);
++
++alloc_obj_out:
++	mutex_unlock(&alloc->memory_mutex);
++	return err_code;
++}
++
++static int allocate_memory(struct axdimm_allocator *alloc,
++			   struct axd_memory_alloc_request *request,
++			   uint64_t *desc)
++{
++	int err_code;
+ 	/* Array with allocated memory objects depends on user memory policy,
+-	 * if no issues with allocation and filling by original user objects,
+-	 * it's placed into allocation storage.
+-	 */
++	* if no issues with allocation and filling by original user objects,
++	* it's placed into object packages storage.
++	*/
+ 	struct axd_memory_object *objects = NULL;
+ 	/* Total number of allocated objects given the user memory policy */
+ 	const uint64_t num_obj =
+@@ -378,109 +428,106 @@ static int allocate_memory(struct axdimm_allocator *alloc,
+ 	objects = kmalloc_array(num_obj, sizeof(struct axd_memory_object),
+ 				GFP_KERNEL);
+ 	if (unlikely(!objects)) {
+-		AXDIMM_ERR("No free space for memory objects, num_obj = %llu\n",
++		AXDIMM_ERR("No free memory for objects, num_obj = [%llu]\n",
+ 			   num_obj);
+-		err_code = -ENOMEM;
+-		goto alloc_out;
++		return -ENOMEM;
+ 	}
+ 
+-	mutex_lock(&alloc->memory_mutex);
+-	err_code = allocate_in_ranks(num_obj, alloc, objects, request,
+-				     &actual_num);
+-	if (unlikely(err_code)) {
+-		if (deallocate_objects(alloc, objects, actual_num))
+-			AXDIMM_ERR("Failed partial deallocate\n");
+-
++	err_code = allocate_objects(alloc, request, desc, num_obj, objects);
++	if (unlikely(err_code))
+ 		kfree(objects);
+-		AXDIMM_DBG("Partial allocation freed for %llu objects\n",
+-			   actual_num);
+-		goto alloc_unlock_out;
+-	}
+ 
+-	err_code = save_new_allocation(alloc, objects, num_obj);
+-	if (err_code) {
+-		AXDIMM_ERR("Failed to save a new allocation.\n");
+-		goto alloc_unlock_out;
+-	}
+-
+-	/* Return new descriptor to user space */
+-	*descriptor = alloc->descriptor_counter;
+-
+-	AXDIMM_DBG("Allocation succeeded, returning descriptor [%llu]\n",
+-		   *descriptor);
+-
+-alloc_unlock_out:
+-	mutex_unlock(&alloc->memory_mutex);
+-alloc_out:
+ 	return err_code;
+ }
+ 
+-static int allocate_memory_ioctl(struct axdimm_allocator *alloc,
+-				 unsigned long __user arg)
++static int init_alloc_kreq(struct axd_memory_alloc_request *kreq,
++			   struct axd_memory_alloc_request __user *ureq)
+ {
+ 	int err_code;
+ 	uint32_t array_size;
+-	uint64_t descriptor;
+-	struct axd_memory_alloc_request kernel_req;
+-	struct axd_memory_alloc_request __user *usr_req =
+-		(struct axd_memory_alloc_request __user *)arg;
+ 	uint64_t *sizes_ptr = NULL;
+ 
+-	AXDIMM_COPY_FROM_USER(err_code, &kernel_req, usr_req,
++	AXDIMM_COPY_FROM_USER(err_code, kreq, ureq,
+ 			      sizeof(struct axd_memory_alloc_request));
+ 	if (unlikely(err_code))
+-		goto out;
++		goto alloc_kreq_out;
+ 
+-	array_size = sizeof(uint64_t) * kernel_req.num_user_objects;
+-	sizes_ptr = kernel_req.user_objects_sizes;
+-	kernel_req.user_objects_sizes = kmalloc(array_size, GFP_KERNEL);
+-	if (unlikely(!kernel_req.user_objects_sizes)) {
+-		AXDIMM_ERR("kmalloc failed for array_size [%u]\n", array_size);
++	array_size = sizeof(uint64_t) * kreq->num_user_objects;
++	/* We must check the size before kmalloc! */
++	if (unlikely(array_size == 0)) {
++		AXDIMM_ERR("Allocate request is invalid, array_size = [0]\n");
++		err_code = -EINVAL;
++		goto alloc_kreq_out;
++	}
++	sizes_ptr = kreq->user_objects_sizes;
++	kreq->user_objects_sizes = kmalloc(array_size, GFP_KERNEL);
++	if (unlikely(!kreq->user_objects_sizes)) {
++		AXDIMM_ERR("kmalloc failed for array_size = [%u]\n",
++			   array_size);
+ 		err_code = -ENOMEM;
+-		goto out;
++		goto alloc_kreq_out;
+ 	}
+ 
+-	AXDIMM_COPY_FROM_USER(err_code, kernel_req.user_objects_sizes,
+-			      sizes_ptr, array_size);
++	AXDIMM_COPY_FROM_USER(err_code, kreq->user_objects_sizes, sizes_ptr,
++			      array_size);
++	if (unlikely(err_code))
++		kfree(kreq->user_objects_sizes);
++
++alloc_kreq_out:
++	return err_code;
++}
++
++static int allocate_memory_ioctl(struct axdimm_allocator *alloc,
++				 unsigned long __user arg)
++{
++	int err_code;
++	uint64_t desc;
++	struct axd_memory_alloc_request kreq;
++	struct axd_memory_alloc_request __user *ureq =
++		(struct axd_memory_alloc_request __user *)arg;
++
++	err_code = init_alloc_kreq(&kreq, ureq);
+ 	if (unlikely(err_code))
+-		goto free_user_objects_sizes;
+-	err_code = allocate_memory(alloc, &kernel_req, &descriptor);
++		goto alloc_ioctl_out;
++
++	err_code = allocate_memory(alloc, &kreq, &desc);
+ 	if (unlikely(err_code)) {
+ 		AXDIMM_ERR("Failed to allocate memory.\n");
+-		goto free_user_objects_sizes;
++		goto deinit_kreq;
+ 	}
+ 
+-	err_code = put_user(descriptor, &usr_req->descriptor);
++	err_code = put_user(desc, &ureq->descriptor);
+ 	if (unlikely(err_code)) {
+ 		AXDIMM_ERR("Can't copy allocation descriptor to user.\n");
+-		goto free_user_objects_sizes;
++		deallocate_memory(alloc, desc);
++		goto deinit_kreq;
+ 	}
+ 
+ 	/* descriptor is valid and copied to user, so add it to process resources */
+-	err_code = axdimm_proc_register_alloc(alloc->proc_mgr, descriptor);
++	err_code = axdimm_proc_register_alloc(alloc->proc_mgr, desc);
+ 
+-free_user_objects_sizes:
+-	kfree(kernel_req.user_objects_sizes);
+-out:
++deinit_kreq:
++	kfree(kreq.user_objects_sizes);
++alloc_ioctl_out:
+ 	return err_code;
+ }
+ 
+-static int get_num_obj(struct axdimm_allocator *alloc, uint64_t descriptor,
++static int get_num_obj(struct axdimm_allocator *alloc, uint64_t desc,
+ 		       uint64_t *num_obj)
+ {
+ 	int err_code = -EINVAL;
+ 	struct list_head *ptr;
+-	struct axdimm_allocation *allocation;
++	struct obj_pack *pack;
+ 
+-	if (unlikely(descriptor == 0))
++	if (unlikely(desc == 0))
+ 		goto out_num_obj;
+ 
+ 	mutex_lock(&alloc->memory_mutex);
+-	list_for_each(ptr, &alloc->alloc_list) {
+-		allocation = list_entry(ptr, struct axdimm_allocation, list);
+-		if (allocation->descriptor == descriptor) {
+-			*num_obj = allocation->num_obj;
+-			AXDIMM_DBG("Number of objects: %llu\n", *num_obj);
++	list_for_each(ptr, &alloc->obj_pack_list) {
++		pack = list_entry(ptr, struct obj_pack, list);
++		if (pack->desc == desc) {
++			*num_obj = pack->num_obj;
++			AXDIMM_DBG("Number of objects: [%llu]\n", *num_obj);
+ 			err_code = 0;
+ 			goto unlock_num_obj;
+ 		}
+@@ -511,7 +558,7 @@ static int get_num_obj_ioctl(struct axdimm_allocator *alloc,
+ 		get_num_obj(alloc, kernel_get_num_obj_req.descriptor, &num_obj);
+ 	if (unlikely(err_code)) {
+ 		AXDIMM_ERR(
+-			"Can't get number of objects by allocation descriptor [%llu]\n",
++			"Can't get number of objects by objects package descriptor [%llu]\n",
+ 			kernel_get_num_obj_req.descriptor);
+ 		goto out_num_obj_ioctl;
+ 	}
+@@ -524,30 +571,30 @@ static int get_num_obj_ioctl(struct axdimm_allocator *alloc,
+ 	return err_code;
+ }
+ 
+-static int get_allocation(struct axdimm_allocator *alloc,
+-			  struct axd_memory_alloc *request)
++static int get_obj_pack(struct axdimm_allocator *alloc,
++			struct axd_memory_alloc *request)
+ {
+ 	int err_code = -EINVAL;
+ 	struct list_head *ptr;
+-	struct axdimm_allocation *allocation;
++	struct obj_pack *pack;
+ 
+ 	AXDIMM_DBG("Getting allocation for descriptor %llu\n", request->descriptor);
+ 	if (unlikely(request->descriptor == 0))
+ 		goto out;
+ 
+ 	mutex_lock(&alloc->memory_mutex);
+-	list_for_each(ptr, &alloc->alloc_list) {
+-		allocation = list_entry(ptr, struct axdimm_allocation, list);
+-		if (allocation->descriptor == request->descriptor) {
+-			if (request->num_objects < allocation->num_obj) {
++	list_for_each(ptr, &alloc->obj_pack_list) {
++		pack = list_entry(ptr, struct obj_pack, list);
++		if (pack->desc == request->descriptor) {
++			if (request->num_objects < pack->num_obj) {
+ 				AXDIMM_ERR(
+-					"The output memory size is too small to store the %llu allocation objects.",
+-					allocation->num_obj);
++					"The output memory size is too small to store the [%llu] package objects\n",
++					pack->num_obj);
+ 				goto unlock;
+ 			}
+ 			AXDIMM_COPY_TO_USER(
+-				err_code, request->objects, allocation->objects,
+-				allocation->num_obj *
++				err_code, request->objects, pack->objects,
++				pack->num_obj *
+ 					sizeof(struct axd_memory_object));
+ 			goto unlock;
+ 		}
+@@ -559,8 +606,8 @@ static int get_allocation(struct axdimm_allocator *alloc,
+ 	return err_code;
+ }
+ 
+-static int get_allocation_ioctl(struct axdimm_allocator *alloc,
+-				unsigned long __user arg)
++static int get_obj_pack_ioctl(struct axdimm_allocator *alloc,
++			      unsigned long __user arg)
+ {
+ 	int err_code;
+ 	struct axd_memory_alloc __user *usr_get_alloc_req =
+@@ -571,45 +618,46 @@ static int get_allocation_ioctl(struct axdimm_allocator *alloc,
+ 			      usr_get_alloc_req,
+ 			      sizeof(struct axd_memory_alloc));
+ 	if (unlikely(err_code))
+-		goto out_get_alloc;
+-	err_code = get_allocation(alloc, &kernel_get_alloc_req);
++		goto get_pack_out;
++	err_code = get_obj_pack(alloc, &kernel_get_alloc_req);
+ 	if (unlikely(err_code))
+-		AXDIMM_ERR(
+-			"Can't get allocation by allocation descriptor [%llu]\n",
+-			kernel_get_alloc_req.descriptor);
++		AXDIMM_ERR("Can't get objects package by descriptor [%llu]\n",
++			   kernel_get_alloc_req.descriptor);
+ 
+-out_get_alloc:
++get_pack_out:
+ 	return err_code;
+ }
+ 
+-int deallocate_memory(struct axdimm_allocator *alloc, uint64_t descriptor)
++int deallocate_memory(struct axdimm_allocator *alloc, uint64_t desc)
+ {
+ 	int err_code = -EINVAL;
+ 	struct list_head *cur, *n;
+-	struct axdimm_allocation *allocation;
++	struct obj_pack *pack;
+ 
+-	AXDIMM_DBG("Deallocating memory (descriptor [%llu])\n", descriptor);
++	AXDIMM_DBG("Deallocating memory (descriptor = [%llu])\n", desc);
+ 
+-	if (unlikely(descriptor == 0))
++	if (unlikely(desc == 0)) {
++		AXDIMM_ERR("Memory package descriptor is zero!!!\n");
+ 		goto out;
++	}
+ 
+ 	mutex_lock(&alloc->memory_mutex);
+-	list_for_each_safe(cur, n, &alloc->alloc_list) {
+-		allocation = list_entry(cur, struct axdimm_allocation, list);
+-		if (allocation->descriptor != descriptor)
++	list_for_each_safe(cur, n, &alloc->obj_pack_list) {
++		pack = list_entry(cur, struct obj_pack, list);
++		if (pack->desc != desc)
+ 			continue;
+ 
+-		err_code = deallocate_objects(alloc, allocation->objects,
+-					      allocation->num_obj);
++		err_code =
++			deallocate_objects(alloc, pack->objects, pack->num_obj);
+ 		if (err_code) {
+ 			AXDIMM_ERR(
+ 				"Failed to deallocate memory by descriptor [%llu]\n",
+-				descriptor);
++				desc);
+ 		}
+ 
+-		kfree(allocation->objects);
++		kfree(pack->objects);
+ 		list_del(cur);
+-		kfree(allocation);
++		kfree(pack);
+ 
+ 		goto unlock;
+ 	}
+@@ -626,13 +674,13 @@ static int deallocate_memory_ioctl(struct axdimm_allocator *alloc,
+ 	/* [TODO: @p.bred] we assume descriptor is uint64_t,
+ 	 * however in this method it's truncated to unsigned long.
+ 	 */
+-	uint64_t in_descriptor = (uint64_t)arg;
+-	int err_code = deallocate_memory(alloc, in_descriptor);
++	uint64_t in_desc = (uint64_t)arg;
++	int err_code = deallocate_memory(alloc, in_desc);
+ 
+-	if (likely(err_code == 0))
+-		axdimm_proc_remove_alloc(alloc->proc_mgr, in_descriptor);
++	if (unlikely(err_code))
++		return err_code;
+ 
+-	return err_code;
++	return axdimm_proc_remove_alloc(alloc->proc_mgr, in_desc);
+ }
+ 
+ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+@@ -644,7 +692,7 @@ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+ 	case GET_MEMORY_OBJECTS_NUM:
+ 		return get_num_obj_ioctl(alloc, arg);
+ 	case GET_MEMORY_ALLOCATION:
+-		return get_allocation_ioctl(alloc, arg);
++		return get_obj_pack_ioctl(alloc, arg);
+ 	case DEALLOCATE_MEMORY:
+ 		return deallocate_memory_ioctl(alloc, arg);
+ 	default:
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+index 504a90f03..f551d524f 100644
+--- a/drivers/dax/axdimm_allocator.h
++++ b/drivers/dax/axdimm_allocator.h
+@@ -12,33 +12,40 @@
+ #include <linux/list.h>
+ #include <linux/types.h>
+ 
+-/* Element of the list with allocations */
+-struct axdimm_allocation {
+-	/* Allocation number in list */
+-	uint64_t descriptor;
+-	/* Number of memory objects in an allocation */
++/*
++ * Element of the list with memory object packages.
++ * For each userland memory allocation request we generate internal memory
++ * objects set (objects package) depending on the memory policy. It includes all
++ * objects of all ranks based on the allocation request.
++ * These packages serve only for convenient exchange between userland processes.
++ */
++struct obj_pack {
++	/* Package number in list */
++	uint64_t desc;
++	/* Number of memory objects */
+ 	uint64_t num_obj;
+-	struct list_head list;
+-	/* Memory objects in an allocation */
++	/* Memory objects array */
+ 	struct axd_memory_object *objects;
++	/* Embedded for using lists only */
++	struct list_head list;
+ };
+ 
+ /* Helper structure for memory allocation */
+ struct axdimm_allocator {
+ 	/* Allocator granularity in bytes, the number should be a power of 2 */
+-	uint64_t granularity;
++	uint64_t gran;
+ 	/* GenAlloc memory pools for each rank, each pool has it's own virtual
+ 	 * range, currently this range is not bound to the real memory by PA,
+ 	 * Range: [reserved_indent == PAGE_SIZE, rank_size - reserved_indent]
+ 	 */
+-	struct gen_pool *rank_mem_pools[NUM_OF_RANK];
++	struct gen_pool *mem_pools[NUM_OF_RANK];
+ 	/*
+-	 * Linked list to store memory allocations, these allocations serve
++	 * Linked list to store memory object packages, these packages serve
+ 	 * only to unite multiple object allocations that exist in the pools.
+ 	 */
+-	struct list_head alloc_list;
+-	/* Allocation descriptor counter */
+-	uint64_t descriptor_counter;
++	struct list_head obj_pack_list;
++	/* Packages counter */
++	uint64_t pack_counter;
+ 	/* For process allocation ownership tracking */
+ 	struct axdimm_process_manager *proc_mgr;
+ 	struct mutex memory_mutex;
+@@ -58,6 +65,6 @@ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ void cleanup_axdimm_allocator(struct axdimm_allocator *alloc);
+ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+ 		      unsigned long __user arg);
+-int deallocate_memory(struct axdimm_allocator *alloc, uint64_t descriptor);
++int deallocate_memory(struct axdimm_allocator *alloc, uint64_t desc);
+ 
+ #endif /* __AXDIMM_ALLOCATOR_H__ */
+diff --git a/drivers/dax/axdimm_process_manager.h b/drivers/dax/axdimm_process_manager.h
+index c7b7b99dd..ae2a9849f 100644
+--- a/drivers/dax/axdimm_process_manager.h
++++ b/drivers/dax/axdimm_process_manager.h
+@@ -45,6 +45,9 @@ struct axdimm_process_manager {
+ 	struct mutex proc_list_lock;
+ };
+ 
++/* We have circle dependence with axdimm allocator */
++struct axdimm_allocator;
++
+ void init_axdimm_process_manager(struct axdimm_process_manager *mgr);
+ void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr);
+ /* function for handling 'open' file operation */
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index aa059d559..828b40135 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -141,7 +141,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[1]) == 0) {
+ 		mutex_lock(&axdimm_allocator.memory_mutex);
+-		pool = axdimm_allocator.rank_mem_pools[attr->rank];
++		pool = axdimm_allocator.mem_pools[attr->rank];
+ 		free_size = pool ? gen_pool_avail(pool) : 0;
+ 		mutex_unlock(&axdimm_allocator.memory_mutex);
+ 		return sprintf(buf, "%llu\n", free_size);
+-- 
+2.34.1
+

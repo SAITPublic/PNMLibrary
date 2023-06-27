@@ -1,0 +1,90 @@
+From 9769aa6da3e1743b2bd7f907eaae7272c15c933f Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Mon, 17 Jul 2023 05:39:27 -0400
+Subject: [PATCH 139/161] [SLS][CXL] Change allocator's granularity in cxl case
+ to 2MB
+
+- Add parameter for granularity
+- Add functionality for starting offsets from zero
+- fix double unlock mutex in failed deallocation case
+
+Resolves: MCS2-1300
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/sls_allocator.c | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index bc698159e..894465c34 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -15,6 +15,8 @@
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
++#define HUGE_PAGE_SIZE (2 << 20)
++
+ /* Helper structure for memory allocation */
+ struct sls_allocator {
+ 	/* Allocator granularity in bytes, the number should be a power of 2 */
+@@ -59,8 +61,7 @@ static int init_rank_pool(struct sls_allocator *alloc, uint8_t rank,
+ 		goto init_rank_pool_out;
+ 	}
+ 
+-	/* The reason why PAGE_SIZE is given below in init_memory_pools */
+-	err_code = gen_pool_add(pool, PAGE_SIZE, size, NUMA_NO_NODE);
++	err_code = gen_pool_add(pool, alloc->gran, size, NUMA_NO_NODE);
+ 	if (unlikely(err_code < 0)) {
+ 		SLS_ERR("Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
+ 			rank, size, err_code);
+@@ -150,7 +151,7 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 		 * the result from the allocator fail.
+ 		 */
+ 		rank_size = get_rank_size(mem_info, alloc->devtype, rank) -
+-			    PAGE_SIZE;
++			    alloc->gran;
+ 		err_code = init_rank_pool(alloc, rank, rank_size);
+ 		if (unlikely(err_code)) {
+ 			cleanup_memory_pools(alloc);
+@@ -172,7 +173,10 @@ static int preinit_sls_allocator(struct sls_allocator *alloc,
+ 	if (alloc->devtype == SLS_AXDIMM)
+ 		alloc->pool_count *= NUM_RANKS_PER_CS;
+ 
+-	alloc->gran = PAGE_SIZE; // [TODO: @p.bred] make configurable
++	// [TODO: @p.bred] make configurable
++	alloc->gran = (alloc->devtype == SLS_AXDIMM) ? PAGE_SIZE :
++						       HUGE_PAGE_SIZE;
++
+ 	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+ 	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
+ }
+@@ -262,6 +266,8 @@ static int allocate_memory_unsafe(struct sls_allocator *alloc,
+ 		return -ENOMEM;
+ 	}
+ 
++	req->rank_offset -= alloc->gran;
++
+ 	return 0;
+ }
+ 
+@@ -314,6 +320,8 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ // Call only when holding allocator lock
+ int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ {
++	req.rank_offset += allocator.gran;
++
+ 	if (req.rank >= allocator.pool_count) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req.rank);
+ 		return -EINVAL;
+@@ -334,7 +342,6 @@ int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ 					req.rank_offset, req.size))) {
+ 		SLS_ERR("Deallocating a nonexistent object at %llu of size %llu from pool[%u]\n",
+ 			req.rank_offset, req.size, req.rank);
+-		unlock_allocator();
+ 		return -EINVAL;
+ 	}
+ 
+-- 
+2.34.1
+

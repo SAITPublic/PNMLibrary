@@ -1,0 +1,61 @@
+From ed69cb9e7261ebcd422a3ba9219c759d4aabd86d Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Mon, 15 May 2023 17:06:34 +0300
+Subject: [PATCH 108/161] [dba][refactor] dba_resource code refactor
+
+Make dba_resource initialization code more consistent
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/dba_resource/resource_device.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/pnm/dba_resource/resource_device.c b/drivers/pnm/dba_resource/resource_device.c
+index b9ecddc1f..7c667f7ca 100644
+--- a/drivers/pnm/dba_resource/resource_device.c
++++ b/drivers/pnm/dba_resource/resource_device.c
+@@ -89,7 +89,7 @@ static int create_resource_device(void)
+ 	}
+ 
+ 	device_class = class_create(THIS_MODULE, DBA_RESOURCE_CLASS_NAME);
+-	if (device_class == NULL) {
++	if (unlikely(!device_class)) {
+ 		DBA_ERR("Fail to create device class");
+ 		goto fail;
+ 	}
+@@ -129,28 +129,28 @@ static int __init init_dba_resource_module(void)
+ 
+ 	result = create_resource_device();
+ 
+-	if (result < 0) {
++	if (unlikely(result < 0)) {
+ 		DBA_ERR("DBA Resource Manager initialization failed");
+ 		return result;
+ 	}
+ 
+ 	result = initialize_memory_allocator();
+ 
+-	if (result < 0) {
++	if (unlikely(result < 0)) {
+ 		DBA_ERR("Fail to initialize memory allocator.");
+ 		return result;
+ 	}
+ 
+ 	result = init_thread_sched();
+ 
+-	if (result) {
++	if (unlikely(result)) {
+ 		DBA_ERR("Fail to initialize memory threads scheduler.");
+ 		return result;
+ 	}
+ 
+ 	result = dba_build_sysfs(device);
+ 
+-	if (result) {
++	if (unlikely(result)) {
+ 		DBA_ERR("Fail to build sysfs.");
+ 		return result;
+ 	}
+-- 
+2.34.1
+

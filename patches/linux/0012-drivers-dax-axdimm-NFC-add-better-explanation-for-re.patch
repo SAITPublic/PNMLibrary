@@ -1,0 +1,35 @@
+From fde0f7008724ba93ea62d01e96e941bfcdcbb3c4 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 7 Dec 2021 09:24:54 +0900
+Subject: [PATCH 012/161] [drivers/dax/axdimm] NFC: add better explanation for
+ reserved space at the beginning of AXDIMM memory
+
+The offset caused by the fact that _dax_pmem_probe reserves memory space for
+'struct page' list used for ZONE_DEVICE. See 'nd_pfn_init' from drivers/nvdimm/pfn_devs.c
+to understand how this offset is calculated.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index aa88bbded..ecba4699e 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -161,8 +161,10 @@ static int setup_axdimm_ranges(struct dev_dax *dev_dax)
+ 		cs = i / AXDIMM_BLOCK_MAX;
+ 		block = i % AXDIMM_BLOCK_MAX;
+ 		/* The range[0].start, which is set up by devdax driver,
+-		 * has an offset from AXDIMM_BASE_ADDR because
+-		 * __dax_pmem_probe reserves several pages for DAX metadata.
++		 * has an offset from AXDIMM_BASE_ADDR because __dax_pmem_probe
++		 * reserves memory space for 'struct page' list used for ZONE_DEVICE.
++		 * See 'nd_pfn_init' from drivers/nvdimm/pfn_devs.c to understand how
++		 * this offset is calculated.
+ 		 * Yet for 'end' should be calculcated as if start equals to
+ 		 * AXDIMM_BASE_ADDR.
+ 		 */
+-- 
+2.34.1
+

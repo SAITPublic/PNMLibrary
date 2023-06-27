@@ -1,0 +1,50 @@
+From a2f625e869d97c7059e64e8e5c90427606bbf8bf Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 22 Oct 2022 15:04:04 +0300
+Subject: [PATCH 078/128] [aten,axdimm] Removed tensor items operations from
+ lengths calculation
+
+Aparently aten::select, which called on tensor indexing operations
+and aten::item, which used to get element of tensor containing 1 item
+are very slow operations.
+Refactored code to use raw pointer instead of tensor operations.
+
+Resolves: AXDIMM-452
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index 95e2bca3..6d0c85d9 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -9,17 +9,17 @@ namespace {
+ void transform_offsets(
+     const at::Tensor& offsets,
+     std::vector<uint32_t>& axdimm_lengths_out) {
+-  // number of tables * minibatch_size
+   const auto num_tables = offsets.sizes()[0];
+-  axdimm_lengths_out.reserve(num_tables * offsets.sizes()[1] - 1);
++  const auto minibatch_size = offsets.sizes()[1] - 1;
++  axdimm_lengths_out.reserve(num_tables * minibatch_size);
++  auto batch = static_cast<const uint32_t*>(offsets.data_ptr());
+   for (size_t table_idx = 0; table_idx < num_tables; ++table_idx) {
+-    const auto& batch = offsets[table_idx];
+-    for (size_t batch_idx = 0; batch_idx < batch.sizes()[0] - 1; ++batch_idx) {
+-      // cast to uint32_t is not available
++    for (size_t batch_idx = 0; batch_idx < minibatch_size; ++batch_idx) {
+       axdimm_lengths_out.push_back(
+-          batch[batch_idx + 1].item().to<int32_t>() -
+-          batch[batch_idx].item().to<int32_t>());
++          batch[batch_idx + 1] -
++          batch[batch_idx]);
+     }
++    batch += minibatch_size + 1;
+   }
+ }
+ 
+-- 
+2.34.1
+

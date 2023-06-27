@@ -1,0 +1,128 @@
+From 8c8293f1d83eeead36f20b403588b208d125a485 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Tue, 6 Sep 2022 13:27:00 +0300
+Subject: [PATCH 02/27] [application] Add AXDIMM run manifest
+
+---
+ application/axdimm_secndp_test/Makefile       | 46 ++++++++++++++++
+ .../secndp.manifest.template                  | 55 +++++++++++++++++++
+ 2 files changed, 101 insertions(+)
+ create mode 100644 application/axdimm_secndp_test/Makefile
+ create mode 100644 application/axdimm_secndp_test/secndp.manifest.template
+
+diff --git a/application/axdimm_secndp_test/Makefile b/application/axdimm_secndp_test/Makefile
+new file mode 100644
+index 00000000..f7a44e84
+--- /dev/null
++++ b/application/axdimm_secndp_test/Makefile
+@@ -0,0 +1,46 @@
++# PyTorch and the pre-trained model must be installed on the system. See README for details.
++
++ARCH_LIBDIR ?= /lib/$(shell $(CC) -dumpmachine)
++
++ifeq ($(DEBUG),1)
++GRAMINE_LOG_LEVEL = debug
++else
++GRAMINE_LOG_LEVEL = error
++endif
++
++.PHONY: all
++all: secndp.manifest
++ifeq ($(SGX),1)
++all: secndp.manifest.sgx secndp.sig secndp.token
++endif
++
++secndp.manifest: secndp.manifest.template
++	gramine-manifest \
++		-Dlog_level=$(GRAMINE_LOG_LEVEL) \
++		-Darch_libdir=$(ARCH_LIBDIR) \
++		-Dentrypoint="${AXDIMM_DRIVER_PATH}/build/test/${AXDIMM_ENTRY}" \
++		-Daxdimm_driver=${AXDIMM_DRIVER_PATH} \
++		$< > $@
++
++# Make on Ubuntu <= 20.04 doesn't support "Rules with Grouped Targets" (`&:`),
++# for details on this workaround see
++# https://github.com/gramineproject/gramine/blob/e8735ea06c/CI-Examples/helloworld/Makefile
++secndp.manifest.sgx secndp.sig: sgx_sign
++	@:
++
++.INTERMEDIATE: sgx_sign
++sgx_sign: secndp.manifest
++	gramine-sgx-sign \
++		--manifest $< \
++		--output $<.sgx
++
++secndp.token: secndp.sig
++	gramine-sgx-get-token --output $@ --sig $<
++
++.PHONY: clean
++clean:
++	$(RM) *.token *.sig *.manifest.sgx *.manifest
++
++.PHONY: distclean
++distclean: clean
++	$(RM) *.pt result.txt
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/axdimm_secndp_test/secndp.manifest.template
+new file mode 100644
+index 00000000..10d992e1
+--- /dev/null
++++ b/application/axdimm_secndp_test/secndp.manifest.template
+@@ -0,0 +1,55 @@
++# PyTorch manifest template
++
++loader.entrypoint = "file:{{ gramine.libos }}"
++libos.entrypoint = "{{ entrypoint }}"
++
++loader.log_level = "{{ log_level }}"
++# loader.log_file = "exec.log"
++
++loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:{{ arch_libdir }}:/usr/{{ arch_libdir }}"
++
++loader.insecure__use_cmdline_argv = true
++loader.insecure__use_host_env = true
++
++loader.pal_internal_mem_size = "512M"
++
++fs.mounts = [
++  { uri = "file:{{ gramine.runtimedir() }}", path = "/lib" },
++  { uri = "file:{{ arch_libdir }}", path = "{{ arch_libdir }}" },
++  { uri = "file:/usr", path = "/usr" },
++  { uri = "file:/etc", path = "/etc" },
++  { uri = "dev:/dev/axdimm_device0", path = "/dev/axdimm_device0" },
++  { uri = "dev:/dev/axdimm_meminfo", path = "/dev/axdimm_meminfo" },
++  { uri = "file:{{ axdimm_driver }}/build/test", path = "{{ axdimm_driver }}/build/test" },
++  { uri = "file:{{ axdimm_driver }}/build/ai", path = "{{ axdimm_driver }}/build/ai" },
++  { uri = "file:{{ axdimm_driver }}/build/secure", path = "{{ axdimm_driver }}/build/secure" },
++  { type = "tmpfs", path = "/tmp" }
++]
++
++sgx.nonpie_binary = true
++sgx.enclave_size = "4G"
++sgx.thread_num = 512
++sgx.debug = true
++sgx.insecure__enable_shared_range = "true"
++
++sgx.trusted_files = [
++  "file:/dev/",
++  "file:{{ gramine.libos }}",
++  "file:{{ entrypoint }}",
++  "file:{{ gramine.runtimedir() }}/",
++  "file:{{ arch_libdir }}/",
++  "file:/usr/{{ arch_libdir }}/",
++  "file:{{ axdimm_driver }}/build/ai/",
++  "file:{{ axdimm_driver }}/build/secure/",
++]
++
++sgx.allowed_files = [
++  "file:run_kaggle_pt/",
++  "dev:/dev/axdimm_meminfo",
++  "dev:/dev/axdimm_device0"
++]
++
++
++# sgx.enable_stats = true
++# sgx.profile.enable = "all"
++# sgx.profile.mode = "ocall_outer"
+-- 
+2.34.1
+

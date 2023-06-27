@@ -1,0 +1,30 @@
+From ede696c4c89e150ac8110b7944317f5618d62641 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 19 Nov 2021 14:43:08 +0900
+Subject: [PATCH 005/161] [drivers/dax/axdimm] Fix default return value for
+ axdimm_ioctl
+
+With '-ENOTTY' as a default value axdimm_starter fails to write
+embedding tables in AXDIMM memory.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 6da25e048..c8e9bb054 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -298,7 +298,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 		up(&axdimm_device.sem_axdimm);
+ 		break;
+ 	default:
+-		return -ENOTTY;
++		return retval;
+ 	}
+ 
+ 	return retval;
+-- 
+2.34.1
+

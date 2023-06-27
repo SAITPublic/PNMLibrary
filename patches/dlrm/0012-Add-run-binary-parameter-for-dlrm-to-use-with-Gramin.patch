@@ -1,0 +1,44 @@
+From 816ed60a0ba19e4e7fd1b1e1669f6de662ea305c Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Wed, 16 Nov 2022 23:42:40 +0300
+Subject: [PATCH 12/23] Add run binary parameter for dlrm to use with Gramine
+
+Resolves: AXDIMM-343
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ run_test.sh | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/run_test.sh b/run_test.sh
+index 2a6b8ba..f826812 100755
+--- a/run_test.sh
++++ b/run_test.sh
+@@ -13,6 +13,7 @@ interaction_op="cat"
+ num_batches=100
+ axdimm_tensor_type="simple"
+ weights_path="/var/lib/jenkins/workspace/axdimm_ci/input/DLRM_FLOAT/embedded.bin"
++script_run_command="python3"
+ 
+ while [ "$#" -ne 0 ]
+ do
+@@ -25,11 +26,15 @@ do
+         shift
+         axdimm_tensor_type=$1
+         ;;
++    "--run-command")
++	shift
++	script_run_command=$1
++	;;
+ esac
+     shift
+ done
+ 
+-python3 ./dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
++$script_run_command /var/lib/jenkins/workspace/axdimm_ci/axdimm_driver/dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
+                             --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed="$num_indices_per_lookup_fixed" \
+                             --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" \
+                             --use-axdimm "$axdimm_tensor_type" --weights-path "$weights_path" --inference-only
+-- 
+2.34.1
+

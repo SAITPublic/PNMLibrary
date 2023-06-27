@@ -1,0 +1,730 @@
+From ac4941599b25cd0a6e14f16c5e87aae9b929dd19 Mon Sep 17 00:00:00 2001
+From: "s.koval" <s.koval@samsung.com>
+Date: Wed, 7 Sep 2022 16:52:09 +0300
+Subject: [PATCH 040/161] [axdimm][sysfs] Add sysfs support for axdimm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+* Generate sysfs attributes ranks and device in general
+
+AXDIMM sysfs has view:
+
+/sys/bus/dax/devices/dax0.0/ranks/
+├── 0
+│   ├── acquisition_count
+│   ├── free_size
+│   ├── regions
+│   │   ├── base
+│   │   │   ├── offset
+│   │   │   └── size
+│   │   ├── cfgr
+│   │   │   ├── offset
+│   │   │   └── size
+│   │   ├── instr
+│   │   │   ├── offset
+│   │   │   └── size
+│   │   └── psum
+│   │       ├── offset
+│   │       └── size
+│   └── state
+|-- 1, 2, 3 (ranks)
+├── acq_timeout
+└── reset
+
+Resolves: AXDIMM-321
+
+Signed-off-by: s.koval <s.koval@samsung.com>
+---
+ drivers/dax/Makefile                |   1 +
+ drivers/dax/axdimm-private.h        |   9 +
+ drivers/dax/axdimm.c                |  20 +-
+ drivers/dax/axdimm_allocator.c      |  21 +-
+ drivers/dax/axdimm_allocator.h      |   2 +
+ drivers/dax/axdimm_rank_scheduler.c |  14 +-
+ drivers/dax/axdimm_rank_scheduler.h |   5 +
+ drivers/dax/axdimm_sysfs.c          | 374 ++++++++++++++++++++++++++++
+ drivers/dax/axdimm_sysfs.h          |  12 +
+ 9 files changed, 440 insertions(+), 18 deletions(-)
+ create mode 100644 drivers/dax/axdimm_sysfs.c
+ create mode 100644 drivers/dax/axdimm_sysfs.h
+
+diff --git a/drivers/dax/Makefile b/drivers/dax/Makefile
+index 07606255f..ab70c58d5 100644
+--- a/drivers/dax/Makefile
++++ b/drivers/dax/Makefile
+@@ -12,6 +12,7 @@ device_dax-y += axdimm.o
+ device_dax-y += axdimm_allocator.o
+ device_dax-y += axdimm_rank_scheduler.o
+ device_dax-y += axdimm_mem_tree.o
++device_dax-y += axdimm_sysfs.o
+ dax_pmem-y := pmem.o
+ 
+ obj-y += hmem/
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index e9dd38146..534340818 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -10,8 +10,10 @@
+ #include "dax-private.h"
+ #include "axdimm_log.h"
+ 
++#include <linux/cdev.h>
+ #include <linux/fs.h>
+ #include <linux/libaxdimm.h>
++#include <linux/semaphore.h>
+ #include <linux/types.h>
+ 
+ #define AXDIMM_COPY_FROM_TO_USER(func, error, dst, src, size)                  \
+@@ -55,6 +57,13 @@ struct axdimm_device_data {
+ 	int channel;
+ };
+ 
++struct axdimm_dev {
++	struct semaphore sem_axdimm; /* semaphore */
++	struct axdmem_info mem_info; /* memory info */
++	struct cdev axdimm_meminfo_cdev; /* char device for AXDIMM meminfo */
++	dev_t axdimm_meminfo_dev_no; /* char device number for AXDIMM meminfo */
++};
++
+ static inline int is_axdimm_range(u64 start, u64 end)
+ {
+ 	return start >= AXDIMM_BASE_ADDR &&
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index ebfd59e34..16688f36d 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -4,6 +4,7 @@
+ #include "axdimm_rank_scheduler.h"
+ #include "axdimm_allocator.h"
+ #include "axdimm-private.h"
++#include "axdimm_sysfs.h"
+ #include "axdimm_log.h"
+ 
+ #include <linux/memremap.h>
+@@ -29,14 +30,7 @@ typedef struct axdmem_info axdmem_info;
+ 
+ struct axdimm_allocator axdimm_allocator;
+ struct axdimm_rank_scheduler axdimm_rank_sched;
+-
+-/* Helper structure containing auxiliary info for AXDIMM device */
+-static struct axdimm_dev {
+-	struct semaphore sem_axdimm; /* semaphore */
+-	struct axdmem_info mem_info; /* memory info */
+-	struct cdev axdimm_meminfo_cdev; /* char device for AXDIMM meminfo */
+-	dev_t axdimm_meminfo_dev_no; /* char device number for AXDIMM meminfo */
+-} axdimm_device;
++struct axdimm_dev axdimm_device;
+ 
+ /* A custom class for meminfo char devices */
+ static struct class *axdimm_meminfo_class = NULL;
+@@ -404,6 +398,8 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 
+ int init_axdimm_device(struct dev_dax *dev_dax)
+ {
++	int err;
++
+ 	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
+ 	dev_dax->is_axdimm_device = 1;
+ 
+@@ -413,6 +409,11 @@ int init_axdimm_device(struct dev_dax *dev_dax)
+ 	/* Initialize device meminfo */
+ 	axdimm_setmeminfo(&axdimm_device.mem_info);
+ 
++	/* Create sysfs subsystem for the device */
++	err = build_axdimm_sysfs(&dev_dax->dev.kobj);
++	if (err)
++		return err;
++
+ 	/* Setup meminfo char device */
+ 	axdimm_setup_meminfo_cdev(&axdimm_device);
+ 
+@@ -434,6 +435,9 @@ void cleanup_axdimm_device()
+ 	/* Free allocated memory */
+ 	cleanup_axdimm_allocator(&axdimm_allocator);
+ 
++	/* Remove test attribute */
++	destroy_axdimm_sysfs();
++
+ 	/* Destroy meminfo cdev */
+ 	device_destroy(axdimm_meminfo_class,
+ 		       axdimm_device.axdimm_meminfo_dev_no);
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 9ae299f1e..9c6c3a3e0 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -10,14 +10,14 @@
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+-static int init_memory_trees(struct rb_root trees[NUM_OF_RANK],
+-			     struct axdmem_info *mem_info)
++static int init_memory_trees_and_size(struct axdimm_allocator *alloc,
++				      struct axdmem_info *mem_info)
+ {
+ 	uint8_t cs, cs_rank_idx;
+ 	uint64_t length;
+ 	int err_code = 0;
+ 
+-	memset(trees, 0, sizeof(struct rb_root) * NUM_OF_RANK);
++	memset(alloc->rank_mem_trees, 0, sizeof(struct rb_root) * NUM_OF_RANK);
+ 
+ 	for (cs = 0; cs < NUM_OF_CS; ++cs) {
+ 		length = mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] /
+@@ -25,7 +25,8 @@ static int init_memory_trees(struct rb_root trees[NUM_OF_RANK],
+ 		for (cs_rank_idx = cs;
+ 		     cs_rank_idx < NUM_RANKS_PER_CS * NUM_OF_CS;
+ 		     cs_rank_idx += NUM_RANKS_PER_CS) {
+-			err_code = release_mem_chunk(&trees[cs_rank_idx], 0,
++			/* Initialize tree */
++			err_code = release_mem_chunk(&alloc->rank_mem_trees[cs_rank_idx], 0,
+ 						     length);
+ 			if (err_code) {
+ 				AXDIMM_ERR(
+@@ -33,6 +34,8 @@ static int init_memory_trees(struct rb_root trees[NUM_OF_RANK],
+ 					err_code);
+ 				goto init_mem_trees_out;
+ 			}
++			/* Initialize tree size */
++			alloc->ranks_free_sizes[cs_rank_idx] = length;
+ 		}
+ 	}
+ 
+@@ -47,7 +50,7 @@ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+ 
+ 	alloc->descriptor_counter = 0;
+ 
+-	err_code = init_memory_trees(alloc->rank_mem_trees, mem_info);
++	err_code = init_memory_trees_and_size(alloc, mem_info);
+ 	if (err_code)
+ 		goto init_allocator_out;
+ 
+@@ -84,7 +87,9 @@ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ 	/* Cleanup memory rb-trees */
+ 	clear_memory_storage(alloc->rank_mem_trees, NUM_OF_RANK);
+ 
+-	return mem_info ? init_memory_trees(alloc->rank_mem_trees, mem_info) :
++	memset(alloc->ranks_free_sizes, 0, sizeof(uint64_t) * NUM_OF_RANK);
++
++	return mem_info ? init_memory_trees_and_size(alloc, mem_info) :
+ 			  0;
+ }
+ 
+@@ -213,6 +218,8 @@ static int rank_insert_mem_obj(struct axdimm_allocator *alloc, uint64_t obj_idx,
+ 		goto insert_out;
+ 	}
+ 
++	alloc->ranks_free_sizes[rank] -= user_obj_size;
++
+ 	objects[obj_idx].rank = rank;
+ 	objects[obj_idx].user_object_id = user_obj_idx;
+ 	objects[obj_idx].offset = offset;
+@@ -244,6 +251,8 @@ static int release_chunks(struct axdimm_allocator *alloc,
+ 				rank, offset);
+ 			goto release_chunks_out;
+ 		}
++
++		alloc->ranks_free_sizes[rank] += length;
+ 	}
+ 
+ release_chunks_out:
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+index 69cc5d3bc..c15446082 100644
+--- a/drivers/dax/axdimm_allocator.h
++++ b/drivers/dax/axdimm_allocator.h
+@@ -38,6 +38,8 @@ struct axdimm_allocation {
+ struct axdimm_allocator {
+ 	/* Ranks memory binary trees */
+ 	struct rb_root rank_mem_trees[NUM_OF_RANK];
++	/* Ranks free sizes */
++	uint64_t ranks_free_sizes[NUM_OF_RANK];
+ 	/* Linked list to store memory allocations */
+ 	struct list_head alloc_list;
+ 	/* Allocation descriptor counter */
+diff --git a/drivers/dax/axdimm_rank_scheduler.c b/drivers/dax/axdimm_rank_scheduler.c
+index 5f2705f10..74f4a8d56 100644
+--- a/drivers/dax/axdimm_rank_scheduler.c
++++ b/drivers/dax/axdimm_rank_scheduler.c
+@@ -21,7 +21,7 @@ static atomic_t rd_flag = ATOMIC_INIT(0);
+ static DECLARE_WAIT_QUEUE_HEAD(wr_wq);
+ static DECLARE_WAIT_QUEUE_HEAD(rd_wq);
+ 
+-static unsigned long acquire_free_rank(struct axdimm_rank_scheduler *rank_sched,
++static unsigned long acquire_free_rank_for_write(struct axdimm_rank_scheduler *rank_sched,
+ 				       unsigned int rw_msk, unsigned int wo_msk)
+ {
+ 	unsigned long rank;
+@@ -30,6 +30,7 @@ static unsigned long acquire_free_rank(struct axdimm_rank_scheduler *rank_sched,
+ 	rank = __ffs(rw_msk ? rw_msk : wo_msk);
+ 
+ 	axd_rs[rank].wr_stat = BUSY_STATE;
++	atomic64_inc(&axd_rs[rank].wr_acquisition_count);
+ 	return rank;
+ }
+ 
+@@ -61,8 +62,11 @@ void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched)
+ 	for (rank = 0; rank < NUM_OF_RANK; rank++) {
+ 		rank_sched->axd_rank_stats[rank].wr_stat = IDLE_STATE;
+ 		rank_sched->axd_rank_stats[rank].rd_stat = IDLE_STATE;
++		atomic64_set(&rank_sched->axd_rank_stats[rank].wr_acquisition_count, 0);
+ 	}
+ 
++	atomic64_set(&rank_sched->retry_timeout_ns, RETRY_TIMEOUT_NS);
++
+ 	mutex_init(&rank_sched->rank_stat_lock);
+ }
+ 
+@@ -84,7 +88,7 @@ static int get_rank_write(struct axdimm_rank_scheduler *rank_sched,
+ 	find_free_ranks(rank_sched, msk, &rw_mask, &wo_mask);
+ 
+ 	if (rw_mask || wo_mask) {
+-		ret = acquire_free_rank(rank_sched, rw_mask, wo_mask);
++		ret = acquire_free_rank_for_write(rank_sched, rw_mask, wo_mask);
+ 	}
+ 
+ 	mutex_unlock(&rank_sched->rank_stat_lock);
+@@ -163,7 +167,8 @@ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 			atomic_set(&wr_flag, 0);
+ 			/* timeout in nanoseconds */
+ 			wait_res = wait_event_interruptible_hrtimeout(
+-				wr_wq, atomic_read(&wr_flag), RETRY_TIMEOUT_NS);
++				wr_wq, atomic_read(&wr_flag),
++				atomic64_read(&rank_sched->retry_timeout_ns));
+ 			if (wait_res >= 0) {
+ 				ret = get_rank_write(rank_sched, arg);
+ 			}
+@@ -176,7 +181,8 @@ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 			atomic_set(&rd_flag, 0);
+ 			/* timeout in nanoseconds */
+ 			wait_res = wait_event_interruptible_hrtimeout(
+-				rd_wq, atomic_read(&rd_flag), RETRY_TIMEOUT_NS);
++				rd_wq, atomic_read(&rd_flag),
++				atomic64_read(&rank_sched->retry_timeout_ns));
+ 			if (wait_res >= 0) {
+ 				ret = get_rank_read(rank_sched, arg);
+ 			}
+diff --git a/drivers/dax/axdimm_rank_scheduler.h b/drivers/dax/axdimm_rank_scheduler.h
+index ce678d3be..d9f93e892 100644
+--- a/drivers/dax/axdimm_rank_scheduler.h
++++ b/drivers/dax/axdimm_rank_scheduler.h
+@@ -4,6 +4,7 @@
+ #ifndef __AXDIMM_RANK_SCHEDULER_H__
+ #define __AXDIMM_RANK_SCHEDULER_H__
+ 
++#include <linux/atomic.h>
+ #include <linux/libaxdimm.h>
+ #include <linux/types.h>
+ #include <linux/mutex.h>
+@@ -15,7 +16,11 @@ struct axdimm_rank_scheduler {
+ 		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
+ 		uint8_t rd_stat;
+ 		uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(uint8_t)];
++		atomic64_t wr_acquisition_count;
++		uint8_t cacheline_padding_3[L1_CACHE_BYTES - sizeof(atomic64_t)];
+ 	} axd_rank_stats[NUM_OF_RANK];
++	atomic64_t retry_timeout_ns;
++	uint8_t cacheline_padding_4[L1_CACHE_BYTES - sizeof(atomic64_t)];
+ 	struct mutex rank_stat_lock;
+ };
+ 
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+new file mode 100644
+index 000000000..edd1f7b2e
+--- /dev/null
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -0,0 +1,374 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#include "axdimm_allocator.h"
++#include "axdimm_log.h"
++#include "axdimm_rank_scheduler.h"
++#include "axdimm-private.h"
++
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <linux/libaxdimm.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++#define RANK_ATTR_MAX 4
++#define RANK_SYSFS_ATTR_COUNT 3
++#define RANK_SYSFS_GROUPS_COUNT 1
++#define REGION_SYSFS_ATTR_COUNT 2
++#define WITH_NULL_TERM(var) (var + 1)
++
++extern struct axdimm_dev axdimm_device;
++extern struct axdimm_allocator axdimm_allocator;
++extern struct axdimm_rank_scheduler axdimm_rank_sched;
++
++static struct kobject *ranks_kobj;
++
++static ssize_t acq_timeout_show(struct device *device,
++				struct device_attribute *attr, char *buf)
++{
++	return sprintf(buf, "%llu\n",
++		       atomic64_read(&axdimm_rank_sched.retry_timeout_ns));
++}
++
++static ssize_t acq_timeout_store(struct device *device,
++				 struct device_attribute *attr, const char *buf,
++				 size_t count)
++{
++	uint64_t acq_timeout;
++
++	if (kstrtoull(buf, 10, &acq_timeout)) {
++		AXDIMM_ERR(
++			"Failed to convert rank acquisition timeout [%llu] to string.\n",
++			acq_timeout);
++		return 0;
++	}
++	atomic64_set(&axdimm_rank_sched.retry_timeout_ns, acq_timeout);
++	return count;
++}
++static DEVICE_ATTR_RW(acq_timeout);
++
++static ssize_t reset_store(struct device *device, struct device_attribute *attr,
++			   const char *buf, size_t count)
++{
++	if (sysfs_streq(buf, "1")) {
++		if (axdimm_ioctl(NULL, DEVICE_IOCRESET, 0))
++			AXDIMM_ERR("Failed to reset device via sysfs.\n");
++	}
++
++	return count;
++}
++static DEVICE_ATTR_WO(reset);
++
++static struct attribute *dev_attrs[] = {
++	&dev_attr_acq_timeout.attr,
++	&dev_attr_reset.attr,
++	NULL,
++};
++
++static struct attribute_group dev_attr_group = {
++	.attrs = dev_attrs,
++};
++
++static const struct attribute_group *dev_attr_groups[] = {
++	&dev_attr_group,
++	NULL,
++};
++
++struct rank_attribute {
++	struct attribute attr;
++	ssize_t (*show)(struct rank_attribute *attr, char *buf);
++	uint8_t rank;
++};
++
++struct region_attribute {
++	struct attribute attr;
++	ssize_t (*show)(struct region_attribute *attr, char *buf);
++	uint8_t rank;
++	uint8_t region;
++};
++
++struct regions_sysfs {
++	struct region_attribute region_attrs[AXDIMM_BLOCK_MAX]
++					    [REGION_SYSFS_ATTR_COUNT];
++	struct attribute *attrs[AXDIMM_BLOCK_MAX]
++			       [WITH_NULL_TERM(REGION_SYSFS_ATTR_COUNT)];
++	struct attribute_group group[AXDIMM_BLOCK_MAX];
++	const struct attribute_group *groups[WITH_NULL_TERM(AXDIMM_BLOCK_MAX)];
++	struct kobject regions_kobj;
++};
++
++static struct rank_sysfs {
++	struct rank_attribute attrs[RANK_SYSFS_ATTR_COUNT];
++	struct attribute *attributes[WITH_NULL_TERM(RANK_SYSFS_ATTR_COUNT)];
++	struct attribute_group group;
++	const struct attribute_group
++		*groups[WITH_NULL_TERM(RANK_SYSFS_GROUPS_COUNT)];
++	struct regions_sysfs regions_fs;
++	struct kobject rank_idx_kobj;
++} ranks_fs[NUM_OF_RANK];
++
++static const char *const rank_attr_name[] = {
++	"state",
++	"free_size",
++	"acquisition_count",
++};
++
++static ssize_t rank_show(struct rank_attribute *attr, char *buf)
++{
++	uint8_t state;
++	uint64_t free_size;
++	uint64_t wr_acq_count;
++
++	if (strcmp(attr->attr.name, rank_attr_name[0]) == 0) {
++		struct axdimm_rank_stat_t *axd_rs =
++			axdimm_rank_sched.axd_rank_stats;
++		mutex_lock(&axdimm_rank_sched.rank_stat_lock);
++		state = axd_rs[attr->rank].wr_stat;
++		mutex_unlock(&axdimm_rank_sched.rank_stat_lock);
++		return sprintf(buf, "%u\n", state);
++	}
++
++	if (strcmp(attr->attr.name, rank_attr_name[1]) == 0) {
++		mutex_lock(&axdimm_allocator.memory_mutex);
++		free_size = axdimm_allocator.ranks_free_sizes[attr->rank];
++		mutex_unlock(&axdimm_allocator.memory_mutex);
++		return sprintf(buf, "%llu\n", free_size);
++	}
++
++	if (strcmp(attr->attr.name, rank_attr_name[2]) == 0) {
++		struct axdimm_rank_stat_t *axd_rs =
++			axdimm_rank_sched.axd_rank_stats;
++		wr_acq_count = atomic64_read(&axd_rs[attr->rank].wr_acquisition_count);
++		return sprintf(buf, "%llu\n", wr_acq_count);
++	}
++
++	return 0;
++}
++
++static ssize_t rank_attr_show(struct kobject *kobj, struct attribute *attr,
++			      char *buf)
++{
++	struct rank_attribute *rank_attr =
++		container_of(attr, struct rank_attribute, attr);
++
++	if (!rank_attr->show)
++		return -EIO;
++
++	return rank_attr->show(rank_attr, buf);
++}
++
++static const char *const region_group_name[] = {
++	"base",
++	"instr",
++	"cfgr",
++	"psum",
++};
++
++static const char *const region_attr_name[] = {
++	"size",
++	"offset",
++};
++
++static ssize_t region_show(struct region_attribute *attr, char *buf)
++{
++	if (strcmp(attr->attr.name, region_attr_name[0]) == 0)
++		return sprintf(
++			buf, "%llu\n",
++			axdimm_device.mem_info.mem_size[attr->rank % NUM_OF_CS]
++						       [attr->region]);
++
++	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
++		return sprintf(
++			buf, "%llu\n",
++			axdimm_device.mem_info.mem_offset[attr->rank % NUM_OF_CS]
++							 [attr->region]);
++
++	return 0;
++}
++
++static ssize_t region_attr_show(struct kobject *kobj, struct attribute *attr,
++				char *buf)
++{
++	struct region_attribute *region_attr =
++		container_of(attr, struct region_attribute, attr);
++
++	if (!region_attr->show)
++		return -EIO;
++
++	return region_attr->show(region_attr, buf);
++}
++
++static void fill_region_sysfs(struct regions_sysfs *regions_fs, uint8_t rank,
++			      uint8_t region)
++{
++	int attr_counter;
++	struct region_attribute *reg_attr;
++
++	for (attr_counter = 0; attr_counter < REGION_SYSFS_ATTR_COUNT;
++	     ++attr_counter) {
++		reg_attr = &regions_fs->region_attrs[region][attr_counter];
++		reg_attr->attr.name = region_attr_name[attr_counter];
++		reg_attr->attr.mode = 0444;
++		reg_attr->show = region_show;
++		reg_attr->rank = rank;
++		reg_attr->region = region;
++
++		regions_fs->attrs[region][attr_counter] =
++			&regions_fs->region_attrs[region][attr_counter].attr;
++	}
++
++	regions_fs->attrs[region][REGION_SYSFS_ATTR_COUNT] = NULL;
++	regions_fs->group[region].name = region_group_name[region];
++	regions_fs->group[region].attrs = &regions_fs->attrs[region][0];
++
++	regions_fs->groups[region] = &regions_fs->group[region];
++}
++
++static void fill_regions_sysfs(struct regions_sysfs *regions_fs, uint8_t rank)
++{
++	int region;
++
++	for (region = 0; region < AXDIMM_BLOCK_MAX; region++)
++		fill_region_sysfs(regions_fs, rank, region);
++
++	regions_fs->groups[AXDIMM_BLOCK_MAX] = NULL;
++}
++
++static const struct sysfs_ops regions_sysfs_ops = {
++	.show = region_attr_show,
++};
++
++/* Operations on memory regions inside rank */
++static struct kobj_type regions_type = {
++	.sysfs_ops = &regions_sysfs_ops,
++};
++
++static int build_rank_regions_sysfs(struct kobject *kobj,
++				    struct regions_sysfs *regions_fs,
++				    uint8_t rank)
++{
++	int err;
++
++	kobject_init(&regions_fs->regions_kobj, &regions_type);
++	err = kobject_add(&regions_fs->regions_kobj, kobj, "regions");
++	if (err) {
++		kobject_put(&regions_fs->regions_kobj);
++		memset(&regions_fs->regions_kobj, 0,
++		       sizeof(regions_fs->regions_kobj));
++		goto rank_regions_out;
++	}
++
++	fill_regions_sysfs(regions_fs, rank);
++
++	err = sysfs_create_groups(&regions_fs->regions_kobj,
++				  regions_fs->groups);
++	if (err)
++		goto rank_regions_out;
++
++rank_regions_out:
++	return err;
++}
++
++static void fill_rank_attrs(struct rank_sysfs *rank_fs, uint8_t rank)
++{
++	int attr_idx;
++
++	for (attr_idx = 0; attr_idx < RANK_SYSFS_ATTR_COUNT; ++attr_idx) {
++		rank_fs->attrs[attr_idx].attr.name = rank_attr_name[attr_idx];
++		rank_fs->attrs[attr_idx].attr.mode = 0444;
++		rank_fs->attrs[attr_idx].show = rank_show;
++		rank_fs->attrs[attr_idx].rank = rank;
++
++		rank_fs->attributes[attr_idx] = &rank_fs->attrs[attr_idx].attr;
++	}
++
++	rank_fs->attributes[RANK_SYSFS_ATTR_COUNT] = NULL;
++}
++
++static void fill_rank_sysfs(struct rank_sysfs *rank_fs, uint8_t rank)
++{
++	fill_rank_attrs(rank_fs, rank);
++	rank_fs->group.attrs = rank_fs->attributes;
++	rank_fs->groups[0] = &rank_fs->group;
++	rank_fs->groups[1] = NULL;
++}
++
++static const struct sysfs_ops rank_sysfs_ops = {
++	.show = rank_attr_show,
++};
++
++/* Operations on rank stats */
++static struct kobj_type rank_type = {
++	.sysfs_ops = &rank_sysfs_ops,
++};
++
++static int build_rank_sysfs(struct kobject *kobj, uint8_t rank)
++{
++	char buf[4];
++	int err;
++
++	kobject_init(&ranks_fs[rank].rank_idx_kobj, &rank_type);
++	sprintf(buf, "%u", rank);
++	err = kobject_add(&ranks_fs[rank].rank_idx_kobj, kobj, buf);
++	if (err) {
++		kobject_put(&ranks_fs[rank].rank_idx_kobj);
++		memset(&ranks_fs[rank].rank_idx_kobj, 0,
++		       sizeof(struct kobject));
++		goto build_rank_out;
++	}
++
++	fill_rank_sysfs(&ranks_fs[rank], rank);
++
++	if (sysfs_create_groups(&ranks_fs[rank].rank_idx_kobj,
++				ranks_fs[rank].groups)) {
++		err = -ENOMEM;
++		goto build_rank_out;
++	}
++
++	err = build_rank_regions_sysfs(&ranks_fs[rank].rank_idx_kobj,
++				       &ranks_fs[rank].regions_fs, rank);
++
++build_rank_out:
++	return err;
++}
++
++int build_axdimm_sysfs(struct kobject *kobj)
++{
++	int rank;
++	int err = 0;
++
++	ranks_kobj = kobject_create_and_add("ranks", kobj);
++	if (sysfs_create_groups(ranks_kobj, dev_attr_groups)) {
++		err = -ENOMEM;
++		goto axdimm_sysfs_out;
++	}
++
++	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++		err = build_rank_sysfs(ranks_kobj, rank);
++		if (err) {
++			AXDIMM_ERR("Failed to build sysfs for rank [%d]\n",
++				   rank);
++			goto axdimm_sysfs_out;
++		}
++	}
++
++axdimm_sysfs_out:
++	return err;
++}
++
++void destroy_axdimm_sysfs(void)
++{
++	int rank;
++
++	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++		sysfs_remove_groups(&ranks_fs[rank].regions_fs.regions_kobj,
++				    ranks_fs[rank].regions_fs.groups);
++		kobject_del(&ranks_fs[rank].regions_fs.regions_kobj);
++		sysfs_remove_groups(ranks_kobj, ranks_fs[rank].groups);
++		kobject_del(&ranks_fs[rank].rank_idx_kobj);
++	}
++
++	sysfs_remove_groups(ranks_kobj, dev_attr_groups);
++	kobject_del(ranks_kobj);
++}
+diff --git a/drivers/dax/axdimm_sysfs.h b/drivers/dax/axdimm_sysfs.h
+new file mode 100644
+index 000000000..0d95d3baa
+--- /dev/null
++++ b/drivers/dax/axdimm_sysfs.h
+@@ -0,0 +1,12 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM_SYSFS__
++#define __AXDIMM_SYSFS__
++
++#include <linux/kobject.h>
++
++int build_axdimm_sysfs(struct kobject *kobj);
++void destroy_axdimm_sysfs(void);
++
++#endif /* __AXDIMM_SYSFS__ */
+-- 
+2.34.1
+

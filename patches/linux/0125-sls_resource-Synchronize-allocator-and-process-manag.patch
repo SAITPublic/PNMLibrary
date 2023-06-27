@@ -1,0 +1,262 @@
+From a24251750b16a59f1a67d6a0d6dd2106ef6b01f8 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Wed, 5 Jul 2023 10:47:44 +0000
+Subject: [PATCH 125/161] [sls_resource] Synchronize allocator and process
+ manager
+
+After refactoring code to keep only single allocations, the descriptors
+were totally removed, and process manager and allocator became more
+separate.
+
+Genalloc allocations and process manager RB-tree must be updated at the
+same time. As a WA, do both of these actions under the same allocator
+lock. A better solution would be to move the RB-tree from process
+manager into the allocator, and add API calls for working with it.
+
+Signed-off-by: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+---
+ drivers/pnm/sls_resource/sls_allocator.c      | 132 +++++++++---------
+ drivers/pnm/sls_resource/sls_allocator.h      |   4 +-
+ .../pnm/sls_resource/sls_process_manager.c    |  28 +++-
+ 3 files changed, 91 insertions(+), 73 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index 8b9241b77..5d09c1714 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -226,8 +226,9 @@ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ 	return optimal_rank;
+ }
+ 
+-static int allocate_memory(struct sls_allocator *alloc,
+-			   struct sls_memory_alloc_request *req)
++// Call only when holding allocator lock
++static int allocate_memory_unsafe(struct sls_allocator *alloc,
++				  struct sls_memory_alloc_request *req)
+ {
+ 	if (req->rank != SLS_ALLOC_ANY_RANK && req->rank >= NUM_OF_RANK) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req->rank);
+@@ -239,24 +240,17 @@ static int allocate_memory(struct sls_allocator *alloc,
+ 		return -EINVAL;
+ 	}
+ 
+-	lock_allocator(alloc);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++	if (req->rank == SLS_ALLOC_ANY_RANK)
++		req->rank = select_optimal_rank(alloc);
+ 
+-		if (req->rank == SLS_ALLOC_ANY_RANK)
+-			req->rank = select_optimal_rank(alloc);
++	req->rank_offset =
++		gen_pool_alloc(alloc->mem_pools[req->rank], req->size);
+ 
+-		req->rank_offset =
+-			gen_pool_alloc(alloc->mem_pools[req->rank], req->size);
+-
+-		if (unlikely(req->rank_offset == 0)) {
+-			unlock_allocator(alloc);
+-			SLS_ERR("No free memory for object of size = [%llu] at pool[%hhu]\n",
+-				req->size, req->rank);
+-			return -ENOMEM;
+-		}
++	if (unlikely(req->rank_offset == 0)) {
++		SLS_ERR("No free memory for object of size = [%llu] at pool[%hhu]\n",
++			req->size, req->rank);
++		return -ENOMEM;
+ 	}
+-	unlock_allocator(alloc);
+ 
+ 	return 0;
+ }
+@@ -276,64 +270,66 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 		return err;
+ 	}
+ 
+-	err = allocate_memory(alloc, &kreq);
+-	if (unlikely(err))
+-		return err;
++	lock_allocator(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-	SLS_COPY_TO_USER(err, ureq, &kreq,
+-			 sizeof(struct sls_memory_alloc_request));
+-	if (unlikely(err)) {
+-		SLS_ERR("Failed to write user alloc request. Ptr = %p.\n",
+-			ureq);
+-		return err;
+-	}
++		err = allocate_memory_unsafe(alloc, &kreq);
++		if (unlikely(err)) {
++			unlock_allocator(alloc);
++			return err;
++		}
+ 
+-	err = sls_proc_register_alloc(&sls_proc_mgr, kreq);
++		SLS_COPY_TO_USER(err, ureq, &kreq,
++				 sizeof(struct sls_memory_alloc_request));
++		if (unlikely(err)) {
++			SLS_ERR("Failed to write user alloc request. Ptr = %p.\n",
++				ureq);
++			unlock_allocator(alloc);
++			return err;
++		}
++
++		err = sls_proc_register_alloc(&sls_proc_mgr, kreq);
+ 
+-	if (!err) {
+-		SLS_DBG("Allocated obj: pool[%u], rank_offset = [0x%llx], size = [%llu]\n",
+-			kreq.rank, kreq.rank_offset, kreq.size);
++		if (!err) {
++			SLS_DBG("Allocated obj: pool[%u], rank_offset = [0x%llx], size = [%llu]\n",
++				kreq.rank, kreq.rank_offset, kreq.size);
++		}
+ 	}
++	unlock_allocator(alloc);
+ 
+ 	return err;
+ }
+ 
+-int deallocate_memory(struct sls_allocator *alloc,
+-		      struct sls_memory_alloc_request req)
++// Call only when holding allocator lock
++int deallocate_memory_unsafe(struct sls_allocator *alloc,
++			struct sls_memory_alloc_request req)
+ {
+ 	if (req.rank >= NUM_OF_RANK) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req.rank);
+ 		return -EINVAL;
+ 	}
+ 
+-	lock_allocator(alloc);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+-
+-		/*
+-		 * [TODO: @e-kutovoi] This check doesn't save against pointers
+-		 * inside of allocated memory
+-		 * i.e.:
+-		 *   addr = alloc(0x100)
+-		 *   ...
+-		 *   dealloc(addr + 4)
+-		 * We should consider either adding additional bookkeeping of
+-		 * valid allocations in here, or calling into process manager
+-		 * before this call.
+-		 */
+-		if (unlikely(!gen_pool_has_addr(alloc->mem_pools[req.rank],
+-						req.rank_offset, req.size))) {
+-			SLS_ERR(
+-				"Deallocating a nonexistent object at %llu of size %llu from pool[%u]\n",
+-				req.rank_offset, req.size, req.rank);
+-			unlock_allocator(alloc);
+-			return -EINVAL;
+-		}
+-
+-		gen_pool_free(alloc->mem_pools[req.rank], req.rank_offset,
+-			      req.size);
++	/*
++	 * [TODO: @e-kutovoi] This check doesn't save against pointers
++	 * inside of allocated memory
++	 * i.e.:
++	 *   addr = alloc(0x100)
++	 *   ...
++	 *   dealloc(addr + 4)
++	 * We should consider either adding additional bookkeeping of
++	 * valid allocations in here, or calling into process manager
++	 * before this call.
++	 */
++	if (unlikely(!gen_pool_has_addr(alloc->mem_pools[req.rank],
++					req.rank_offset, req.size))) {
++		SLS_ERR("Deallocating a nonexistent object at %llu of size %llu from pool[%u]\n",
++			req.rank_offset, req.size, req.rank);
++		unlock_allocator(alloc);
++		return -EINVAL;
+ 	}
+-	unlock_allocator(alloc);
++
++	gen_pool_free(alloc->mem_pools[req.rank], req.rank_offset, req.size);
+ 
+ 	return 0;
+ }
+@@ -354,11 +350,19 @@ static int deallocate_memory_ioctl(struct sls_allocator *alloc,
+ 		return err;
+ 	}
+ 
+-	err = deallocate_memory(alloc, kreq);
+-	if (unlikely(err))
+-		return err;
++	lock_allocator(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-	err = sls_proc_remove_alloc(&sls_proc_mgr, kreq);
++		err = deallocate_memory_unsafe(alloc, kreq);
++		if (unlikely(err)) {
++			unlock_allocator(alloc);
++			return err;
++		}
++
++		err = sls_proc_remove_alloc(&sls_proc_mgr, kreq);
++	}
++	unlock_allocator(alloc);
+ 
+ 	return err;
+ }
+diff --git a/drivers/pnm/sls_resource/sls_allocator.h b/drivers/pnm/sls_resource/sls_allocator.h
+index 9570ad72c..d5ec07449 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.h
++++ b/drivers/pnm/sls_resource/sls_allocator.h
+@@ -34,8 +34,8 @@ int reset_sls_allocator(struct sls_allocator *alloc,
+ void cleanup_sls_allocator(struct sls_dev *dev);
+ int mem_process_ioctl(unsigned int cmd, struct sls_allocator *alloc,
+ 		      unsigned long __user arg);
+-int deallocate_memory(struct sls_allocator *alloc,
+-		      struct sls_memory_alloc_request req);
++int deallocate_memory_unsafe(struct sls_allocator *alloc,
++			     struct sls_memory_alloc_request req);
+ void lock_allocator(struct sls_allocator *alloc);
+ void unlock_allocator(struct sls_allocator *alloc);
+ 
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/sls_process_manager.c
+index e61c4c0a0..b568c8f33 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/sls_process_manager.c
+@@ -165,13 +165,27 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 		struct sls_proc_desc *desc_node =
+ 			rb_entry_safe(next, struct sls_proc_desc, node);
+ 
+-		failed |= (deallocate_memory(alloc, desc_node->request) != 0);
+-		SLS_INF("Abnormal release desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
+-			desc_node->request.rank, desc_node->request.rank_offset,
+-			get_current_process_id(), current->pid);
+-		next = rb_first(&proc_res->alloc_desc_tree);
+-		rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
+-		kfree(desc_node);
++		/*
++		 * [TODO: @e-kutovoi] Genalloc allocations and the RB-tree
++		 * in process manager must be updated atomically. For now just
++		 * put both of these behind one mutex lock. But this is very
++		 * annoying to use. So we should instead refactor the code, and
++		 * perhaps move the RB-tree from process manager into the allocator.
++		 */
++		lock_allocator(alloc);
++		{
++			ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++
++			failed |= deallocate_memory_unsafe(alloc, desc_node->request) != 0;
++			SLS_INF(
++				"Abnormal release desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
++				desc_node->request.rank, desc_node->request.rank_offset,
++				get_current_process_id(), current->pid);
++			next = rb_first(&proc_res->alloc_desc_tree);
++			rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
++			kfree(desc_node);
++		}
++		unlock_allocator(alloc);
+ 	}
+ 
+ 	return failed ? -1 : 0;
+-- 
+2.34.1
+

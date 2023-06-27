@@ -1,0 +1,67 @@
+From 5d104f79da3f8beeec60e6222ce9b6694f216cb2 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Tue, 15 Nov 2022 15:08:54 +0300
+Subject: [PATCH 067/161] [drivers/dax/axdimm] Add reset for resource manager
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/dax/axdimm.c                 |  1 +
+ drivers/dax/axdimm_process_manager.c | 17 +++++++++++++++++
+ drivers/dax/axdimm_process_manager.h |  1 +
+ 3 files changed, 19 insertions(+)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 5c2ba65cd..266b27122 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -333,6 +333,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		reset_axdimm_rank_scheduler(&axdimm_rank_sched);
+ 		retval = reset_axdimm_allocator(&axdimm_allocator,
+ 						&axdimm_device.mem_info);
++		reset_axdimm_process_manager(&axdimm_proc_mgr);
+ 		break;
+ 	case SET_SC_LOCK:
+ 		if (down_interruptible(&axdimm_device.sem_axdimm)) {
+diff --git a/drivers/dax/axdimm_process_manager.c b/drivers/dax/axdimm_process_manager.c
+index 7bf8823c2..bde1550f5 100644
+--- a/drivers/dax/axdimm_process_manager.c
++++ b/drivers/dax/axdimm_process_manager.c
+@@ -386,6 +386,23 @@ void axdimm_proc_manager_cleanup_off(struct axdimm_process_manager *mgr)
+ 	atomic64_set(&mgr->enable_cleanup, 0);
+ }
+ 
++void cleanup_process_list(struct list_head *process_list)
++{
++	struct axdimm_proc_resources *proc_res_tmp;
++	struct axdimm_proc_resources *proc_res;
++
++	list_for_each_entry_safe(proc_res, proc_res_tmp, process_list, list) {
++		list_del(&proc_res->list);
++		kfree(proc_res);
++	}
++}
++
++void reset_axdimm_process_manager(struct axdimm_process_manager *mgr)
++{
++	cleanup_process_list(&mgr->active_process_list);
++	cleanup_process_list(&mgr->leaked_process_list);
++}
++
+ void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr)
+ {
+ 	struct axdimm_proc_resources *proc_res_tmp;
+diff --git a/drivers/dax/axdimm_process_manager.h b/drivers/dax/axdimm_process_manager.h
+index 57bd1c2ee..19d4f299f 100644
+--- a/drivers/dax/axdimm_process_manager.h
++++ b/drivers/dax/axdimm_process_manager.h
+@@ -53,6 +53,7 @@ struct axdimm_allocator;
+ 
+ void init_axdimm_process_manager(struct axdimm_process_manager *mgr);
+ void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr);
++void reset_axdimm_process_manager(struct axdimm_process_manager *mgr);
+ /* function for handling 'open' file operation */
+ int register_axdimm_process(struct axdimm_process_manager *mgr);
+ /* function for handling 'release' file operation */
+-- 
+2.34.1
+

@@ -1,0 +1,51 @@
+From 71ba4d4cd11e8cc1328ce3c9f72d5ca15aa4b461 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 16:56:55 +0900
+Subject: [PATCH 008/128] [caffe2/core] Fix build errors for AXDIMMContext
+
+* add missed constructors
+* add missed methods
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/context_axdimm.h | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/core/context_axdimm.h b/caffe2/core/context_axdimm.h
+index 321566e5..dbf3c27e 100644
+--- a/caffe2/core/context_axdimm.h
++++ b/caffe2/core/context_axdimm.h
+@@ -17,7 +17,11 @@ namespace caffe2 {
+ class C10_EXPORT AXDIMMContext final : public BaseContext {
+  public:
+   // The default axdimm context constructor.
+-  explicit AXDIMMContext(int device_id = -1) : device_id_(device_id){};
++  explicit AXDIMMContext(DeviceIndex device_id = -1) : device_id_(device_id){};
++  explicit AXDIMMContext(const DeviceOption& option)
++      : device_id_(option.has_device_id() ? option.device_id() : 0){};
++  explicit AXDIMMContext(Device device)
++      : AXDIMMContext(DeviceToOption(device)) {}
+ 
+   ~AXDIMMContext() override {
+     FinishDeviceComputation();
+@@ -83,10 +87,17 @@ class C10_EXPORT AXDIMMContext final : public BaseContext {
+   }
+ 
+   // (???)
++  // TODO: figure out and implement.
+   static bool SupportsAsyncScheduling() {
+     return true;
+   }
+ 
++  // (???)
++  // TODO: figure out and implement.
++  static bool IsStreamFree(const DeviceOption& option, StreamId stream_id) {
++    return true;
++  }
++
+   at::Device device() const override {
+     return at::Device(AXDIMM, device_id_);
+   }
+-- 
+2.34.1
+

@@ -1,0 +1,71 @@
+From b15b349cb146b01513ead03926854466d43c1070 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 14 Mar 2023 19:05:33 +0300
+Subject: [PATCH 107/128] [refactor] Use new SlsType
+
+Update code according to new API (`axdimm_sls_type` -> `SlsType`)
+
+Related to: AXDIMM-638
+---
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp   | 6 +++---
+ aten/src/ATen/native/axdimm/AxdimmTensor.h     | 4 ++--
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 2 +-
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index 1783e6d3..ae1472bb 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -6,11 +6,11 @@
+ 
+ namespace {
+ 
+-::axdimm_sls_type get_sls_type(const c10::ScalarType& type) {
++::SLSType get_sls_type(const c10::ScalarType& type) {
+   if (type == torch::kFloat32) {
+-    return axdimm_sls_type::FLOAT;
++    return SLSType::Float;
+   } else if (type == torch::kInt32) {
+-    return axdimm_sls_type::UINT32;
++    return SLSType::Uint32;
+   } else {
+     TORCH_CHECK(false, "Unsupported scalar type");
+   }
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index 1ff2b93b..944c046b 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -77,7 +77,7 @@ class AxdimmTensor : public AxdimmBaseTensor {
+     return layout_->get_tables_layout();
+   }
+ 
+-  axdimm_sls_type get_sls_type() const {
++  SLSType get_sls_type() const {
+     return sls_type_;
+   }
+ 
+@@ -87,7 +87,7 @@ class AxdimmTensor : public AxdimmBaseTensor {
+   // shared_ptr to be able to copy this tensor as many times as required and
+   // deallocate tables when last tensor is destroyed
+   std::shared_ptr<AxdimmLayoutWrapper> layout_;
+-  axdimm_sls_type sls_type_{};
++  SLSType sls_type_{};
+ };
+ 
+ } // namespace axdimm
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 598772b1..5b881ea5 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -238,7 +238,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+           block_size_,
+           table_entry_list.data(),
+           tables_layout_,
+-          axdimm_sls_type::FLOAT);
++          SLSType::Float);
+     }
+ 
+     // 3.1) If new operator invocation consumes more memory for indices,
+-- 
+2.34.1
+

@@ -1,0 +1,36 @@
+From 8254fb4d53c8bcab3ced120e8c9ace0ceb62df46 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Fri, 7 Apr 2023 16:45:25 +0300
+Subject: [PATCH 096/161] [dba] udpdate description
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ DAX_HOW_TO_BUILD.md => PNM_HOW_TO_BUILD.md | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+ rename DAX_HOW_TO_BUILD.md => PNM_HOW_TO_BUILD.md (87%)
+
+diff --git a/DAX_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+similarity index 87%
+rename from DAX_HOW_TO_BUILD.md
+rename to PNM_HOW_TO_BUILD.md
+index e72d6cfe4..dd3d52729 100644
+--- a/DAX_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -36,3 +36,14 @@ Built drivers can then be installed with `install_dax_drivers` script:
+ ```bash
+ $ ./install_dax_drivers.sh
+ ```
++
++# DBA resource driver only
++
++```bash
++$ make M=drivers/pnm/dba_resource/ -j32
++```
++
++Built drivers can then be installed with `install_dba_resource` script:
++```bash
++$ ./install_dba_resource.sh
++```
+-- 
+2.34.1
+

@@ -1,0 +1,101 @@
+From 73f847c4bcd140faef34ea234613994ea2974084 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 18 Apr 2023 17:17:04 +0300
+Subject: [PATCH 17/27] [application] Use release build of PNMLIB
+
+Update all paths for `build` directory to point to `build/release`
+instead.
+
+Rename "axdimm" variables related to driver directory to "pnm".
+
+Related to: MCS23-846
+---
+ application/axdimm_secndp_test/Makefile                |  4 ++--
+ .../axdimm_secndp_test/secndp.manifest.template        | 10 +++++-----
+ application/pytorch/Makefile                           |  2 +-
+ application/pytorch/conf.pytorch.manifest.template     |  8 ++++----
+ 4 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/application/axdimm_secndp_test/Makefile b/application/axdimm_secndp_test/Makefile
+index a359104e..5540a87f 100644
+--- a/application/axdimm_secndp_test/Makefile
++++ b/application/axdimm_secndp_test/Makefile
+@@ -16,8 +16,8 @@ secndp.manifest: secndp.manifest.template
+ 	gramine-manifest \
+ 		-Dlog_level=$(GRAMINE_LOG_LEVEL) \
+ 		-Darch_libdir=$(ARCH_LIBDIR) \
+-		-Dentrypoint="${AXDIMM_DRIVER_PATH}/build/test/${AXDIMM_ENTRY}" \
+-		-Daxdimm_driver=${AXDIMM_DRIVER_PATH} \
++		-Dentrypoint="${PNM_BUILD_DIR}/test/${AXDIMM_ENTRY}" \
++		-Dpnm_build_dir=${PNM_BUILD_DIR} \
+ 		$< > $@
+ 
+ # Make on Ubuntu <= 20.04 doesn't support "Rules with Grouped Targets" (`&:`),
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/axdimm_secndp_test/secndp.manifest.template
+index b4494a67..274f2cb8 100644
+--- a/application/axdimm_secndp_test/secndp.manifest.template
++++ b/application/axdimm_secndp_test/secndp.manifest.template
+@@ -19,9 +19,9 @@ fs.mounts = [
+   { uri = "file:/usr", path = "/usr" },
+   { uri = "file:/etc", path = "/etc" },
+   { uri = "dev:/dev/axdimm_device", path = "/dev/axdimm_device" },
+-  { uri = "file:{{ axdimm_driver }}/build/test", path = "{{ axdimm_driver }}/build/test" },
+-  { uri = "file:{{ axdimm_driver }}/build/ai", path = "{{ axdimm_driver }}/build/ai" },
+-  { uri = "file:{{ axdimm_driver }}/build/secure", path = "{{ axdimm_driver }}/build/secure" },
++  { uri = "file:{{ pnm_build_dir }}/test", path = "{{ pnm_build_dir }}/test" },
++  { uri = "file:{{ pnm_build_dir }}/ai", path = "{{ pnm_build_dir }}/ai" },
++  { uri = "file:{{ pnm_build_dir }}/secure", path = "{{ pnm_build_dir }}/secure" },
+   { uri = "file:/sys/class", path = "/sys/class", type="chroot" },
+   { uri = "file:/dev/pnm/", path = "/dev/pnm/" },
+   { type = "tmpfs", path = "/tmp" }
+@@ -47,6 +47,6 @@ sgx.trusted_files = [
+   "file:{{ gramine.runtimedir() }}/",
+   "file:{{ arch_libdir }}/",
+   "file:/usr/{{ arch_libdir }}/",
+-  "file:{{ axdimm_driver }}/build/ai/",
+-  "file:{{ axdimm_driver }}/build/secure/",
++  "file:{{ pnm_build_dir }}/ai/",
++  "file:{{ pnm_build_dir }}/secure/",
+ ]
+diff --git a/application/pytorch/Makefile b/application/pytorch/Makefile
+index 32f0f527..c044c951 100644
+--- a/application/pytorch/Makefile
++++ b/application/pytorch/Makefile
+@@ -18,7 +18,7 @@ pytorch.manifest: conf.pytorch.manifest.template config_pillow.py
+ 		-Dlog_level=$(GRAMINE_LOG_LEVEL) \
+ 		-Darch_libdir=$(ARCH_LIBDIR) \
+ 		-Dentrypoint=$(realpath $(shell sh -c "command -v python3")) \
+-		-Daxdimm_driver=${AXDIMM_DRIVER_PATH} \
++		-Dpnm_build_dir=${PNM_BUILD_DIR} \
+ 		-Ddlrm_path=${DLRM_PATH} \
+ 		-Dpython_path=${PYTHONPATH} \
+ 		-Ddlrm_data_path=${DLRM_DATA_PATH} \
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index efe324c6..13fd7cc2 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -20,8 +20,8 @@ fs.mounts = [
+   { uri = "file:/usr", path = "/usr" },
+   { uri = "file:/etc", path = "/etc" },
+   #  *** PILLOW MOUNT PLACEHOLDER *** #Will be replaced by config_pillow.py during the make process
+-  { uri = "file:{{ axdimm_driver }}/build/ai", path = "{{ axdimm_driver }}/build/ai"},
+-  { uri = "file:{{ axdimm_driver }}/build/secure", path = "{{ axdimm_driver }}/build/secure"},
++  { uri = "file:{{ pnm_build_dir }}/ai", path = "{{ pnm_build_dir }}/ai"},
++  { uri = "file:{{ pnm_build_dir }}/secure", path = "{{ pnm_build_dir }}/secure"},
+   { uri = "file:{{ dlrm_data_path }}", path = "/input" },
+   { type = "tmpfs", path = "/tmp" },
+   { type = "shm" },
+@@ -47,8 +47,8 @@ sgx.trusted_files = [
+   "file:{{ python.stdlib }}/",
+   "file:{{ python.distlib }}/",
+   "file:{{ python.get_path('stdlib', vars={'installed_base': '/usr/local'}) }}/",
+-  "file:{{ axdimm_driver }}/build/ai/",
+-  "file:{{ axdimm_driver }}/build/secure/"
++  "file:{{ pnm_build_dir }}/ai/",
++  "file:{{ pnm_build_dir }}/secure/"
+ ]
+ 
+ sgx.allowed_files = [
+-- 
+2.34.1
+

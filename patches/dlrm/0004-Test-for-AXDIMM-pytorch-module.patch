@@ -1,0 +1,169 @@
+From 86af1e19e88f6b35e1a1b6aac08919624719753b Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Fri, 14 Oct 2022 18:58:52 +0300
+Subject: [PATCH 04/23] Test for AXDIMM pytorch module
+
+Resolves: AXDIMM-316
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ test_axdimm_op.py | 147 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 147 insertions(+)
+ create mode 100644 test_axdimm_op.py
+
+diff --git a/test_axdimm_op.py b/test_axdimm_op.py
+new file mode 100644
+index 0000000..e94b7d7
+--- /dev/null
++++ b/test_axdimm_op.py
+@@ -0,0 +1,147 @@
++import argparse
++import numpy as np
++import torch
++import sys
++
++from torch.nn import EmbeddingBag, EmbeddingBagAxdimm
++from random import randint
++
++class AxdimmEmbeddingsTest:
++    tables_num: int # Numer of tables
++    table_len: int # Number of features in single table
++    sparse_feature_size: int # Number of elements in 1 feature
++    minibatch_size: int # Number of lookups per table
++    i_min: int # Min index value
++    i_max: int # Max index value
++    i_len: int # Per table indices length
++    tables: list # 2d list of tables
++    indices: list # 2d list of indices per table
++    offsets: list # 2d list of offsets per table
++
++    def __init__(self, tables_num, table_len, sp_size, mb_size, i_min, i_max, i_len):
++        self.tables_num = tables_num
++        self.table_len = table_len
++        self.sparse_feature_size = sp_size
++        self.minibatch_size = mb_size
++        self.i_min = i_min
++        self.i_max = i_max
++        self.i_len = i_len
++        self.gen_test_data()
++    
++    def gen_indices(self):
++        return [randint(self.i_min, self.i_max) for x in range(0, randint(self.minibatch_size, self.i_len))]
++
++    def gen_offsets(self):
++        # offsets are repsresented like set of distances i.e. [0, 20, 60, 90] -> [20, 40, 30] - lenghts
++        # amount of elements in one offsets batch is equal to minibatch size + 1, since table indices size was appended to offsets
++        # sum of all offsets diff must not exceed indices length per table
++        offsets = []
++        for table_indices in self.indices:
++            indices_per_batch = len(table_indices) / self.minibatch_size
++            leftover = len(table_indices) % self.minibatch_size
++            table_offsets = [0]
++            for i in range(1, self.minibatch_size):
++                if leftover != 0:
++                    rand_add = randint(0, leftover)
++                    leftover -= rand_add
++                else:
++                    rand_add = 0
++                table_offsets.append(int(table_offsets[i - 1] + indices_per_batch + rand_add))
++            table_offsets.append(len(table_indices))
++            offsets.append(table_offsets)
++        return offsets
++
++    def gen_tables(self):
++        return [np.random.uniform(
++            low=-np.sqrt(1 / 100), high=np.sqrt(1 / 100), size=(self.table_len, self.sparse_feature_size)
++        ).astype(np.float32) for x in range(0, self.tables_num)]
++
++    def gen_test_data(self):
++        self.tables = self.gen_tables()
++        self.indices = [self.gen_indices() for x in range(0, self.tables_num)]
++        self.offsets = self.gen_offsets()
++
++    def check_results(self, cpu_res, axdimm_res):
++        for table_idx in range(0, self.tables_num):
++            for batch_idx in range(0, self.minibatch_size):
++                # Tensor with comparison results of each element i.e. [ True, True, False, True ]
++                comp_res = cpu_res[table_idx][batch_idx] == axdimm_res[table_idx][batch_idx]
++                # If at least one element is not equal - test failed
++                if False in comp_res:
++                    print("Test failed. CPU and AXDIMM results are not equal")
++                    print("CPU result:\n", cpu_res[table_idx][batch_idx])
++                    print("AXDIMM result:\n", axdimm_res[table_idx][batch_idx])
++                    return False
++        return True
++
++
++    def run_test(self):
++        print("Running EmbeddingBag calculations")
++        cpu_res = []
++        for i in range(0, self.tables_num):
++            op = EmbeddingBag.from_pretrained(torch.tensor(self.tables[i], dtype=torch.float32), mode='sum')
++            # CPU version doesn't require last offset, since it knows size of index bag
++            # AXDIMM requires it because indices must be flat 2D list of all indices bags
++            # So size of each bag can't be determined from indices bags list
++            cpu_res.append(op(torch.tensor(self.indices[i], dtype=torch.int32), torch.tensor(self.offsets[i][:-1], dtype=torch.int32)))
++        print("Running EmbeddingBagAxdimm calculations")
++        print("Preparing data...")
++        op = EmbeddingBagAxdimm(torch.tensor(self.tables, dtype=torch.float32, device="axdimm"))
++        axdimm_indices = []
++        for i_bag in self.indices:
++            axdimm_indices.extend(i_bag)
++        print("Running AXDIMM...")
++        axdimm_res = op(torch.tensor(axdimm_indices, dtype=torch.int32), torch.tensor(self.offsets, dtype=torch.int32))
++        sliced_res = [axdimm_res[i : i + self.minibatch_size] for i in range(0, len(axdimm_res), self.minibatch_size)]
++        if self.check_results(cpu_res, sliced_res):
++            print("Test completed successfully")
++            return True
++        else:
++            print("Test failed")
++            return False
++
++def validate_args(args):
++    help_msg = "%s is invalid. See --help for details"
++    if args.sparse_feature_size < 16:
++        print(help_msg % "sparse-feature-size")
++        return False
++    elif args.minibatch_size < 0:
++        print(help_msg % "minibatch-size")
++        return False
++    elif args.tables_num < 0:
++        print(help_msg % "tables-num")
++        return False
++    elif args.table_len < 0:
++        print(help_msg % "table-len")
++        return False
++    elif args.index_min < 0 or args.index_min > args.index_max:
++        print(help_msg % "index-min")
++        return False
++    elif args.index_max < 0 or args.index_max >= args.table_len:
++        print(help_msg % "index-max")
++        return False
++    elif args.max_index_len < args.minibatch_size or args.max_index_len > args.table_len:
++        print(help_msg % "max-index-len")
++        return False
++
++    return True
++
++    
++if __name__ == "__main__":
++    parser = argparse.ArgumentParser(
++        description="Test Axdimm embedding sum operator"
++    )
++    parser.add_argument("--sparse-feature-size", type=int, default=16, help="Number of elements in feature, must be >= 16")
++    parser.add_argument("--minibatch-size", type=int, default=256, help="Numer of lookups per table, must be > 0")
++    parser.add_argument("--tables-num", type=int, default=60, help="Numer of tables, must be > 0")
++    parser.add_argument("--table-len", type=int, default=500000, help="Length of each table, must be > 0")
++    parser.add_argument("--index-min", type=int, default=1, help="Min index value, must be >= 0 and < index-max")
++    parser.add_argument("--index-max", type=int, default=499999, help="Max index value, must be > 0 and > index-min and < table-len")
++    parser.add_argument("--max-index-len", type=int, default=1000, help="Max index length per table, must be > minibatch_size and < table-len")
++    args = parser.parse_args()
++    if not validate_args(args):
++        print("Arguments validation failed")
++        sys.exit(-1)
++    test = AxdimmEmbeddingsTest(args.tables_num, args.table_len, args.sparse_feature_size, args.minibatch_size, args.index_min, args.index_max, args.max_index_len)
++    if not test.run_test():
++        sys.exit(-1)
+-- 
+2.34.1
+

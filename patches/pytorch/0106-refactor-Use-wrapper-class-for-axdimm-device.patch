@@ -1,0 +1,304 @@
+From a178eb5474b605ca6e919cafd7aa97310548451c Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Fri, 10 Mar 2023 20:08:31 +0300
+Subject: [PATCH 106/128] [refactor] Use wrapper class for axdimm device
+
+After getting rid of `axdimm_create_base_device` and
+`axdimm_destroy_base_device` and instead adding a RAII-friendly class
+AxdimmDevice, update the usage here.
+
+Related to: AXDIMM-638
+---
+ .../src/ATen/native/axdimm/AxdimmBaseTensor.h |  2 +-
+ .../native/axdimm/AxdimmDeviceContext.cpp     | 20 ++++++------------
+ .../ATen/native/axdimm/AxdimmDeviceContext.h  |  7 ++-----
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp  |  4 ++--
+ aten/src/ATen/native/axdimm/AxdimmTensor.h    |  7 +++----
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   |  2 +-
+ .../operators/lengths_reducer_ops_axdimm.cc   | 21 +++++++++----------
+ caffe2/python/pybind_state_axdimm.cc          | 20 ++++++++----------
+ 8 files changed, 34 insertions(+), 49 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+index 68139071..6f7e47ec 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+@@ -122,7 +122,7 @@ class AxdimmBaseTensor {
+     return tables_rows_num_;
+   }
+ 
+-  Device* get_device() const {
++  Device& get_device() const {
+     return AxdimmDeviceContext::device();
+   }
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+index 397f64af..0a2d9b62 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+@@ -9,27 +9,19 @@ namespace at {
+ namespace native {
+ namespace axdimm {
+ 
+-Device* AxdimmDeviceContext::device() {
+-  static std::unique_ptr<Device, std::function<void(Device*)>> device_(
+-      create_device(),
+-      [](Device* device) { axdimm_destroy_base_device(device); });
+-  return device_.get();
++Device& AxdimmDeviceContext::device() {
++  static auto static_device = AxdimmDevice::make();
++  return static_device;
+ }
+ 
+ void AxdimmDeviceContext::write_rank_data(
+     const void* data,
+     uint64_t layout_handle) {
+-  TORCH_INTERNAL_ASSERT(device());
+-  const auto* layout = axdimm_get_tables_layout(device(), layout_handle);
++  const auto* layout =
++      axdimm_get_tables_layout(device().internal(), layout_handle);
+   TORCH_CHECK(
+       layout, "Failed to get AXDIMM layout for handle: ", layout_handle);
+-  axdimm_write_rank_data(device(), data, layout);
+-}
+-
+-Device* AxdimmDeviceContext::create_device() {
+-  auto device = axdimm_create_base_device();
+-  TORCH_CHECK(device, "Axdimm device creation failed");
+-  return device;
++  axdimm_write_rank_data(device().internal(), data, layout);
+ }
+ 
+ } // namespace axdimm
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+index 1a509ad8..253e2978 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+@@ -11,15 +11,12 @@ namespace at {
+ namespace native {
+ namespace axdimm {
+ 
+-using Device = AxdimmBaseDevice;
++using Device = AxdimmDevice;
+ 
+ class AxdimmDeviceContext {
+  public:
+   static void write_rank_data(const void* data, uint64_t layout_handle);
+-  static Device* device();
+-
+- private:
+-  static Device* create_device();
++  static Device& device();
+ };
+ 
+ } // namespace axdimm
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index 1e9efdc1..1783e6d3 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -73,7 +73,7 @@ AxdimmTensor::AxdimmTensor(
+ 
+ AxdimmLayoutWrapper::~AxdimmLayoutWrapper() {
+   try {
+-    axdimm_deallocate_tables(device_, layout_handle_);
++    axdimm_deallocate_tables(device_.internal(), layout_handle_);
+   } catch (pnm::error::Base& e) {
+     LOG(ERROR) << "Failed to deallocate tables for handle: " << layout_handle_
+                << ". Got error: " << e.what();
+@@ -89,7 +89,7 @@ void AxdimmTensor::load(const void* weights_data) {
+   layout_ = std::make_shared<AxdimmLayoutWrapper>(
+       get_device(),
+       axdimm_allocate_tables(
+-          get_device(),
++          get_device().internal(),
+           tables_rows_num_.data(),
+           num_tables_,
+           sparse_feature_size_ *
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index be5126c1..1ff2b93b 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -23,11 +23,10 @@ void verify(const at::TensorOptions& options);
+  */
+ class AxdimmLayoutWrapper {
+  public:
+-  AxdimmLayoutWrapper(AxdimmBaseDevice* device, uint64_t layout_handle)
++  AxdimmLayoutWrapper(AxdimmDevice& device, uint64_t layout_handle)
+       : device_(device),
+         layout_handle_(layout_handle),
+-        layout_(axdimm_get_tables_layout(device_, layout_handle_)) {
+-    TORCH_INTERNAL_ASSERT(device_);
++        layout_(axdimm_get_tables_layout(device_.internal(), layout_handle_)) {
+     TORCH_CHECK(
+         layout_,
+         "Failed to get AXDIMM tables layout for handle: ",
+@@ -46,7 +45,7 @@ class AxdimmLayoutWrapper {
+   }
+ 
+  private:
+-  AxdimmBaseDevice* device_;
++  AxdimmDevice& device_;
+   uint64_t layout_handle_;
+   AxdimmTablesLayout* layout_;
+ };
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index 1a9e3a65..62416ed0 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -44,7 +44,7 @@ at::Tensor embedding_bag_forward_simple_impl(
+   // might throw
+   axdimm_run_sls(
+       sls_op,
+-      ten.get_device(),
++      ten.get_device().internal(),
+       minibatch_size,
+       lengths_view.begin(),
+       static_cast<uint32_t*>(indices.data_ptr()),
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index a7b253cd..598772b1 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -147,14 +147,14 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     tables_descriptor_ = this->template GetSingleArgument<uint64_t>(
+         "tables_layout_descriptor", 0);
+-    device_ = axdimm_create_base_device();
+ 
+     private_tables_ = tables_descriptor_ == 0;
+ 
+     if (private_tables_) {
+       LoadTables();
+     } else {
+-      tables_layout_ = axdimm_get_tables_layout(device_, tables_descriptor_);
++      tables_layout_ =
++          axdimm_get_tables_layout(device_.internal(), tables_descriptor_);
+     }
+   }
+ 
+@@ -168,14 +168,12 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     axdimm_destroy_tables_layout(tables_layout_);
+ 
+     if (private_tables_) {
+-      axdimm_deallocate_tables(device_, tables_descriptor_);
++      axdimm_deallocate_tables(device_.internal(), tables_descriptor_);
+       LOG(INFO) << "Deallocated private tables with descriptor: "
+                 << tables_descriptor_;
+     }
+ 
+-    axdimm_destroy_base_device(device_);
+     sls_op_ = nullptr;
+-    device_ = nullptr;
+     tables_layout_ = nullptr;
+   }
+ 
+@@ -301,7 +299,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     try {
+       axdimm_run_sls(
+           sls_op_,
+-          device_,
++          device_.internal(),
+           M,
+           (uint32_t*)lengths_blocked_,
+           (uint32_t*)indices_blocked_,
+@@ -356,7 +354,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         "mem_preference", AXDIMM_ALLOC_AUTO);
+ 
+     tables_descriptor_ = axdimm_allocate_tables(
+-        device_,
++        device_.internal(),
+         rows.data(),
+         block_size_,
+         sparse_feature_size * sizeof(T),
+@@ -365,9 +363,10 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     LOG(INFO) << "Allocated private tables with descriptor: "
+               << tables_descriptor_;
+ 
+-    tables_layout_ = axdimm_get_tables_layout(device_, tables_descriptor_);
++    tables_layout_ =
++        axdimm_get_tables_layout(device_.internal(), tables_descriptor_);
+ 
+-    axdimm_write_rank_data(device_, data, tables_layout_);
++    axdimm_write_rank_data(device_.internal(), data, tables_layout_);
+ 
+     CAFFE_ENFORCE_EQ(
+         munmap(data, tables_size * sizeof(T)), 0, "Fail to unmap file");
+@@ -389,8 +388,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked indices buffer
+   uint64_t lengths_total_size_in_bytes_ =
+       0; // Size of currently allocated blocked lengths buffer
+-  AxdimmBaseDevice* device_ =
+-      nullptr; // AXDIMM device. TODO: move into AXDIMMContext
++  AxdimmDevice device_ =
++      AxdimmDevice::make(); // AXDIMM device. TODO: move into AXDIMMContext
+   PNMSLSOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
+   AxdimmTablesLayout* tables_layout_ = nullptr;
+ 
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 1b3d5780..1db14329 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -23,11 +23,11 @@
+ 
+ namespace {
+ 
+-static AxdimmBaseDevice* base_device = nullptr;
++static AxdimmDevice base_device;
+ static uint64_t descriptor = 0;
+ 
+ void load_tables(
+-    AxdimmBaseDevice* device,
++    AxdimmDevice& device,
+     const std::string& weight_file,
+     uint64_t descr) {
+   int fd = ::open(weight_file.c_str(), O_RDONLY);
+@@ -42,9 +42,9 @@ void load_tables(
+   void* addr =
+       mmap(nullptr, file_size, PROT_READ, MAP_FILE | MAP_SHARED, fd, 0);
+ 
+-  auto* layout = axdimm_get_tables_layout(device, descr);
++  auto* layout = axdimm_get_tables_layout(device.internal(), descr);
+ 
+-  axdimm_write_rank_data(device, addr, layout);
++  axdimm_write_rank_data(device.internal(), addr, layout);
+ 
+   axdimm_destroy_tables_layout(layout);
+ }
+@@ -71,16 +71,15 @@ void addAXDIMMGlobalMethods(py::module& m) {
+          uint32_t row_size_in_bytes,
+          uint32_t mem_preference,
+          bool use_shared_tables) {
+-        CAFFE_ENFORCE_EQ(
+-            nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+-        base_device = axdimm_create_base_device();
++        // might throw
++        base_device.open();
+ 
+         if (use_shared_tables) {
+           LOG(INFO) << "Allocated shared tables with memory preference id: "
+                     << mem_preference;
+ 
+           descriptor = axdimm_allocate_tables(
+-              base_device,
++              base_device.internal(),
+               table_entry.data(),
+               table_entry.size(),
+               row_size_in_bytes,
+@@ -97,13 +96,12 @@ void addAXDIMMGlobalMethods(py::module& m) {
+       });
+   m.def("axdimm_closer", []() {
+     if (descriptor != 0) {
+-      axdimm_deallocate_tables(base_device, descriptor);
++      axdimm_deallocate_tables(base_device.internal(), descriptor);
+       LOG(INFO) << "Deallocated shared tables";
+     }
+     // otherwise we are not using shared tables
+ 
+-    axdimm_destroy_base_device(base_device);
+-    base_device = nullptr;
++    base_device.close();
+     return 0;
+   });
+ }
+-- 
+2.34.1
+

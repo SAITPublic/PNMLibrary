@@ -1,0 +1,179 @@
+From dc115d9da3dd51890f464dd1382b530abc289aa4 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 8 Oct 2022 22:39:07 +0300
+Subject: [PATCH 03/23] Add axdimm to pytorch dlrm
+
+Resolves: AXDIMM-316
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ dlrm_s_pytorch.py | 71 ++++++++++++++++++++++++++++++++++++++++++++---
+ run_test.sh       |  2 +-
+ 2 files changed, 68 insertions(+), 5 deletions(-)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index b3ac187..f811f99 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -90,6 +90,7 @@ from torch.nn.parameter import Parameter
+ from torch.optim.lr_scheduler import _LRScheduler
+ import optim.rwsadagrad as RowWiseSparseAdagrad
+ from torch.utils.tensorboard import SummaryWriter
++from torch.nn import EmbeddingBagAxdimm
+ 
+ # mixed-dimension trick
+ from tricks.md_embedding_bag import PrEmbeddingBag, md_solver
+@@ -233,7 +234,31 @@ class DLRM_Net(nn.Module):
+         # approach 2: use Sequential container to wrap all layers
+         return torch.nn.Sequential(*layers)
+ 
++    def create_axdimm_emb(self, m, ln):
++        axdimm_weights = []
++        v_W_l = []
++        # accumulate all tables in single 3D tensor:
++        # 1st dim - tables number
++        # 2nd dim - features number per table
++        # 3rd dim - sparse feature size
++        for i in range(0, ln.size):
++            if ext_dist.my_size > 1:
++                if i not in self.local_emb_indices:
++                    continue
++            n = ln[i]
++            v_W_l.append(None)
++            W = np.random.uniform(
++                low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
++            ).astype(np.float32)
++            axdimm_weights.append(W)
++        return EmbeddingBagAxdimm(torch.tensor(axdimm_weights, dtype=torch.float32, device="axdimm")), v_W_l
++
+     def create_emb(self, m, ln, weighted_pooling=None):
++        if self.use_axdimm:
++            if weighted_pooling:
++                raise RuntimeError("Weighted pooling is not suported with AXDIMM device")
++            return self.create_axdimm_emb(m, ln)
++
+         emb_l = nn.ModuleList()
+         v_W_l = []
+         for i in range(0, ln.size):
+@@ -301,7 +326,8 @@ class DLRM_Net(nn.Module):
+         md_flag=False,
+         md_threshold=200,
+         weighted_pooling=None,
+-        loss_function="bce"
++        loss_function="bce",
++        use_axdimm=False,
+     ):
+         super(DLRM_Net, self).__init__()
+ 
+@@ -314,6 +340,7 @@ class DLRM_Net(nn.Module):
+         ):
+ 
+             # save arguments
++            self.use_axdimm = use_axdimm
+             self.ndevices = ndevices
+             self.output_d = 0
+             self.parallel_model_batch_size = -1
+@@ -402,6 +429,9 @@ class DLRM_Net(nn.Module):
+         # 3. for a list of embedding tables there is a list of batched lookups
+ 
+         ly = []
++        if self.use_axdimm:
++            axdimm_indices = []
++            axdimm_offsets = []
+         for k, sparse_index_group_batch in enumerate(lS_i):
+             sparse_offset_group_batch = lS_o[k]
+ 
+@@ -437,6 +467,15 @@ class DLRM_Net(nn.Module):
+                     )
+ 
+                 ly.append(QV)
++            elif self.use_axdimm:
++                # accumulate all tables indices in single 1D list
++                # indices per table can be not equal
++                # and, therefore, can not be 2D tensors
++                axdimm_indices.extend(sparse_index_group_batch.tolist())
++                # accumulate all tables offsets in single 2D list
++                spg_list = sparse_offset_group_batch.tolist()
++                spg_list.append(len(sparse_index_group_batch))
++                axdimm_offsets.append(spg_list)
+             else:
+                 E = emb_l[k]
+                 V = E(
+@@ -447,7 +486,19 @@ class DLRM_Net(nn.Module):
+ 
+                 ly.append(V)
+ 
+-        # print(ly)
++        if self.use_axdimm:
++            ind_t = torch.tensor(axdimm_indices, dtype=torch.int32)
++            off_t = torch.tensor(axdimm_offsets, dtype=torch.int32)
++            # Run Axdimm SLS
++            axdimm_res = emb_l(ind_t, off_t)
++            # offsets are repsresented like set of distances i.e. [0, 20, 60, 90] -> [20, 40, 30] - lenghts
++            # amount of elements in one offsets batch is equal to minibatch size + 1, since table indices size was appended to offsets
++            # this way there's no need to pass total indices lenghts separately
++            minibatch_size = off_t.size(1) - 1
++            # Axdimm returns 1D tensor and dlrm expects it to be list of tensors where each tensor is 1 table batches result
++            sliced_res = [axdimm_res[i : i + minibatch_size] for i in range(0, len(axdimm_res), minibatch_size)]
++            return sliced_res
++
+         return ly
+ 
+     #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
+@@ -1021,6 +1072,7 @@ def run():
+     parser.add_argument("--lr-num-warmup-steps", type=int, default=0)
+     parser.add_argument("--lr-decay-start-step", type=int, default=0)
+     parser.add_argument("--lr-num-decay-steps", type=int, default=0)
++    parser.add_argument("--use-axdimm", action="store_true", default=False)
+ 
+     global args
+     global nbatches
+@@ -1072,6 +1124,13 @@ def run():
+         args.test_num_workers = args.num_workers
+ 
+     use_gpu = args.use_gpu and torch.cuda.is_available()
++    use_axdimm = False
++    if args.use_axdimm:
++        if not torch.is_axdimm_available():
++            raise RuntimeError("AXDIMM requested, but PyTorch was compiled without AXDIMM support")
++        if not args.inference_only:
++            raise RuntimeError("AXDIMM supports only inference mode. Specify --inference-only to use AXDIMM")
++        use_axdimm = True
+ 
+     if not args.debug_mode:
+         ext_dist.init_distributed(local_rank=args.local_rank, use_gpu=use_gpu, backend=args.dist_backend)
+@@ -1088,7 +1147,10 @@ def run():
+         print("Using {} GPU(s)...".format(ngpus))
+     else:
+         device = torch.device("cpu")
+-        print("Using CPU...")
++        if use_axdimm:
++            print("Using AXDIMM...")
++        else:
++            print("Using CPU...")
+ 
+     ### prepare training data ###
+     ln_bot = np.fromstring(args.arch_mlp_bot, dtype=int, sep="-")
+@@ -1291,7 +1353,8 @@ def run():
+         md_flag=args.md_flag,
+         md_threshold=args.md_threshold,
+         weighted_pooling=args.weighted_pooling,
+-        loss_function=args.loss_function
++        loss_function=args.loss_function,
++        use_axdimm=args.use_axdimm
+     )
+ 
+     # test prints
+diff --git a/run_test.sh b/run_test.sh
+index 268a473..7a2c843 100755
+--- a/run_test.sh
++++ b/run_test.sh
+@@ -13,4 +13,4 @@ num_batches=100
+ 
+ python3 ./dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
+                             --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed=1 \
+-                            --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" --inference-only
++                            --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" --inference-only --use-axdimm
+-- 
+2.34.1
+

@@ -1,0 +1,26 @@
+From e585b4a900b63bd5fd13b3035d3d11c9ad0e577b Mon Sep 17 00:00:00 2001
+From: "n.enin" <n.enin@samsung.com>
+Date: Wed, 3 Aug 2022 10:01:15 +0300
+Subject: [PATCH 027/161] [scripts] Add axdimm commit version to headers
+ package (#7)
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ scripts/package/builddeb | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/scripts/package/builddeb b/scripts/package/builddeb
+index 67cd420dc..57ad67dd4 100755
+--- a/scripts/package/builddeb
++++ b/scripts/package/builddeb
+@@ -89,6 +89,7 @@ deploy_kernel_headers () {
+ 
+ 	mkdir -p $pdir/lib/modules/$version/
+ 	ln -s /usr/src/linux-headers-$version $pdir/lib/modules/$version/build
++	git log -n 1 --pretty=format:"%H%n%n%B%n" > $pdir/usr/axdimm_info
+ }
+ 
+ deploy_libc_headers () {
+-- 
+2.34.1
+

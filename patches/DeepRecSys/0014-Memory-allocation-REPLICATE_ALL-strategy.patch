@@ -1,0 +1,146 @@
+From e88894485b4560bde4177a5cb4fe7cbbe2ce9943 Mon Sep 17 00:00:00 2001
+From: "s.koval" <s.koval@samsung.com>
+Date: Tue, 26 Jul 2022 12:10:44 +0300
+Subject: [PATCH 14/33] Memory allocation REPLICATE_ALL strategy
+
+* Support new API in DLRM
+* Add device reset between test runs
+* Support AXDIMM_ALLOC_AUTO as AXDIMM_ALLOC_REPLICATE_ALL
+
+Resolves: AXDIMM-256
+
+Signed-off-by: s.koval <s.koval@samsung.com>
+---
+ DeepRecSys.py           | 15 +++++++--------
+ inferenceEngine.py      |  5 ++---
+ models/dlrm_s_caffe2.py | 18 ++++++------------
+ 3 files changed, 15 insertions(+), 23 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index e43c159..3d2df40 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -42,16 +42,15 @@ def DeepRecSys():
+     print("[DeepRecSys] total inference engine ", args.inference_engines)
+ 
+     # [AXDIMM caffe2 backend] Initialize AXDIMM for parent process
+-    status = 0
+-    shared_tables_uuid = "None"
++    dtype_in_bytes = 4 if args.sls_dtype in ["int32", "float32"] \
++      else exit("(axdimm) sls_dtype: {0} is not supported.".format(args.sls_dtype))
++
++    tables_descriptor = 0
+     if args.use_axdimm_caffe2_backend:
+       ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+       op = workspace.SecureAxdimmStarter if args.use_secndp_algo else workspace.AxdimmStarter
+-      shared_tables_uuid = op(args.table_weight_path, ln_emb,
+-                              args.arch_sparse_feature_size)
+-
+-    if (status != 0):
+-        print("(axdimm) axd_starter didn't operate properly.")
++      tables_descriptor = op(args.table_weight_path, ln_emb,
++                      args.arch_sparse_feature_size * dtype_in_bytes)
+ 
+     # Setup single request Queue and multiple response queues
+     requestQueue    = Queue(maxsize=1024)
+@@ -79,7 +78,7 @@ def DeepRecSys():
+                    )
+       else:
+         p = Process( target = inferenceEngine,
+-                     args   = (args, requestQueue, i, responseQueues[i], inferenceEngineReadyQueue, shared_tables_uuid)
++                     args   = (args, requestQueue, i, responseQueues[i], inferenceEngineReadyQueue, tables_descriptor)
+                    )
+       p.daemon = True
+       DeepRecEngines.append(p)
+diff --git a/inferenceEngine.py b/inferenceEngine.py
+index 2693afd..177ee27 100644
+--- a/inferenceEngine.py
++++ b/inferenceEngine.py
+@@ -102,7 +102,7 @@ def inferenceEngine(args,
+                     engine_id=None,
+                     responseQueue=None,
+                     inferenceEngineReadyQueue=None,
+-                    shared_tables_uuid="None"):
++                    tables_descriptor=None):
+ 
+   q_inference_logging = Queue()
+   q_inference_done    = Queue()
+@@ -126,8 +126,7 @@ def inferenceEngine(args,
+         python_profiling_start()
+ 
+     # construct the neural network specified by command line arguments ###
+-    # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+-    model = DLRM_Wrapper( args, engine_id, shared_tables_uuid )
++    model = DLRM_Wrapper( args, tables_descriptor )
+     model.create(lX[0], lS_l[0], lS_i[0], lT[0])
+ 
+   elif args.model_type == "wnd":
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index 9e19a8e..de74f16 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -88,8 +88,7 @@ class DLRM_Wrapper(object):
+     def __init__(
+         self,
+         cli_args,
+-        engine_id, # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+-        shared_tables_uuid,
++        tables_descriptor,
+         model=None,
+         tag=None,
+         enable_prof=False,
+@@ -143,15 +142,13 @@ class DLRM_Wrapper(object):
+ 
+         if self.args.queue:
+             with core.DeviceScope(device_opt):
+-                # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+-                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, engine_id, shared_tables_uuid,
++                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, tables_descriptor,
+                                      id_qs = self.id_qs,
+                                      len_qs = self.len_qs,
+                                      fc_q   = self.fc_q)
+         else:
+             with core.DeviceScope(device_opt):
+-                # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+-                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, engine_id, shared_tables_uuid)
++                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, tables_descriptor)
+ 
+ 
+     def create(self, X, S_lengths, S_indices, T):
+@@ -376,12 +373,11 @@ class DLRM_Net(object):
+                             [sls_s_combined],
+                             from_file=True, path=self.args.table_weight_path,
+                             num_tables=len(rows), sparse_feature_size=m, rows=rows,
+-                            engine_id=self.engine_id, # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+                             with_tag=self.args.use_tags)
+                 else:
+                     EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+                                                        [sls_s_combined],
+-                                                       shared_tables_uuid=self.shared_tables_uuid)
++                                                       tables_layout_descriptor=self.tables_descriptor)
+                 emb_l.append(EE)
+ 
+         return emb_l, weights_l
+@@ -460,8 +456,7 @@ class DLRM_Net(object):
+         model=None,
+         tag=None,
+         enable_prof=False,
+-        engine_id=0, # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+-        shared_tables_uuid="None",
++        tables_descriptor=0,
+         id_qs = None,
+         len_qs = None,
+         fc_q  = None
+@@ -484,8 +479,7 @@ class DLRM_Net(object):
+         # setup AXDIMM device
+         # ##########################
+         self.use_axdimm_caffe2_backend = cli_args.use_axdimm_caffe2_backend
+-        self.shared_tables_uuid = shared_tables_uuid
+-        self.engine_id = engine_id # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
++        self.tables_descriptor = tables_descriptor
+ 
+         if cli_args.arch_interaction_op == "dot":
+             # approach 1: all
+-- 
+2.34.1
+

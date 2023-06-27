@@ -1,0 +1,739 @@
+From 89077d234b069bc12a2b544858c8a7dd6e9031ee Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 11 Jul 2023 02:40:39 -0400
+Subject: [PATCH 136/161] [sls_resource][allocator] Make allocator more
+ independent
+
+Related-to: MCS23-1300
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c                |  39 ++---
+ drivers/pnm/sls_resource/sls_allocator.c      | 145 ++++++++++--------
+ drivers/pnm/sls_resource/sls_allocator.h      |  36 ++---
+ drivers/pnm/sls_resource/sls_private.h        |   7 -
+ .../pnm/sls_resource/sls_process_manager.c    |  23 ++-
+ .../pnm/sls_resource/sls_process_manager.h    |   9 +-
+ drivers/pnm/sls_resource/sls_sysfs.c          |  36 ++---
+ drivers/pnm/sls_resource/sls_sysfs.h          |   7 +-
+ 8 files changed, 140 insertions(+), 162 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index eda895bd3..b1e49742b 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -31,7 +31,7 @@ MODULE_VERSION(SLS_DRIVER_VERSION);
+ #define SLS_RESOURCE_DEVICE_NAME SLS_RESOURCE_PATH_INTERNAL
+ struct sls_process_manager sls_proc_mgr;
+ 
+-static struct sls_dev sls_device;
++static struct sls_mem_info mem_info;
+ static struct class *sls_resource_class;
+ static struct device *sls_resource_device;
+ static struct cdev sls_resource_cdev;
+@@ -39,7 +39,7 @@ static dev_t sls_resource_device_number;
+ 
+ int sls_release(struct inode *node, struct file *f)
+ {
+-	return release_sls_process(&sls_proc_mgr, sls_device.allocator);
++	return release_sls_process(&sls_proc_mgr);
+ }
+ 
+ int sls_open(struct inode *inode, struct file *filp)
+@@ -50,7 +50,7 @@ int sls_open(struct inode *inode, struct file *filp)
+ static void dump_ioctl_err(unsigned int cmd)
+ {
+ 	SLS_ERR(" ioctl cmd: magic %u, direction %u, size %u, number %u\n",
+-		   _IOC_TYPE(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd), _IOC_NR(cmd));
++		_IOC_TYPE(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd), _IOC_NR(cmd));
+ }
+ 
+ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+@@ -74,19 +74,17 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		return -ENOTTY;
+ 	}
+ 
+-	SLS_DBG("Handling SLS ioctl %u with arg 0x%lx\n", _IOC_NR(cmd),
+-		   arg);
++	SLS_DBG("Handling SLS ioctl %u with arg 0x%lx\n", _IOC_NR(cmd), arg);
+ 
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+ 		reset_sls_rank_scheduler();
+-		retval = reset_sls_allocator(sls_device.allocator,
+-						&sls_device.mem_info);
++		retval = reset_sls_allocator(&mem_info);
+ 		reset_sls_process_manager(&sls_proc_mgr);
+ 		break;
+ 	case ALLOCATE_MEMORY:
+ 	case DEALLOCATE_MEMORY:
+-		retval = mem_process_ioctl(cmd, sls_device.allocator, arg);
++		retval = mem_process_ioctl(cmd, arg);
+ 		break;
+ 	case GET_RANK_FOR_WRITE:
+ 	case GET_RANK_FOR_READ:
+@@ -134,11 +132,10 @@ static int init_sls_resource_dev(void)
+ 		goto fail;
+ 	}
+ 	SLS_DBG("sls_resource chrdev region: major %d, minor %d\n",
+-		   MAJOR(sls_resource_device_number),
+-		   MINOR(sls_resource_device_number));
++		MAJOR(sls_resource_device_number),
++		MINOR(sls_resource_device_number));
+ 
+-	sls_resource_class =
+-		class_create(THIS_MODULE, SLS_RESOURCE_CLASS_NAME);
++	sls_resource_class = class_create(THIS_MODULE, SLS_RESOURCE_CLASS_NAME);
+ 	if (IS_ERR(sls_resource_class)) {
+ 		err = PTR_ERR(sls_resource_class);
+ 		SLS_ERR("Failed to create device class\n");
+@@ -149,21 +146,19 @@ static int init_sls_resource_dev(void)
+ 	sls_resource_class->devnode = devnode_func;
+ 
+ 	sls_resource_device = device_create(sls_resource_class, NULL,
+-					       sls_resource_device_number,
+-					       NULL, "%s",
+-					       SLS_RESOURCE_DEVICE_NAME);
++					    sls_resource_device_number, NULL,
++					    "%s", SLS_RESOURCE_DEVICE_NAME);
+ 	if (IS_ERR(sls_resource_device)) {
+ 		err = PTR_ERR(sls_resource_device);
+ 		SLS_ERR("Failed to create %s device\n",
+-			   SLS_RESOURCE_DEVICE_NAME);
++			SLS_RESOURCE_DEVICE_NAME);
+ 		goto fail_class;
+ 	}
+ 
+ 	cdev_init(&sls_resource_cdev, &sls_resource_ops);
+ 	err = cdev_add(&sls_resource_cdev, sls_resource_device_number, 1);
+ 	if (err) {
+-		SLS_ERR("Failed to add %s cdev\n",
+-			   SLS_RESOURCE_DEVICE_NAME);
++		SLS_ERR("Failed to add %s cdev\n", SLS_RESOURCE_DEVICE_NAME);
+ 		goto fail_device;
+ 	}
+ 
+@@ -200,10 +195,10 @@ int init_sls_device(void)
+ 		goto resource_device_fail;
+ 
+ 	/* Initialize device mem_info */
+-	sls_set_mem_info(&sls_device.mem_info);
++	sls_set_mem_info(&mem_info);
+ 
+ 	/* Initialize memory allocator */
+-	err = init_sls_allocator(&sls_device);
++	err = init_sls_allocator(&mem_info);
+ 	if (err)
+ 		goto allocator_fail;
+ 
+@@ -214,7 +209,7 @@ int init_sls_device(void)
+ 	init_sls_rank_scheduler();
+ 
+ 	/* Create sysfs subsystem for the device */
+-	err = build_sls_sysfs(&sls_device, sls_resource_device);
++	err = build_sls_sysfs(&mem_info, sls_resource_device);
+ 	if (err)
+ 		goto build_sysfs_fail;
+ 
+@@ -235,7 +230,7 @@ void cleanup_sls_device(void)
+ 	SLS_INF("Cleaning up SLS device\n");
+ 
+ 	/* Free allocated memory */
+-	cleanup_sls_allocator(&sls_device);
++	cleanup_sls_allocator();
+ 
+ 	/* Free allocated memory if any user processes alive upon device remove*/
+ 	cleanup_sls_process_manager(&sls_proc_mgr);
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index 5d09c1714..85e218c60 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -15,32 +15,32 @@
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+-extern struct sls_process_manager sls_proc_mgr;
++/* Helper structure for memory allocation */
++struct sls_allocator {
++	/* Allocator granularity in bytes, the number should be a power of 2 */
++	uint64_t gran;
++	/* GenAlloc memory pools for each rank, each pool has it's own virtual
++	 * range, currently this range is not bound to the real memory by PA,
++	 * Range: [reserved_indent == PAGE_SIZE, rank_size - reserved_indent]
++	 */
++	struct gen_pool *mem_pools[NUM_OF_RANK];
++} static allocator;
+ 
+-struct __sls_allocator {
+-	struct sls_allocator data;
+-	struct mutex memory_mutex;
+-} __allocator;
++DEFINE_MUTEX(memory_mutex);
+ 
+-void lock_allocator(struct sls_allocator *alloc)
++void lock_allocator(void)
+ {
+-	struct __sls_allocator *allocator =
+-		container_of(alloc, struct __sls_allocator, data);
+-	mutex_lock(&allocator->memory_mutex);
++	mutex_lock(&memory_mutex);
+ }
+ 
+-void unlock_allocator(struct sls_allocator *alloc)
++void unlock_allocator(void)
+ {
+-	struct __sls_allocator *allocator =
+-		container_of(alloc, struct __sls_allocator, data);
+-	mutex_unlock(&allocator->memory_mutex);
++	mutex_unlock(&memory_mutex);
+ }
+ 
+-static bool allocator_is_locked(struct sls_allocator *alloc)
++static bool allocator_is_locked(void)
+ {
+-	struct __sls_allocator *allocator =
+-		container_of(alloc, struct __sls_allocator, data);
+-	return mutex_is_locked(&allocator->memory_mutex);
++	return mutex_is_locked(&memory_mutex);
+ }
+ 
+ static int init_rank_pool(struct sls_allocator *alloc, uint8_t rank,
+@@ -51,8 +51,7 @@ static int init_rank_pool(struct sls_allocator *alloc, uint8_t rank,
+ 		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
+ 
+ 	if (unlikely(!pool)) {
+-		SLS_ERR(
+-			"gen_pool_create failed for rank pool[%hhu], granularity = [%llu]\n",
++		SLS_ERR("gen_pool_create failed for rank pool[%hhu], granularity = [%llu]\n",
+ 			rank, alloc->gran);
+ 		err_code = -ENOMEM;
+ 		goto init_rank_pool_out;
+@@ -61,15 +60,13 @@ static int init_rank_pool(struct sls_allocator *alloc, uint8_t rank,
+ 	/* The reason why PAGE_SIZE is given below in init_memory_pools */
+ 	err_code = gen_pool_add(pool, PAGE_SIZE, size, NUMA_NO_NODE);
+ 	if (unlikely(err_code < 0)) {
+-		SLS_ERR(
+-			"Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
++		SLS_ERR("Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
+ 			rank, size, err_code);
+ 		gen_pool_destroy(pool);
+ 		goto init_rank_pool_out;
+ 	}
+ 
+-	SLS_INF(
+-		"Memory rank pool[%hhu] initialized: granularity = [%llu], size = [%llu]\n",
++	SLS_INF("Memory rank pool[%hhu] initialized: granularity = [%llu], size = [%llu]\n",
+ 		rank, alloc->gran, size);
+ 	alloc->mem_pools[rank] = pool;
+ 
+@@ -93,8 +90,7 @@ static void cleanup_memory_pools(struct sls_allocator *alloc)
+ 	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
+ 		pool = alloc->mem_pools[rank];
+ 		if (unlikely(!pool)) {
+-			SLS_WRN(
+-				"Trying to cleanup memory rank pool[%hhu] that was not created\n",
++			SLS_WRN("Trying to cleanup memory rank pool[%hhu] that was not created\n",
+ 				rank);
+ 			continue;
+ 		}
+@@ -118,7 +114,8 @@ static void cleanup_memory_pools(struct sls_allocator *alloc)
+ 	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+ }
+ 
+-static inline uint64_t get_rank_size(struct sls_mem_info *mem_info, uint8_t rank)
++static inline uint64_t get_rank_size(struct sls_mem_info *mem_info,
++				     uint8_t rank)
+ {
+ 	return mem_info->mem_size[rank % NUM_OF_CS][SLS_BLOCK_BASE] /
+ 	       NUM_RANKS_PER_CS;
+@@ -166,47 +163,38 @@ static int preinit_sls_allocator(struct sls_allocator *alloc,
+ 	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
+ }
+ 
+-int init_sls_allocator(struct sls_dev *dev)
++int init_sls_allocator(struct sls_mem_info *mem_info)
+ {
+ 	int err_code;
+ 
+-	dev->allocator = &__allocator.data;
+-
+ 	SLS_DBG("Initializing SLS allocator\n");
+ 
+-	err_code = preinit_sls_allocator(dev->allocator, &dev->mem_info);
++	err_code = preinit_sls_allocator(&allocator, mem_info);
+ 	if (unlikely(err_code))
+ 		return err_code;
+ 
+-	/* Protect memory allocation operations */
+-	mutex_init(&__allocator.memory_mutex);
+-
+ 	return 0;
+ }
+ 
+-int reset_sls_allocator(struct sls_allocator *alloc,
+-			struct sls_mem_info *mem_info)
++int reset_sls_allocator(struct sls_mem_info *mem_info)
+ {
+ 	SLS_DBG("Resetting SLS allocator\n");
+ 
+-	if (unlikely(allocator_is_locked(alloc))) {
++	if (unlikely(allocator_is_locked())) {
+ 		SLS_WRN("Mutex unlock forced.\n");
+-		unlock_allocator(alloc);
++		unlock_allocator();
+ 	}
+ 
+-	cleanup_memory_pools(alloc);
++	cleanup_memory_pools(&allocator);
+ 
+-	return preinit_sls_allocator(alloc, mem_info);
++	return preinit_sls_allocator(&allocator, mem_info);
+ }
+ 
+-void cleanup_sls_allocator(struct sls_dev *dev)
++void cleanup_sls_allocator(void)
+ {
+-	struct __sls_allocator *allocator =
+-		container_of(dev->allocator, struct __sls_allocator, data);
+-
+ 	SLS_DBG("Cleaning up SLS allocator\n");
+-	reset_sls_allocator(dev->allocator, NULL);
+-	mutex_destroy(&allocator->memory_mutex);
++	reset_sls_allocator(NULL);
++	mutex_destroy(&memory_mutex);
+ }
+ 
+ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+@@ -270,13 +258,13 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 		return err;
+ 	}
+ 
+-	lock_allocator(alloc);
++	lock_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+ 		err = allocate_memory_unsafe(alloc, &kreq);
+ 		if (unlikely(err)) {
+-			unlock_allocator(alloc);
++			unlock_allocator();
+ 			return err;
+ 		}
+ 
+@@ -285,7 +273,7 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 		if (unlikely(err)) {
+ 			SLS_ERR("Failed to write user alloc request. Ptr = %p.\n",
+ 				ureq);
+-			unlock_allocator(alloc);
++			unlock_allocator();
+ 			return err;
+ 		}
+ 
+@@ -296,14 +284,13 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 				kreq.rank, kreq.rank_offset, kreq.size);
+ 		}
+ 	}
+-	unlock_allocator(alloc);
++	unlock_allocator();
+ 
+ 	return err;
+ }
+ 
+ // Call only when holding allocator lock
+-int deallocate_memory_unsafe(struct sls_allocator *alloc,
+-			struct sls_memory_alloc_request req)
++int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ {
+ 	if (req.rank >= NUM_OF_RANK) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req.rank);
+@@ -321,15 +308,15 @@ int deallocate_memory_unsafe(struct sls_allocator *alloc,
+ 	 * valid allocations in here, or calling into process manager
+ 	 * before this call.
+ 	 */
+-	if (unlikely(!gen_pool_has_addr(alloc->mem_pools[req.rank],
++	if (unlikely(!gen_pool_has_addr(allocator.mem_pools[req.rank],
+ 					req.rank_offset, req.size))) {
+ 		SLS_ERR("Deallocating a nonexistent object at %llu of size %llu from pool[%u]\n",
+ 			req.rank_offset, req.size, req.rank);
+-		unlock_allocator(alloc);
++		unlock_allocator();
+ 		return -EINVAL;
+ 	}
+ 
+-	gen_pool_free(alloc->mem_pools[req.rank], req.rank_offset, req.size);
++	gen_pool_free(allocator.mem_pools[req.rank], req.rank_offset, req.size);
+ 
+ 	return 0;
+ }
+@@ -350,34 +337,64 @@ static int deallocate_memory_ioctl(struct sls_allocator *alloc,
+ 		return err;
+ 	}
+ 
+-	lock_allocator(alloc);
++	lock_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-		err = deallocate_memory_unsafe(alloc, kreq);
++		err = deallocate_memory_unsafe(kreq);
+ 		if (unlikely(err)) {
+-			unlock_allocator(alloc);
++			unlock_allocator();
+ 			return err;
+ 		}
+ 
+ 		err = sls_proc_remove_alloc(&sls_proc_mgr, kreq);
+ 	}
+-	unlock_allocator(alloc);
++	unlock_allocator();
+ 
+ 	return err;
+ }
+ 
+-int mem_process_ioctl(unsigned int cmd, struct sls_allocator *alloc,
+-		      unsigned long __user arg)
++uint64_t get_total_size(uint8_t rank)
++{
++	struct gen_pool *pool = NULL;
++	uint64_t size = 0;
++
++	lock_allocator();
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
++		pool = allocator.mem_pools[rank];
++		size = pool ? gen_pool_size(pool) : 0;
++	}
++	unlock_allocator();
++
++	return size;
++}
++
++uint64_t get_free_size(uint8_t rank)
++{
++	struct gen_pool *pool = NULL;
++	uint64_t size = 0;
++
++	lock_allocator();
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
++		pool = allocator.mem_pools[rank];
++		size = pool ? gen_pool_avail(pool) : 0;
++	}
++	unlock_allocator();
++
++	return size;
++}
++
++int mem_process_ioctl(unsigned int cmd, unsigned long __user arg)
+ {
+ 	switch (cmd) {
+ 	case ALLOCATE_MEMORY:
+-		return allocate_memory_ioctl(alloc, arg);
++		return allocate_memory_ioctl(&allocator, arg);
+ 	case DEALLOCATE_MEMORY:
+-		return deallocate_memory_ioctl(alloc, arg);
++		return deallocate_memory_ioctl(&allocator, arg);
+ 	default:
+-		SLS_ERR(
+-			"Unknown memory operation [%u], with argument [%lu]\n",
++		SLS_ERR("Unknown memory operation [%u], with argument [%lu]\n",
+ 			cmd, arg);
+ 	}
+ 
+diff --git a/drivers/pnm/sls_resource/sls_allocator.h b/drivers/pnm/sls_resource/sls_allocator.h
+index d5ec07449..87932e726 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.h
++++ b/drivers/pnm/sls_resource/sls_allocator.h
+@@ -8,35 +8,27 @@
+ #include <linux/list.h>
+ #include <linux/types.h>
+ 
+-struct sls_dev;
++//[TODO: s-motov] encapsulate meminfo
+ struct sls_mem_info;
+ 
+-/* Helper structure for memory allocation */
+-struct sls_allocator {
+-	/* Allocator granularity in bytes, the number should be a power of 2 */
+-	uint64_t gran;
+-	/* GenAlloc memory pools for each rank, each pool has it's own virtual
+-	 * range, currently this range is not bound to the real memory by PA,
+-	 * Range: [reserved_indent == PAGE_SIZE, rank_size - reserved_indent]
+-	 */
+-	struct gen_pool *mem_pools[NUM_OF_RANK];
+-};
+-
+-int init_sls_allocator(struct sls_dev *dev);
++int init_sls_allocator(struct sls_mem_info *mem_info);
+ /*
+  * Not proccess(thread)-safe.
+  * `mem_info` might be NULL, if it is
+  * then just reset allocator, if it's not
+  * then reset with memory pools initialization.
+  */
+-int reset_sls_allocator(struct sls_allocator *alloc,
+-			struct sls_mem_info *mem_info);
+-void cleanup_sls_allocator(struct sls_dev *dev);
+-int mem_process_ioctl(unsigned int cmd, struct sls_allocator *alloc,
+-		      unsigned long __user arg);
+-int deallocate_memory_unsafe(struct sls_allocator *alloc,
+-			     struct sls_memory_alloc_request req);
+-void lock_allocator(struct sls_allocator *alloc);
+-void unlock_allocator(struct sls_allocator *alloc);
++int reset_sls_allocator(struct sls_mem_info *mem_info);
++void cleanup_sls_allocator(void);
++int mem_process_ioctl(unsigned int cmd, unsigned long __user arg);
++int deallocate_memory_unsafe(struct sls_memory_alloc_request req);
++void lock_allocator(void);
++void unlock_allocator(void);
++
++uint64_t get_total_size(uint8_t rank);
++
++uint64_t get_free_size(uint8_t rank);
++
++
+ 
+ #endif /* __SLS_ALLOCATOR_H__ */
+diff --git a/drivers/pnm/sls_resource/sls_private.h b/drivers/pnm/sls_resource/sls_private.h
+index d754c5865..deb42c153 100644
+--- a/drivers/pnm/sls_resource/sls_private.h
++++ b/drivers/pnm/sls_resource/sls_private.h
+@@ -34,13 +34,6 @@ struct sls_device_data {
+ 	int channel;
+ };
+ 
+-struct sls_allocator;
+-
+-struct sls_dev {
+-	struct sls_mem_info mem_info; /* memory info */
+-	struct sls_allocator *allocator;
+-};
+-
+ static inline int is_sls_range(u64 start, u64 end)
+ {
+ 	return start >= SLS_BASE_ADDR &&
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/sls_process_manager.c
+index 27cd5a795..96cb55a37 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/sls_process_manager.c
+@@ -131,8 +131,7 @@ static void track_leaked_resources(struct sls_process_manager *mgr,
+ 	}
+ }
+ 
+-static int release_process_resources(struct sls_proc_resources *proc_res,
+-				     struct sls_allocator *alloc)
++static int release_process_resources(struct sls_proc_resources *proc_res)
+ {
+ 	/* in base case scenario the resources above should be already
+ 	 * released, but we need to check in case we are on
+@@ -171,12 +170,11 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 		 * annoying to use. So we should instead refactor the code, and
+ 		 * perhaps move the RB-tree from process manager into the allocator.
+ 		 */
+-		lock_allocator(alloc);
++		lock_allocator();
+ 		{
+-			ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++			//[TODO:s-motov] kcsan check
+ 
+-			failed |= deallocate_memory_unsafe(
+-					  alloc, desc_node->request) != 0;
++			failed |= deallocate_memory_unsafe(desc_node->request) != 0;
+ 			SLS_INF(
+ 				"Abnormal release desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
+ 				desc_node->request.rank,
+@@ -186,14 +184,13 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 			rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
+ 			kfree(desc_node);
+ 		}
+-		unlock_allocator(alloc);
++		unlock_allocator();
+ 	}
+ 
+ 	return failed ? -1 : 0;
+ }
+ 
+-int release_sls_process(struct sls_process_manager *mgr,
+-			struct sls_allocator *alloc)
++int release_sls_process(struct sls_process_manager *mgr)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+@@ -226,8 +223,7 @@ int release_sls_process(struct sls_process_manager *mgr,
+ 				goto free_proc_res;
+ 
+ 			if (atomic64_read(&mgr->enable_cleanup)) {
+-				err_code = release_process_resources(proc_res,
+-								     alloc);
++				err_code = release_process_resources(proc_res);
+ 			} else {
+ 				track_leaked_resources(mgr, proc_res);
+ 				goto release_process_unlock;
+@@ -445,8 +441,7 @@ int register_sls_process(struct sls_process_manager *mgr)
+ 	return err_code;
+ }
+ 
+-int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+-				struct sls_allocator *alloc)
++int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr)
+ {
+ 	struct sls_proc_resources *proc_res_tmp;
+ 	struct sls_proc_resources *proc_res;
+@@ -464,7 +459,7 @@ int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+ 
+ 		list_for_each_entry_safe(proc_res, proc_res_tmp,
+ 					 &mgr->leaked_process_list, list) {
+-			err_code |= release_process_resources(proc_res, alloc);
++			err_code |= release_process_resources(proc_res);
+ 			list_del(&proc_res->list);
+ 			kfree(proc_res);
+ 		}
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.h b/drivers/pnm/sls_resource/sls_process_manager.h
+index b13a4027a..1cc16ad27 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.h
++++ b/drivers/pnm/sls_resource/sls_process_manager.h
+@@ -50,17 +50,13 @@ struct sls_process_manager {
+ 	struct mutex proc_list_lock;
+ };
+ 
+-/* We have circle dependence with sls allocator */
+-struct sls_allocator;
+-
+ void init_sls_process_manager(struct sls_process_manager *mgr);
+ void cleanup_sls_process_manager(struct sls_process_manager *mgr);
+ void reset_sls_process_manager(struct sls_process_manager *mgr);
+ /* function for handling 'open' file operation */
+ int register_sls_process(struct sls_process_manager *mgr);
+ /* function for handling 'release' file operation */
+-int release_sls_process(struct sls_process_manager *mgr,
+-			struct sls_allocator *alloc);
++int release_sls_process(struct sls_process_manager *mgr);
+ 
+ /* functions for adding allocation/ranks into process's resources data structure*/
+ int sls_proc_register_alloc(struct sls_process_manager *mgr,
+@@ -74,8 +70,7 @@ int sls_proc_remove_alloc(struct sls_process_manager *mgr,
+ int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+ 			 unsigned int cmd);
+ 
+-int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+-				struct sls_allocator *alloc);
++int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr);
+ void sls_proc_manager_cleanup_off(struct sls_process_manager *mgr);
+ 
+ #endif /* __SLS_PROCESS_MANAGER_H__ */
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.c b/drivers/pnm/sls_resource/sls_sysfs.c
+index 8fd3ca4e7..1e5ae0718 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.c
++++ b/drivers/pnm/sls_resource/sls_sysfs.c
+@@ -22,7 +22,7 @@
+ #define REGION_SYSFS_ATTR_COUNT 2
+ #define WITH_NULL_TERM(var) (var + 1)
+ 
+-static struct sls_dev *sls_device;
++static struct sls_mem_info *mem_info;
+ static struct kobject *ranks_kobj;
+ 
+ static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+@@ -44,8 +44,7 @@ static ssize_t cleanup_store(struct device *device,
+ 			     size_t count)
+ {
+ 	if (sysfs_streq(buf, "1")) {
+-		if (sls_proc_manager_cleanup_on(&sls_proc_mgr,
+-						sls_device->allocator))
++		if (sls_proc_manager_cleanup_on(&sls_proc_mgr))
+ 			SLS_ERR("Failed to enable resource manager\n");
+ 	} else if (sysfs_streq(buf, "0")) {
+ 		sls_proc_manager_cleanup_off(&sls_proc_mgr);
+@@ -162,7 +161,6 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ {
+ 	uint8_t state;
+ 	uint64_t free_size, size, wr_acq_count;
+-	struct gen_pool *pool;
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[0]) == 0) {
+ 		state = sls_rank_scheduler_rank_state(attr->rank);
+@@ -170,18 +168,12 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[1]) == 0) {
+-		lock_allocator(sls_device->allocator);
+-		pool = sls_device->allocator->mem_pools[attr->rank];
+-		size = pool ? gen_pool_size(pool) : 0;
+-		unlock_allocator(sls_device->allocator);
++		size = get_total_size(attr->rank);
+ 		return sysfs_emit(buf, "%llu\n", size);
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[2]) == 0) {
+-		lock_allocator(sls_device->allocator);
+-		pool = sls_device->allocator->mem_pools[attr->rank];
+-		free_size = pool ? gen_pool_avail(pool) : 0;
+-		unlock_allocator(sls_device->allocator);
++		free_size = get_free_size(attr->rank);
+ 		return sysfs_emit(buf, "%llu\n", free_size);
+ 	}
+ 
+@@ -217,17 +209,15 @@ static const char *const region_attr_name[] = {
+ static ssize_t region_show(struct region_attribute *attr, char *buf)
+ {
+ 	if (strcmp(attr->attr.name, region_attr_name[0]) == 0)
+-		return sysfs_emit(
+-			buf, "%llu\n",
+-			sls_device->mem_info.mem_size[attr->rank % NUM_OF_CS]
+-						     [attr->region] /
+-				NUM_RANKS_PER_CS);
++		return sysfs_emit(buf, "%llu\n",
++				  mem_info->mem_size[attr->rank % NUM_OF_CS]
++						    [attr->region] /
++					  NUM_RANKS_PER_CS);
+ 
+ 	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+-		return sysfs_emit(
+-			buf, "%llu\n",
+-			sls_device->mem_info.mem_offset[attr->rank % NUM_OF_CS]
+-						       [attr->region]);
++		return sysfs_emit(buf, "%llu\n",
++				  mem_info->mem_offset[attr->rank % NUM_OF_CS]
++						      [attr->region]);
+ 
+ 	return 0;
+ }
+@@ -380,12 +370,12 @@ static int build_rank_sysfs(struct kobject *kobj, uint8_t rank)
+ 	return err;
+ }
+ 
+-int build_sls_sysfs(struct sls_dev *dev, struct device *resource_dev)
++int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev)
+ {
+ 	int rank;
+ 	int err = 0;
+ 
+-	sls_device = dev;
++	mem_info = meminfo;
+ 
+ 	SLS_DBG("Building SLS sysfs\n");
+ 	ranks_kobj = kobject_create_and_add("ranks", &resource_dev->kobj);
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.h b/drivers/pnm/sls_resource/sls_sysfs.h
+index b21a036d4..ba638702c 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.h
++++ b/drivers/pnm/sls_resource/sls_sysfs.h
+@@ -4,12 +4,13 @@
+ #ifndef __SLS_SYSFS__
+ #define __SLS_SYSFS__
+ 
+-struct device;
+-struct sls_dev;
++#include <linux/device.h>
++
++struct sls_mem_info;
+ 
+ extern struct sls_process_manager sls_proc_mgr;
+ 
+-int build_sls_sysfs(struct sls_dev *dev, struct device *resource_dev);
++int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev);
+ void destroy_sls_sysfs(void);
+ 
+ #endif /* __SLS_SYSFS__ */
+-- 
+2.34.1
+

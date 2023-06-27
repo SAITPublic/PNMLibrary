@@ -1,0 +1,146 @@
+From 2f078d5bd4722b55aed02db34cfb0271873e64ae Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 13 Oct 2022 13:16:11 +0300
+Subject: [PATCH 047/161] [secure] Add TAGS' device region
+
+According to new HW specification, AXDIMM device has a separate TAGS
+region to store MAC for SecNDP verification.
+
+Related to: AXDIMM-438
+---
+ drivers/dax/axdimm-private.h   | 10 ++++++----
+ drivers/dax/axdimm.c           | 12 +++++++++++-
+ drivers/dax/axdimm_sysfs.c     |  1 +
+ include/uapi/linux/libaxdimm.h | 20 +++++++++++++-------
+ 4 files changed, 31 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index 21e15bed0..fe1e8ff07 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -45,10 +45,12 @@
+ /* The enumeration of axdimm memory addresses */
+ typedef enum _axd_mem_regions_e {
+ 	AXDIMM_BASE_CS0 = 0,
+-	AXDIMM_PSUM_CS0 = 1,
+-	AXDIMM_BASE_CS1 = 2,
+-	AXDIMM_PSUM_CS1 = 3,
+-	NUM_OF_MEM_REGION = 4 /* Number of index for memory mapping region */
++	AXDIMM_TAGS_CS0 = 1,
++	AXDIMM_PSUM_CS0 = 2,
++	AXDIMM_BASE_CS1 = 3,
++	AXDIMM_TAGS_CS1 = 4,
++	AXDIMM_PSUM_CS1 = 5,
++	NUM_OF_MEM_REGION = 6 /* Number of index for memory mapping region */
+ } axd_mem_regions_e;
+ 
+ struct axdimm_device_data {
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 24fdf5c66..e99adc5b9 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -125,6 +125,9 @@ static void axdimm_setmeminfo(struct axdmem_info *mem_info)
+ 		mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR] =
+ 			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F100,
+ 					     0);
++		mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS] =
++			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F200,
++					     0);
+ 		mem_info->mem_offset[cs][AXDIMM_BLOCK_PSUM] =
+ 			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F400,
+ 					     0);
+@@ -137,8 +140,11 @@ static void axdimm_setmeminfo(struct axdmem_info *mem_info)
+ 			mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR] -
+ 			mem_info->mem_offset[cs][AXDIMM_BLOCK_INST];
+ 		mem_info->mem_size[cs][AXDIMM_BLOCK_CFGR] =
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_PSUM] -
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS] -
+ 			mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR];
++		mem_info->mem_size[cs][AXDIMM_BLOCK_TAGS] =
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_PSUM] -
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS];
+ 		mem_info->mem_size[cs][AXDIMM_BLOCK_PSUM] =
+ 			EMBT_BASE_CS1_OFFSET -
+ 			mem_info->mem_offset
+@@ -155,10 +161,14 @@ static void axdimm_set_ioremap_info(ulong *offset)
+ 	/* Set offset(iomem resource start address) */
+ 	offset[AXDIMM_BASE_CS0] =
+ 		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_BASE];
++	offset[AXDIMM_TAGS_CS0] =
++		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_TAGS];
+ 	offset[AXDIMM_PSUM_CS0] =
+ 		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_PSUM];
+ 	offset[AXDIMM_BASE_CS1] =
+ 		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_BASE];
++	offset[AXDIMM_TAGS_CS1] =
++		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_TAGS];
+ 	offset[AXDIMM_PSUM_CS1] =
+ 		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_PSUM];
+ }
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index 8f99ca3d5..bafd59bee 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -162,6 +162,7 @@ static const char *const region_group_name[] = {
+ 	"base",
+ 	"inst",
+ 	"cfgr",
++	"tags",
+ 	"psum",
+ };
+ 
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index c595886be..2b0d51b80 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -2,10 +2,11 @@
+  * Copyright (C) 2021 Samsung Electronics Co. LTD
+  *
+  * This software is proprietary of Samsung Electronics.
+- * No part of this software, either material or conceptual may be copied or distributed, transmitted,
+- * transcribed, stored in a retrieval system or translated into any human or computer language in any form
+- * by any means, electronic, mechanical, manual or otherwise, or disclosed
+- * to third parties without the express written permission of Samsung Electronics.
++ * No part of this software, either material or conceptual may be copied or
++ * distributed, transmitted, transcribed, stored in a retrieval system or
++ * translated into any human or computer language in any form by any means,
++ * electronic, mechanical, manual or otherwise, or disclosed to third parties
++ * without the express written permission of Samsung Electronics.
+  */
+ #ifndef __LIBAXDIMM_H__
+ #define __LIBAXDIMM_H__
+@@ -24,7 +25,8 @@
+ #define REG_SLS_EXEC 0x40
+ #define REG_POLLING 0x840
+ 
+-#define MEM_SEG_NUM 4
++/* [TODO: @y-lavrinenko] Redundant and unused. Should be removed*/
++#define MEM_SEG_NUM 5
+ 
+ /* number of Home Agent(# of MC at CPU) */
+ #define NUM_OF_HA 2
+@@ -103,6 +105,9 @@
+ /* CFGR region's size and offset */
+ #define RANK_REGION_CFGR_SIZE_PATH RANK_REGION_SIZE_PATH(cfgr)
+ #define RANK_REGION_CFGR_OFFSET_PATH RANK_REGION_OFFSET_PATH(cfgr)
++/* TAGS region's size and offset */
++#define RANK_REGION_TAGS_SIZE_PATH RANK_REGION_SIZE_PATH(tags)
++#define RANK_REGION_TAGS_OFFSET_PATH RANK_REGION_OFFSET_PATH(tags)
+ /* PSUM region's size and offset */
+ #define RANK_REGION_PSUM_SIZE_PATH RANK_REGION_SIZE_PATH(psum)
+ #define RANK_REGION_PSUM_OFFSET_PATH RANK_REGION_OFFSET_PATH(psum)
+@@ -112,8 +117,9 @@ typedef enum _axd_mem_blocks_e {
+ 	AXDIMM_BLOCK_BASE = 0,
+ 	AXDIMM_BLOCK_INST = 1,
+ 	AXDIMM_BLOCK_CFGR = 2,
+-	AXDIMM_BLOCK_PSUM = 3,
+-	AXDIMM_BLOCK_MAX = 4
++	AXDIMM_BLOCK_TAGS = 3,
++	AXDIMM_BLOCK_PSUM = 4,
++	AXDIMM_BLOCK_MAX = 5
+ } axd_mem_blocks_e;
+ 
+ /* The enumeration of table allocation preferences */
+-- 
+2.34.1
+

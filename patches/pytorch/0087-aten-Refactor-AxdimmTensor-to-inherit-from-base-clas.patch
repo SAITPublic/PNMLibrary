@@ -1,0 +1,254 @@
+From c2a3d7a62b4b770563c5e5c011ac31b7061bd890 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 01:53:47 +0300
+Subject: [PATCH 087/128] [aten] Refactor AxdimmTensor to inherit from base
+ class
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp | 104 +++++++++----------
+ aten/src/ATen/native/axdimm/AxdimmTensor.h   |  60 +++--------
+ 2 files changed, 62 insertions(+), 102 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index f2f1b5fd..725936a7 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -20,29 +20,53 @@ namespace at {
+ namespace native {
+ namespace axdimm {
+ 
+-const AxdimmTensor& convert(const at::Tensor& tensor) {
+-  TORCH_INTERNAL_ASSERT(tensor.is_axdimm());
+-  auto impl = static_cast<AxdimmTensorImpl*>(tensor.unsafeGetTensorImpl());
+-  return impl->unsafe_opaque_handle();
+-}
+-
+-void verify(const at::TensorOptions& options) {
+-  TORCH_CHECK(
+-      !options.has_requires_grad() || !options.requires_grad(),
+-      "'requires_grad' tensor option is not yet supported under Axdimm!");
+-
++AxdimmTensor::AxdimmTensor(
++    const at::Tensor& weights,
++    axd_user_preferences preference)
++    : AxdimmBaseTensor(
++          weights,
++          AxdimmTensorType::AXDIMM_SIMPLE,
++          weights.sizes()[0],
++          weights.sizes()[1],
++          weights.sizes()[2],
++          preference) {
+   TORCH_CHECK(
+-      !options.has_pinned_memory() || !options.pinned_memory(),
+-      "'pinned_memory' tensor option is not yet supported under Axdimm!");
++      weights.dim() == 3, "Axdimm tensor dimensions must be equal to 3");
++  load(weights.data_ptr());
++}
+ 
+-  TORCH_CHECK(
+-      !options.has_layout() || (c10::kStrided == options.layout()),
+-      "'layout' tensor option is not yet supported under Axdimm!");
++AxdimmTensor::AxdimmTensor(
++    const at::Tensor& weights,
++    uint32_t num_tables,
++    uint32_t features_per_table,
++    uint32_t sparse_feature_size,
++    axd_user_preferences preference)
++    : AxdimmBaseTensor(
++          weights,
++          AxdimmTensorType::AXDIMM_SIMPLE,
++          num_tables,
++          features_per_table,
++          sparse_feature_size,
++          preference) {
++  load(weights.data_ptr());
++}
+ 
+-  TORCH_CHECK(
+-      !options.has_memory_format() ||
+-          (c10::MemoryFormat::Contiguous == options.memory_format_opt()),
+-      "'memory_format' tensor option is not yet supported under Axdimm!");
++AxdimmTensor::AxdimmTensor(
++    const std::string& weights_path,
++    const c10::ScalarType& scalar_type,
++    const at::Tensor& tables_rows_num,
++    uint32_t num_tables,
++    uint32_t sparse_feature_size,
++    axd_user_preferences preference)
++    : AxdimmBaseTensor(
++          weights_path,
++          scalar_type,
++          tables_rows_num,
++          AxdimmTensorType::AXDIMM_SIMPLE,
++          num_tables,
++          sparse_feature_size,
++          preference) {
++  load(mmap_weights_file());
+ }
+ 
+ AxdimmLayoutWrapper::~AxdimmLayoutWrapper() {
+@@ -54,47 +78,19 @@ AxdimmLayoutWrapper::~AxdimmLayoutWrapper() {
+   }
+ }
+ 
+-void AxdimmTensor::load(
+-    const at::Tensor& weights,
+-    axd_user_preferences preference) {
+-  TORCH_CHECK(
+-      weights.dim() == 3, "Axdimm tensor dimensions must be equal to 3");
+-  const auto& sizes = weights.sizes();
+-  load(weights, sizes[0], sizes[1], sizes[2], preference);
+-}
+-
+-void AxdimmTensor::load(
+-    const at::Tensor& weights,
+-    uint32_t num_tables,
+-    uint32_t features_per_table,
+-    uint32_t sparse_feature_size,
+-    axd_user_preferences preference) {
+-  TORCH_CHECK(num_tables > 0, "Number of tables must be > 0");
+-  TORCH_CHECK(features_per_table > 0, "Features per table  must be > 0");
+-  TORCH_CHECK(sparse_feature_size > 0, "Sparse feature size must be > 0");
+-  TORCH_CHECK(weights.is_contiguous(), "Weights tensor must be contiguous");
+-  TORCH_CHECK(
+-      weights.scalar_type() == torch::kFloat32 ||
+-          weights.scalar_type() == torch::kInt32,
+-      "Invalid tensor data type. AXDIMM supports only float32 and int32 tensors as weights");
+-  sls_type_ = ::get_sls_type(weights.scalar_type());
+-  num_tables_ = num_tables;
+-  sparse_feature_size_ = sparse_feature_size;
+-  tables_rows_num_.resize(num_tables_);
+-  std::fill(
+-      std::begin(tables_rows_num_),
+-      std::end(tables_rows_num_),
+-      features_per_table);
++void AxdimmTensor::load(const void* weights_data) {
++  sls_type_ = ::get_sls_type(scalar_type_);
+   layout_ = std::make_shared<AxdimmLayoutWrapper>(
+       get_device(),
+       axdimm_allocate_tables(
+           get_device(),
+           tables_rows_num_.data(),
+           num_tables_,
+-          sparse_feature_size_ * weights.dtype().itemsize(),
+-          preference));
++          sparse_feature_size_ *
++              c10::scalarTypeToTypeMeta(scalar_type_).itemsize(),
++          preference_));
+   AxdimmDeviceContext::write_rank_data(
+-      weights.data_ptr(), layout_->get_layout_handle());
++      weights_data, layout_->get_layout_handle());
+ }
+ 
+ } // namespace axdimm
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index e8d64d72..be5126c1 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -5,6 +5,7 @@
+ #include "core/api/axdimm_device.h"
+ 
+ #include <ATen/ATen.h>
++#include <ATen/native/axdimm/AxdimmBaseTensor.h>
+ #include <ATen/native/axdimm/AxdimmDeviceContext.h>
+ #include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
+ 
+@@ -52,81 +53,44 @@ class AxdimmLayoutWrapper {
+ 
+ //! This class represents internal at::Tensor handle, for device specific logic
+ //! implementation
+-class AxdimmTensor {
++class AxdimmTensor : public AxdimmBaseTensor {
+  public:
+-  // This constructor required to create empty tensor. Object will be replaced
+-  // with tensor copied from CPU tensor
+-  AxdimmTensor() = default;
+-
+   AxdimmTensor(
+       const at::Tensor& weights,
+-      ::axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL) {
+-    load(weights, preference);
+-  }
++      ::axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL);
+ 
+   AxdimmTensor(
+       const at::Tensor& weights,
+       uint32_t num_tables,
+       uint32_t features_per_table,
+       uint32_t sparse_feature_size,
+-      axd_user_preferences preference) {
+-    load(
+-        weights,
+-        num_tables,
+-        features_per_table,
+-        sparse_feature_size,
+-        preference);
+-  }
+-
+-  uint32_t get_sparse_feature_size() const {
+-    return sparse_feature_size_;
+-  }
++      axd_user_preferences preference);
+ 
+-  uint32_t get_num_tables() const {
+-    return num_tables_;
+-  }
++  AxdimmTensor(
++      const std::string& weights_path,
++      const c10::ScalarType& scalar_type,
++      const at::Tensor& tables_rows_num,
++      uint32_t num_tables,
++      uint32_t sparse_feature_size,
++      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL);
+ 
+   const AxdimmTablesLayout* get_tables_layout() const {
+     return layout_->get_tables_layout();
+   }
+ 
+-  const std::vector<uint32_t>& get_tables_rows_num() const {
+-    return tables_rows_num_;
+-  }
+-
+-  Device* get_device() const {
+-    return AxdimmDeviceContext::device();
+-  }
+-
+   axdimm_sls_type get_sls_type() const {
+     return sls_type_;
+   }
+ 
+  private:
+-  void load(
+-      const at::Tensor& weights,
+-      ::axd_user_preferences preference);
+-  void load(
+-      const at::Tensor& weights,
+-      uint32_t num_tables,
+-      uint32_t features_per_table,
+-      uint32_t sparse_feature_size,
+-      axd_user_preferences preference);
++  void load(const void* weights_data);
+ 
+   // shared_ptr to be able to copy this tensor as many times as required and
+   // deallocate tables when last tensor is destroyed
+   std::shared_ptr<AxdimmLayoutWrapper> layout_;
+-  std::vector<uint32_t> tables_rows_num_;
+-  uint32_t sparse_feature_size_{};
+-  uint32_t minibatch_size_;
+-  uint32_t num_tables_{};
+   axdimm_sls_type sls_type_{};
+ };
+ 
+-using AxdimmTensorImpl = AxdimmOpaqueTensorImpl<AxdimmTensor>;
+-
+-const AxdimmTensor& convert(const at::Tensor& tensor);
+-
+ } // namespace axdimm
+ } // namespace native
+ } // namespace at
+-- 
+2.34.1
+

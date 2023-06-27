@@ -1,0 +1,60 @@
+From 5af74e34b9a432ed007cc9c3d4558abf1de2761b Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 29 Jun 2022 13:12:56 +0900
+Subject: [PATCH 052/128] [lengths_reducer_ops_axdimm.cc] Move device creation
+ into op constructor
+
+This is more logically correct way to create/destroy device.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index bdf41c84..d5b61af7 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -142,6 +142,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     CAFFE_ENFORCE_NE(
+         uuid, "None", "Non-shared tables layout is not yet supported!");
+     tables_layout_ = axdimm_get_shared_tables_layout(uuid.c_str());
++    device_ = axdimm_create_base_device();
+   }
+ 
+   ~AXDIMMSparseLengthsReductionOpVec() {
+@@ -213,13 +214,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       }
+     }
+ 
+-    // 2) Create device and SLS operation on first call.
+-    if (!device_) {
+-      CAFFE_ENFORCE_EQ(
+-          nullptr, sls_op_, "sls_op_ must be nullptr");
+-
+-      device_ = axdimm_create_base_device();
+-
++    // 2) Create SLS operation on first call.
++    if (!sls_op_) {
+       // Minibatch size.
+       const int64_t M = Input(lengths_vec_start_idx_).size(0);
+       // Sparse feature size.
+@@ -230,7 +226,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         table_entry_list[i] = Input(tables_vec_start_idx_ + i).size(0);
+       }
+ 
+-      // Create model context for SLS operation.
+       sls_op_ = axdimm_create_sls_op(
+           M,
+           D,
+@@ -240,6 +235,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+           tables_layout_,
+           AXDIMM_SLS_FLOAT);
+ 
++      // Precompile for better performance.
+       axdimm_precompile_op(sls_op_, device_);
+     }
+ 
+-- 
+2.34.1
+

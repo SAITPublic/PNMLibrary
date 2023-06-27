@@ -1,0 +1,201 @@
+From 7b868078fc531552b1a1c8cc281b08e886e9fb0a Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Thu, 30 Mar 2023 13:14:14 +0300
+Subject: [PATCH 113/128] [refactor] correcting names according to
+ axdimm_driver
+
+Refers to MCS23-679
+
+Signed-off-by: Nataliia Cherepanova nataly.cher@partner.samsung.com
+---
+ aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp |  8 ++++----
+ aten/src/ATen/native/axdimm/AxdimmSecureTensor.h   |  4 ++--
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp       |  2 +-
+ aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h    |  2 +-
+ caffe2/operators/lengths_reducer_ops_axdimm.cc     |  4 ++--
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.cc |  4 ++--
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h  | 14 +++++++-------
+ 7 files changed, 19 insertions(+), 19 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+index 623d8dbc..086250ea 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+@@ -1,5 +1,5 @@
++#include <pnmlib/secure/axdimm_runner_factory.h>
+ #include <pnmlib/secure/base_device.h>
+-#include <pnmlib/secure/runner_factory.h>
+ #include <pnmlib/secure/untrusted_axdimm_params.h>
+ 
+ #include <ATen/native/axdimm/AxdimmSecureTensor.h>
+@@ -82,17 +82,17 @@ void AxdimmSecureTensor::load(const void* weights_data) {
+   if (type_ == AxdimmTensorType::AXDIMM_SECURE) {
+     if (scalar_type_ == torch::kFloat32) {
+       runner_ = ::axdimm::secure::make_runner(
+-          ::axdimm::secure::SecureRunnerType::FLOAT);
++          ::axdimm::secure::RunnerType::FLOAT);
+     } else {
+       runner_ = ::axdimm::secure::make_runner(
+-          ::axdimm::secure::SecureRunnerType::INT);
++          ::axdimm::secure::RunnerType::INT);
+     }
+   }
+ 
+   const auto& rows_view = ::pnm::make_view(std::cref(tables_rows_num_).get());
+ 
+   ::axdimm::secure::DeviceArguments args(
+-      ::axdimm::secure::UntrustedAxdimmDeviceParams{
++      ::axdimm::secure::UntrustedDeviceParams{
+           .rows = rows_view,
+           .sparse_feature_size = sparse_feature_size_,
+           .with_tag = with_tag_,
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+index 8674c904..37ec4faa 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+@@ -46,7 +46,7 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+     return with_tag_;
+   }
+ 
+-  ::axdimm::secure::ISecureRunner& get_runner() const {
++  ::axdimm::secure::IRunner& get_runner() const {
+     return *runner_;
+   }
+ 
+@@ -67,7 +67,7 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+   void check_params(const at::Tensor& weights) const;
+   void load(const void* weights_data);
+ 
+-  std::shared_ptr<::axdimm::secure::ISecureRunner> runner_;
++  std::shared_ptr<::axdimm::secure::IRunner> runner_;
+   bool with_tag_;
+ };
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index fda2a9fb..d9f8b324 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -1,4 +1,4 @@
+-#include <pnmlib/common/pnm_error.h>
++#include <pnmlib/common/error.h>
+ 
+ #include <c10/util/Logging.h>
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h b/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
+index 4bd6ef45..7a0fb213 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
+@@ -1,7 +1,7 @@
+ #ifndef __AXDIMM_TYPE_HELPERS__
+ #define __AXDIMM_TYPE_HELPERS__
+ 
+-#include <pnmlib/common/pnm_views.h>
++#include <pnmlib/common/views.h>
+ 
+ #include <algorithm>
+ #include <cstdint>
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 0825f4c5..b1754050 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -8,8 +8,8 @@
+ #include <pnmlib/ai/axdimm.h>
+ #include <pnmlib/ai/sls_operation.h>
+ #include <pnmlib/ai/sls_runner.h>
+-#include <pnmlib/common/pnm_error.h>
+-#include <pnmlib/common/pnm_views.h>
++#include <pnmlib/common/error.h>
++#include <pnmlib/common/views.h>
+ #include <pnmlib/core/axdimm_device.h>
+ 
+ #include <algorithm>
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 6176d96f..0132a90a 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -11,7 +11,7 @@ REGISTER_AXDIMM_OPERATOR(
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         float,
+         TensorTypes<float, at::Half>,
+-        ::axdimm::secure::SecureRunnerType::FLOAT>);
++        ::axdimm::secure::RunnerType::FLOAT>);
+ 
+ // Dummy
+ REGISTER_CPU_OPERATOR(SecureSparseLengthsSumVec, NoDefaultEngineOp<CPUContext>);
+@@ -22,7 +22,7 @@ REGISTER_AXDIMM_OPERATOR(
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         int32_t,
+         TensorTypes<int32_t>,
+-        ::axdimm::secure::SecureRunnerType::INT>);
++        ::axdimm::secure::RunnerType::INT>);
+ 
+ // Dummy
+ REGISTER_CPU_OPERATOR(
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 1147ef07..7b7a5bb5 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -7,14 +7,14 @@
+ #include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ 
++#include <pnmlib/secure/axdimm_runner_factory.h>
+ #include <pnmlib/secure/base_device.h>
+ #include <pnmlib/secure/base_runner.h>
+-#include <pnmlib/secure/runner_factory.h>
+ #include <pnmlib/secure/untrusted_axdimm_params.h>
+ 
+ #include <pnmlib/ai/axdimm.h>
+ 
+-#include <pnmlib/common/pnm_128bit_math.h>
++#include <pnmlib/common/128bit_math.h>
+ 
+ #include <ATen/native/axdimm/AxdimmTypeHelpers.h>
+ 
+@@ -28,7 +28,7 @@ namespace caffe2 {
+ template <
+     typename T, // output type
+     typename InputTypes, // supported input types, such as TensorTypes<float>
+-    axdimm::secure::SecureRunnerType runner_type>
++    axdimm::secure::RunnerType runner_type>
+ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+  public:
+   USE_OPERATOR_FUNCTIONS(AXDIMMContext);
+@@ -179,7 +179,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         "mem_preference", AXDIMM_ALLOC_AUTO);
+ 
+     axdimm::secure::DeviceArguments args(
+-        axdimm::secure::UntrustedAxdimmDeviceParams{
++        axdimm::secure::UntrustedDeviceParams{
+             .rows = rows,
+             .sparse_feature_size = sparse_feature_size,
+             .with_tag = with_tag_,
+@@ -211,14 +211,14 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   std::vector<uint8_t> tag_checks_;
+   std::vector<secure_core_value_type> psum_buffer_;
+ 
+-  std::unique_ptr<axdimm::secure::ISecureRunner> runner_ =
++  std::unique_ptr<axdimm::secure::IRunner> runner_ =
+       axdimm::secure::make_runner(runner_type);
+ };
+ 
+ template <
+     typename T,
+     typename InputTypes,
+-    axdimm::secure::SecureRunnerType runner_type>
++    axdimm::secure::RunnerType runner_type>
+ void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+     init_from_file() {
+   block_size_ = this->template GetSingleArgument<int>("num_tables", 0);
+@@ -278,7 +278,7 @@ void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+ template <
+     typename T,
+     typename InputTypes,
+-    axdimm::secure::SecureRunnerType runner_type>
++    axdimm::secure::RunnerType runner_type>
+ void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+     init_from_input() {
+   // Setup input pointers for tables/indices/lengths. The input comes in
+-- 
+2.34.1
+

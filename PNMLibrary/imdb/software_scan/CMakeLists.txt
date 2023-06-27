@@ -1,0 +1,5 @@
+file(GLOB_RECURSE IMDB_SCAN_AVX2_SRC avx2/*.cpp)
+add_library(imdb_scan_avx2 STATIC ${IMDB_SCAN_AVX2_SRC})
+target_compile_options(imdb_scan_avx2 PRIVATE -mavx2 -mavx -msse2 -mbmi2 -march=native)
+target_link_libraries(imdb_scan_avx2 PUBLIC fmt::fmt)
+static_dependency_check(imdb_scan_avx2)

@@ -1,0 +1,30 @@
+From a14b94290a5b425007ad5ff2787daf5bf8365e21 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 9 Aug 2022 18:27:26 +0900
+Subject: [PATCH 028/161] [scripts] Move axdimm commit version file to
+ /usr/modules/$version
+
+Otherwise dpkg fails to install multiple linux-headers package versions
+due to conflict on /usr/axdimm_info file.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ scripts/package/builddeb | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/package/builddeb b/scripts/package/builddeb
+index 57ad67dd4..aa599a578 100755
+--- a/scripts/package/builddeb
++++ b/scripts/package/builddeb
+@@ -89,7 +89,7 @@ deploy_kernel_headers () {
+ 
+ 	mkdir -p $pdir/lib/modules/$version/
+ 	ln -s /usr/src/linux-headers-$version $pdir/lib/modules/$version/build
+-	git log -n 1 --pretty=format:"%H%n%n%B%n" > $pdir/usr/axdimm_info
++	git log -n 1 --pretty=format:"%H%n%n%B%n" > $pdir/lib/modules/$version/axdimm_info
+ }
+ 
+ deploy_libc_headers () {
+-- 
+2.34.1
+

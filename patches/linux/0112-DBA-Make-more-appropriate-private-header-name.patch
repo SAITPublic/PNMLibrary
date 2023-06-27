@@ -1,0 +1,83 @@
+From 673e75c84eae9b3c5ddb97ecb1acb79eeffc229d Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Thu, 11 May 2023 19:38:31 +0300
+Subject: [PATCH 112/161] [DBA] Make more appropriate private header name
+
+* resource_device.h -> dba_private.h
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/dba_resource/dba_allocator.c         |  2 +-
+ .../{resource_device.h => dba_private.h}         | 16 ++++++++++++----
+ drivers/pnm/dba_resource/resource_device.c       |  6 +++---
+ 3 files changed, 16 insertions(+), 8 deletions(-)
+ rename drivers/pnm/dba_resource/{resource_device.h => dba_private.h} (50%)
+
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+index eb653ce29..99d285229 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/dba_resource/dba_allocator.c
+@@ -1,9 +1,9 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "resource_device.h"
+ #include "dba_allocator.h"
+ #include "dba_log.h"
++#include "dba_private.h"
+ 
+ #include <linux/mutex.h>
+ #include <linux/module.h>
+diff --git a/drivers/pnm/dba_resource/resource_device.h b/drivers/pnm/dba_resource/dba_private.h
+similarity index 50%
+rename from drivers/pnm/dba_resource/resource_device.h
+rename to drivers/pnm/dba_resource/dba_private.h
+index 316b4cd36..fb95de159 100644
+--- a/drivers/pnm/dba_resource/resource_device.h
++++ b/drivers/pnm/dba_resource/dba_private.h
+@@ -1,11 +1,19 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+-#define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
++#ifndef __DBA_PRIVATE_H__
++#define __DBA_PRIVATE_H__
+ 
+-// The default alignment for DAX device is 2M
+-#define DBA_MEMORY_ADDRESS_ALIGN (2ULL << 20)
++#include <linux/pgtable.h>
+ 
+-#define DBA_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
++/*
++ * The default alignment for DBA device in DAX is PMD_SIZE as hmem,
++ * commonly it's 2MB
++ */
++#define DBA_MEMORY_ADDRESS_ALIGN PMD_SIZE
+ 
++#define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
++#define DBA_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
+ #define DBA_RW_MODE 0666
++
++#endif /* __DBA_PRIVATE_H__ */
+diff --git a/drivers/pnm/dba_resource/resource_device.c b/drivers/pnm/dba_resource/resource_device.c
+index 7c667f7ca..0ee74941f 100644
+--- a/drivers/pnm/dba_resource/resource_device.c
++++ b/drivers/pnm/dba_resource/resource_device.c
+@@ -1,11 +1,11 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "resource_device.h"
+-#include "dba_log.h"
+ #include "dba_allocator.h"
+-#include "dba_thread_sched.h"
++#include "dba_log.h"
++#include "dba_private.h"
+ #include "dba_sysfs.h"
++#include "dba_thread_sched.h"
+ 
+ #include <linux/init.h>
+ #include <linux/module.h>
+-- 
+2.34.1
+

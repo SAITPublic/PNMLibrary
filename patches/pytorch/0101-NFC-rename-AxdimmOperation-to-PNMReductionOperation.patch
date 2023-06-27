@@ -1,0 +1,52 @@
+From a90a5f3bf1cd665eeaf33c9b2f74b08341db29e3 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 10 Feb 2023 18:24:17 +0900
+Subject: [PATCH 101/128] NFC: rename AxdimmOperation to PNMReductionOperation
+
+Reflect corresponding change in axdimm_driver.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp | 5 ++---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc   | 2 +-
+ 2 files changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index e9906e08..c3b1e0c8 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -34,7 +34,7 @@ at::Tensor embedding_bag_forward_simple_impl(
+     uint32_t minibatch_size) {
+   const AxdimmTensor& ten = convert<AxdimmTensor>(weights);
+   const auto& tables_rows_num = ten.get_tables_rows_num();
+-  AxdimmOperation* sls_op = axdimm_create_sls_op(
++  PNMReductionOperation* sls_op = axdimm_create_sls_op(
+       minibatch_size,
+       ten.get_sparse_feature_size(),
+       ten.get_num_tables(),
+@@ -136,8 +136,7 @@ at::Tensor embedding_bag_forward_only_axdimm(
+   const auto psum_buf_size_bytes = base_ten.get_num_tables() * minibatch_size *
+       base_ten.get_sparse_feature_size() * weights.dtype().itemsize();
+   uint8_t* psum_buf = new uint8_t[psum_buf_size_bytes];
+-  auto output_view =
+-      ::pnm::make_view(psum_buf, psum_buf + psum_buf_size_bytes);
++  auto output_view = ::pnm::make_view(psum_buf, psum_buf + psum_buf_size_bytes);
+ 
+   std::vector<uint32_t> axdimm_lengths;
+   transform_offsets(offsets, axdimm_lengths);
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index e79cef36..13659263 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -387,7 +387,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked lengths buffer
+   AxdimmBaseDevice* device_ =
+       nullptr; // AXDIMM device. TODO: move into AXDIMMContext
+-  AxdimmOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
++  PNMReductionOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
+   AxdimmTablesLayout* tables_layout_ = nullptr;
+ 
+   bool private_tables_ = false;
+-- 
+2.34.1
+

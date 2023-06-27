@@ -1,0 +1,135 @@
+From 615b4c8d8fb0cb15a434fd8228d7e8ab9766e673 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 2 Nov 2021 16:44:50 +0900
+Subject: [PATCH 016/128] [caffe2, aten] Add missing dependency for AXDIMM from
+ aten generated files
+
+The AXDIMM operator implementation use aten generated files created by
+'core_generated_cpp' target. Add explicit dependency for 'torch_axdimm',
+otherwise build success/failure depends on racy 'core_generated_cpp' files
+creation for other targets.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ aten/CMakeLists.txt          | 6 ++++++
+ aten/src/ATen/CMakeLists.txt | 9 ++++++++-
+ caffe2/CMakeLists.txt        | 1 +
+ cmake/Codegen.cmake          | 2 ++
+ 4 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/aten/CMakeLists.txt b/aten/CMakeLists.txt
+index 6b81d390..d037312f 100644
+--- a/aten/CMakeLists.txt
++++ b/aten/CMakeLists.txt
+@@ -17,6 +17,8 @@ cmake_policy(SET CMP0012 NEW)
+ 
+ #############################################
+ 
++set(ATen_AXDIMM_INCLUDE)
++set(ATen_AXDIMM_SRCS)
+ set(ATen_CPU_SRCS)
+ set(ATen_CPU_TEST_SRCS)
+ set(ATen_CPU_INCLUDE)
+@@ -35,6 +37,7 @@ set(ATen_HIP_INCLUDE)
+ set(ATen_MPS_SRCS)
+ set(ATen_MPS_TEST_SRCS)
+ set(ATen_VULKAN_TEST_SRCS)
++set(ATen_AXDIMM_DEPENDENCY_LIBS)
+ set(ATen_CPU_DEPENDENCY_LIBS)
+ set(ATen_CUDA_DEPENDENCY_LIBS)
+ set(ATen_HIP_DEPENDENCY_LIBS)
+@@ -99,6 +102,7 @@ list(APPEND ATen_CPU_INCLUDE
+ add_subdirectory(src/ATen)
+ 
+ # Pass source, includes, and libs to parent
++set(ATen_AXDIMM_SRCS ${ATen_AXDIMM_SRCS} PARENT_SCOPE)
+ set(ATen_CPU_SRCS ${ATen_CPU_SRCS} PARENT_SCOPE)
+ set(ATen_CORE_SRCS ${ATen_CORE_SRCS} PARENT_SCOPE)
+ set(ATen_CUDA_CU_SRCS ${ATen_CUDA_CU_SRCS} PARENT_SCOPE)
+@@ -118,10 +122,12 @@ set(ATen_VULKAN_TEST_SRCS ${ATen_VULKAN_TEST_SRCS} PARENT_SCOPE)
+ set(ATen_MOBILE_BENCHMARK_SRCS ${ATen_MOBILE_BENCHMARK_SRCS} PARENT_SCOPE)
+ set(ATen_MOBILE_TEST_SRCS ${ATen_MOBILE_TEST_SRCS} PARENT_SCOPE)
+ set(ATen_VEC_TEST_SRCS ${ATen_VEC_TEST_SRCS} PARENT_SCOPE)
++set(ATen_AXDIMM_INCLUDE ${ATen_CPU_INCLUDE} PARENT_SCOPE)
+ set(ATen_CPU_INCLUDE ${ATen_CPU_INCLUDE} PARENT_SCOPE)
+ set(ATen_CUDA_INCLUDE ${ATen_CUDA_INCLUDE} PARENT_SCOPE)
+ set(ATen_HIP_INCLUDE ${ATen_HIP_INCLUDE} PARENT_SCOPE)
+ set(ATen_THIRD_PARTY_INCLUDE ${ATen_THIRD_PARTY_INCLUDE} PARENT_SCOPE)
++set(ATen_AXDIMM_DEPENDENCY_LIBS ${ATen_AXDIMM_DEPENDENCY_LIBS} PARENT_SCOPE)
+ set(ATen_CPU_DEPENDENCY_LIBS ${ATen_CPU_DEPENDENCY_LIBS} PARENT_SCOPE)
+ set(ATen_CUDA_DEPENDENCY_LIBS ${ATen_CUDA_DEPENDENCY_LIBS} PARENT_SCOPE)
+ set(ATen_HIP_DEPENDENCY_LIBS ${ATen_HIP_DEPENDENCY_LIBS} PARENT_SCOPE)
+diff --git a/aten/src/ATen/CMakeLists.txt b/aten/src/ATen/CMakeLists.txt
+index bc7bf74c..f6745ff8 100644
+--- a/aten/src/ATen/CMakeLists.txt
++++ b/aten/src/ATen/CMakeLists.txt
+@@ -205,6 +205,9 @@ endif()
+ if(USE_LIGHTWEIGHT_DISPATCH)
+   set(all_cpu_cpp ${all_cpu_cpp} ${generated_unboxing_sources})
+ endif()
++
++set(all_axdimm_cpp ${core_generated_cpp})
++
+ if(AT_MKL_ENABLED)
+   set(all_cpu_cpp ${all_cpu_cpp} ${mkl_cpp})
+ endif()
+@@ -533,7 +536,8 @@ if(USE_ROCM)
+ endif()
+ 
+ if(USE_AXDIMM)
+-  set(ATen_AXDIMM_SRCS "")
++  set(ATen_AXDIMM_SRCS ${all_axdimm_cpp})
++  list(APPEND ATen_AXDIMM_DEPENDENCY_LIBS ATEN_AXDIMM_FILES_GEN_LIB)
+ endif()
+ 
+ set(ATEN_INCLUDE_DIR "${CMAKE_INSTALL_PREFIX}/${AT_INSTALL_INCLUDE_DIR}")
+@@ -604,6 +608,7 @@ list(APPEND ATen_MOBILE_BENCHMARK_SRCS
+ 
+ # Pass source, includes, and libs to parent
+ set(ATen_CORE_SRCS ${ATen_CORE_SRCS} PARENT_SCOPE)
++set(ATen_AXDIMM_SRCS ${ATen_AXDIMM_SRCS} PARENT_SCOPE)
+ set(ATen_CPU_SRCS ${ATen_CPU_SRCS} PARENT_SCOPE)
+ set(ATen_CUDA_CU_SRCS ${ATen_CUDA_CU_SRCS} PARENT_SCOPE)
+ set(ATen_CUDA_CPP_SRCS ${ATen_CUDA_CPP_SRCS} PARENT_SCOPE)
+@@ -626,9 +631,11 @@ set(ATen_QUANTIZED_TEST_SRCS ${ATen_QUANTIZED_TEST_SRCS} PARENT_SCOPE)
+ set(ATen_MPS_TEST_SRCS ${ATen_MPS_TEST_SRCS} PARENT_SCOPE)
+ set(ATen_CPU_INCLUDE ${ATen_CPU_INCLUDE} PARENT_SCOPE)
+ set(ATen_THIRD_PARTY_INCLUDE ${ATen_THIRD_PARTY_INCLUDE} PARENT_SCOPE)
++set(ATen_AXDIMM_INCLUDE ${ATen_AXDIMM_INCLUDE} PARENT_SCOPE)
+ set(ATen_CUDA_INCLUDE ${ATen_CUDA_INCLUDE} PARENT_SCOPE)
+ set(ATen_HIP_INCLUDE ${ATen_HIP_INCLUDE} PARENT_SCOPE)
+ set(ATen_VULKAN_INCLUDE ${ATen_VULKAN_INCLUDE} PARENT_SCOPE)
++set(ATen_AXDIMM_DEPENDENCY_LIBS ${ATen_AXDIMM_DEPENDENCY_LIBS} PARENT_SCOPE)
+ set(ATen_CPU_DEPENDENCY_LIBS ${ATen_CPU_DEPENDENCY_LIBS} PARENT_SCOPE)
+ set(ATen_CUDA_DEPENDENCY_LIBS ${ATen_CUDA_DEPENDENCY_LIBS} PARENT_SCOPE)
+ set(ATen_HIP_DEPENDENCY_LIBS ${ATen_HIP_DEPENDENCY_LIBS} PARENT_SCOPE)
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 2e4c7e30..0cbf9e16 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1364,6 +1364,7 @@ target_include_directories(torch_cpu PRIVATE ${Caffe2_CPU_INCLUDE})
+ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE}")
+ 
+ if(USE_AXDIMM)
++  target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+   target_link_libraries(torch_axdimm PUBLIC "${CMAKE_AXDIMM_ROOT_PATH}/build/drivers/libAxdimm.so")
+   target_include_directories(torch_axdimm PRIVATE ${Caffe2_AXDIMM_INCLUDE})
+ endif()
+diff --git a/cmake/Codegen.cmake b/cmake/Codegen.cmake
+index f652de8c..c7d6d40a 100644
+--- a/cmake/Codegen.cmake
++++ b/cmake/Codegen.cmake
+@@ -236,8 +236,10 @@ if(INTERN_BUILD_ATEN_OPS)
+   add_custom_target(ATEN_CUDA_FILES_GEN_TARGET DEPENDS
+       ${cuda_generated_headers} ${cuda_generated_sources})
+   add_library(ATEN_CPU_FILES_GEN_LIB INTERFACE)
++  add_library(ATEN_AXDIMM_FILES_GEN_LIB INTERFACE)
+   add_library(ATEN_CUDA_FILES_GEN_LIB INTERFACE)
+   add_dependencies(ATEN_CPU_FILES_GEN_LIB ATEN_CPU_FILES_GEN_TARGET)
++  add_dependencies(ATEN_AXDIMM_FILES_GEN_LIB ATEN_CPU_FILES_GEN_TARGET)
+   add_dependencies(ATEN_CUDA_FILES_GEN_LIB ATEN_CUDA_FILES_GEN_TARGET)
+ 
+   if(USE_PER_OPERATOR_HEADERS)
+-- 
+2.34.1
+

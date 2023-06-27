@@ -1,0 +1,35 @@
+From e4a1764b93a246f565e5f69a6e652c4f82e64e3c Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Thu, 10 Nov 2022 12:28:55 +0000
+Subject: [PATCH 062/161] [howto] Add note on driver installation.
+
+Related to AXDIMM-465.
+---
+ DAX_HOW_TO_BUILD.md | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/DAX_HOW_TO_BUILD.md b/DAX_HOW_TO_BUILD.md
+index 59a1370b5..e72d6cfe4 100644
+--- a/DAX_HOW_TO_BUILD.md
++++ b/DAX_HOW_TO_BUILD.md
+@@ -17,7 +17,7 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+   KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+   PMEM DAX: support the deprecated /sys/class/dax interface (DEV_DAX_PMEM_COMPAT) [N/m/?] n
+   A base physical address of AXDIMM range in gigabytes (AXDIMM_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
+-  A scale of AXDIMM memory range (AXDIMM_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 0 for FPGA)
++  A scale of AXDIMM memory range (AXDIMM_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 1 for simulation 32GB range, 0 for FPGA)
+ ```
+ 
+ ## Install
+@@ -31,3 +31,8 @@ $ ./install_debs.sh
+ ```bash
+ $ make M=drivers/dax/ -j32
+ ```
++
++Built drivers can then be installed with `install_dax_drivers` script:
++```bash
++$ ./install_dax_drivers.sh
++```
+-- 
+2.34.1
+

@@ -1,0 +1,1113 @@
+@startuml
+
+skinparam packageFontSize 50
+skinparam packageBorderColor DeepPink
+
+package Common{
+    package Properties{
+        enum PropertiesTypes #palegreen{
+            The definition of the supported properties
+            ---
+            +MEM_ALLOCATION_POLICY
+            +MEM_RANK_LOCATION
+        }
+
+        struct Base #palegreen{
+            Base class for a property
+        }
+
+        struct PropertiesTraits #palegreen{
+            static constexpr PropertiesTypes type = T::type;
+        }
+
+        class PropertiesList #palegreen{
+            Class to handle the list of unique properties
+            +template <typename T> PropertiesList(T prop)
+            +template <typename... Props> PropertiesList(Props... prop)
+            +template <typename T> void add_property(T prop)
+            +template <typename T> bool has_property() const
+            +template <typename T> T get_property() const
+        }
+    }
+}
+
+package IMDB{
+
+    package containers{
+    
+        class aligned_allocator #palegreen{
+            STL-friendly allocator for aligned memory allocation
+            +aligned_allocator(...)
+            +pointer address(reference r) const
+            +const_pointer address(const_reference &s) const
+            +pointer allocate(size_type n) const
+            +void deallocate(pointer p, size_type n) const
+            +size_t max_size() const
+            +void construct(U *p, Args &&...args)
+            +void destroy(U *p)
+        }
+
+        class compressed_vector #palegreen{
+            A container that implements logic of compressed storage where values 
+            are stored in reduced bit representation.
+            +constexpr compressed_vector(...)
+            +constexpr auto view() const &
+            +constexpr auto view() &
+        }
+
+        class bit_vector #palegreen{
+            A container that implements BitVector logic to store fixed amount of values
+            +constexpr bit_vector(...)
+            +constexpr auto view() const &
+            +constexpr auto view() &
+        }
+
+        struct bitview_iterator #palegreen{
+            Iterator for bit_***_view types
+            +constexpr bitview_iterator(const C &base, uint64_t index)
+            +constexpr bool operator!=(const bitview_iterator &rhs)
+            +constexpr bool operator==(const bitview_iterator &rhs) const
+            +constexpr auto &operator++()
+            +constexpr auto operator++(int)
+            +constexpr reference operator*()
+            +constexpr reference operator*()
+        }
+
+        class bit_compressed_view #palegreen{
+            View to provide access for compressed data in a region
+            +constexpr bit_compressed_view(...)
+            +constexpr auto size() const
+            +constexpr auto capacity() const
+            +constexpr auto bytes() const
+            +constexpr auto value_bits() const
+            +constexpr auto &container()
+            +constexpr const auto &container() const
+            +constexpr const auto *data()
+            +constexpr auto get_value(uint64_t i) const
+            +constexpr void set_value(uint64_t i, T value)
+            +constexpr auto begin() const
+            +constexpr auto end()
+            +constexpr auto operator[](uint64_t i) const
+        }
+
+        class bit_vector_view #palegreen{
+            View to provide access for data in region stored as a BitVector
+            +constexpr bit_vector_view(...)
+            +constexpr auto size() const
+            +constexpr auto capacity() const
+            +constexpr auto bytes() const
+            +constexpr auto &container()
+            +constexpr const auto &container() const
+            +constexpr const auto *data()
+            +constexpr bool contains(uint64_t value) const
+            +constexpr void insert(uint64_t value)
+            +constexpr void erase(uint64_t value)
+            +constexpr void clear()
+            +constexpr auto begin()
+            +constexpr auto end() const
+            +friend constexpr bool operator==(...)
+        }
+
+        enum OperationType #palegreen{
+            Enum class of operation input 
+            types in scan operation
+            --
+            +InRange
+            +InList
+        }
+
+        enum OutputType #palegreen{
+            Enum class of output 
+            types in scan operation
+            --
+            +BitVector
+            +IndexVector
+        }
+
+        struct RangeOperation #palegreen{
+            Extra parameters for InRage scan
+            --
+            +start
+            +end
+        }
+
+        class compressed_vector_view #palegreen {
+            using of bit_compressed_view
+        }
+
+        class predictor_input_vector #palegreen{
+            using of bit_vector
+        }
+
+        class predictor_input_vector_view #palegreen{
+            using of bit_vector_view<common_view>
+        }
+
+        class index_vector #palegreen{
+            vector of index_type`s
+        }
+
+        class index_vector_view #palegreen{
+            using of common_view<index_type>
+        }
+
+        class BitVectors #palegreen {
+            vector of bit_vector`s
+        }
+
+        class IndexVectors #palegreen{
+            vector of index_vector`s
+        }
+
+        class Ranges #palegreen{
+            vector of RangeOperation
+        }
+
+        class Predictors #palegreen{
+            vector of predictor_input_vector
+        }
+
+        class OutputContainer #palegreen{
+            In relation to output type is 
+            bit_vector or index_vector
+        }
+
+    }
+    
+    package libimdb{
+
+        struct CommonCSR #palegreen{
+            Common registers
+        }
+
+        struct StatusCSR #palegreen{
+            IMDB Common Status Register
+        }
+
+        struct ThreadCSR #palegreen{
+            thread Common Status Register
+        }
+    }
+
+    class Scan #palegreen{
+        This takes in multiple input and output buffers and encodes this
+        information to be forwarded to the device itself
+        +Scan(...)
+        +void set_predicate(...)
+        +void set_result(...)
+        +void set_result_size(uint64_t size)
+        +void set_execution_time(uint64_t time)
+        +auto result_size() const
+        +auto execution_time() const
+        +const auto &column() const
+        +uint64_t bit_compression() const
+        +auto elements_count() const
+        +const auto &predicate() const
+        +const auto &result() const
+        +auto output_type() const
+    }
+
+    package "Internal runners classes" {
+
+        abstract class IRunner{
+            Interface for internal runners
+            +explicit IRunner(compressed_vector table)
+            +BitVectors compute_in_range_to_bv(const Ranges &ranges) const
+            +IndexVectors compute_in_range_to_iv(const Ranges &ranges) const
+            +BitVectors compute_in_list_to_bv(const Predictors &predictors) const
+            +IndexVectors compute_in_list_to_iv(const Predictors &predictors) const
+        }
+
+        class CPURunner{
+            Execution of the scan operation on the CPU 
+        }
+
+        class AVX2Runner{
+            Execution of the scan operation via AVX2
+            +explicit AVX2Runner(pnm::imdb::compressed_vector cv)
+        }
+
+    }
+
+    class Operation{
+        This takes in multiple input and output buffers and encodes this
+        information to be forwarded to the device itself
+        +Operation(pnm::operations::Scan &op)
+        +auto result_size() const
+        +auto execution_time() const
+        +ThreadCSR encode_to_registers() const
+        +void write_registers(volatile ThreadCSR *ptr)
+        +void read_registers(const volatile ThreadCSR *ptr)
+    }
+}
+
+package AI{
+
+    class EmbeddedTables #palegreen{
+        Create, fill and destroy embedded tables for SLS operations
+        +template <typename... Args> static auto create(Args &&...args)
+        +template <typename T> EmbeddedTables(...)
+        +EmbeddedTables(...)
+        +void bind_tables_data(common_view<const uint8_t> host)
+        +const auto &buffers() const
+        +const auto &layout() const
+    }
+
+    class EmbeddedTablesHandler #palegreen{
+        using of std::unique_ptr<EmbeddedTables>
+    }
+
+    enum SLSType #palegreen{
+        SLS operation types. Specifies type of embeddings used in SLS calculation
+        --
+        +Float
+        +Uint32
+        +Uint32Tagged
+    }
+
+    class PNMSLSOperation #palegreen{
+        SLS operation data container
+        +PNMSLSOperation(..)
+        +void set_run_params(...)
+        +uint32_t sparse_feature_size() const
+        +auto tables_sizes() const
+        +uint32_t minibatch_size() const
+        +auto lengths() const
+        +auto indices() const
+        +auto psum()
+        +auto psum() const
+        +SLSType op_type() const
+        +const pnm::memory::EmbeddedTables *tables() const
+    }
+
+}
+
+package Core{
+
+    class Buffer #palegreen{
+        Buffer for transferring data to the device
+        +Buffer(...)
+        +Accessor<T> direct_access()
+        +void bind_user_region(pnm::common_view<T> user_range)
+        +uint64_t copy_to_device()
+        +uint64_t copy_from_device()
+    }
+
+    package Context_associated_classes {
+
+        class Context #palegreen{
+            ---
+            +Context(...)
+            +void init_allocator(std::unique_ptr<memory::Allocator> allocator)
+            +void init_runner_core(std::unique_ptr<InternalRunner> runner)
+        }
+
+        class ContextHandler #palegreen {
+            using of std::unique_ptr<Context>
+        }
+
+        struct IMDBContext{
+            ---
+            +IMDBContext()
+            +void define_supported_operation()
+        }
+
+        struct SlsContext{
+            ---
+            +SlsContext()
+            +void define_supported_operation()
+        }
+
+    }
+
+    class Dispatcher #palegreen{
+        +... void register_function(internal_function<Operator> func)
+        +... void invoke(Operator &op, pnm::Context *ctx) const
+    }
+
+    class ExecutionPool {
+        Class handles producer/consumer object and 
+        provides method to push task to action queue.
+        +static ExecutionPool &get()
+        +... auto run(Func &&func, Args &&...args)
+    }
+
+    enum Opcode {
+        -SPARSE_FT_SUM_F32
+        -RESERVED
+        -SPARSE_FT_SUM_U32
+        -SPARSE_FT_SUM_U32_TAGGED
+    }
+
+    class InstGenerator{
+        +struct DecodedInst
+        --
+        +static uint64_t encode_instruction(const DecodedInst &inst)
+        +static DecodedInst decode_instruction(uint64_t input_instr)
+        +static uint64_t encode_rank_address(...)
+        +static void decode_rank_address(...)
+    }
+
+    package Regions{
+
+        struct SequentialRegion #palegreen{
+            The sequential device's memory region
+            -uintptr_t start
+            -uint64_t size
+            -int32_t location
+        }
+
+        struct RankedRegion #palegreen{
+            Base object to describe data's 
+            location in the device memory
+            -uint64_t descriptor
+            -std::vector<SequentialRegion> regions
+        }
+
+        class DeviceRegion #palegreen{
+            using of std::variant<SequentialRegion, RankedRegion>
+        }
+
+        class VirtualSequentialRegion #palegreen{
+            using of common_view<uint8_t>
+        }
+
+        class VirtualRankedRegion #palegreen{
+            using of std::vector<pnm::common_view<uint8_t>>
+        }
+
+        class VirtualRegion #palegreen{
+            using of std::variant<VirtualSequentialRegion, VirtualRankedRegion>
+        }
+ 
+    }
+
+    package Device_associated_classes {
+
+        package sls {
+
+            package MemBlockHandler {
+
+                class SLSMemBlockHandler {
+                    +void write_block(...)
+                    +void read_block(...)
+                    +void *get_mem_block_ptr(...)
+                    +size_t get_min_block_size(...)
+                    +size_t get_base_memory_size() const
+                    +void init(const MemInfo &info, int device_fd)
+                }
+
+                package AXDIMM {
+
+                    class AxdimmMemBlockHandler{
+                        Memory block handler for AXDIMM
+
+                    }
+
+                    class AxdimmHardwareMemBlockHandler {
+                        Memory block handler for hardware AXDIMM
+                    }
+
+                    class AxdimmSimulatorMemBlockHandler {
+                        Memory block handler for simulator AXDIMM
+                        --
+                        +AxdimmSimulatorMemBlockHandler()
+                        +void exec_trace(uint8_t rank)
+                        +void clear_buffers(uint8_t rank)
+                        +void clear_psum_buf(...)
+                        +void clear_tags_buf(...)
+                    }
+
+                }
+
+                package CXL {
+
+                    class CXLMemBlockHandler{
+                        Memory block handler for CXL
+                    }
+
+                    class CXLHardwareMemBlockHandler{
+                        Memory block handler for hardware CXL
+                    }
+
+                    class CXLSimulatorMemBlockHandler {
+                        Memory block handler for simulator CXL
+                    }
+
+                }
+            }
+
+            class SlsDevice #palegreen{
+                Context-like object that provides a frontend 
+                for getting low-level device information
+                +SlsDevice(...) noexcept
+                +void open(PNMDevice::Type dev_type)
+                +bool is_open() const noexcept
+                +void close()
+                +static SlsDevice make(PNMDevice::Type dev_type)
+                +size_t base_memory_size() const noexcept
+                +uint64_t compute_unit_info(uint8_t rank, SlsComputeUnitInfo key) const
+                +void reset()
+                +uint64_t acquisition_timeout() const
+                +void set_acquisition_timeout(uint64_t value)
+                +uint64_t leaked_count() const
+                +bool resource_cleanup() const
+                +void set_resource_cleanup(bool value)
+                +BaseDevice *internal() noexcept
+                +const BaseDevice *internal() const noexcept
+            }
+
+            enum SlsComputeUnitInfo #palegreen{
+                Enumeration of sls sysfs rank info
+                --
+                +State = 0
+                +AcquisitionCount
+                +FreeSize
+                +RegionBaseSize
+                +RegionBaseOffset
+                +RegionInstSize
+                +RegionInstOffset
+                +RegionCfgrSize
+                +RegionCfgrOffset
+                +RegionTagsSize
+                +RegionTagsOffset
+                +RegionPsumSize
+                +RegionPsumOffset
+                +Max
+            }
+
+            struct memAddr{
+                -uint8_t *addr[AXDIMM_BLOCK_MAX]
+                -size_t size[AXDIMM_BLOCK_MAX]
+            }
+
+            class MemMap{
+                +void init(memAddr (&rankAddrInfos)[NUM_OF_RANK])
+                +size_t get_min_block_size(_axd_mem_blocks_e type) const
+                +size_t get_all_ranks_block_size(_axd_mem_blocks_e type) const
+                +const memAddr &operator[](uint8_t rank) const
+                +memAddr &operator[](uint8_t rank)
+                +void print()
+            }
+
+            class NBufferedMemory {
+                Class for n-buffered memory support
+                --
+                -enum Type : uint8_t { READ, WRITE, MAX }
+                --
+                +NBufferedMemory(...)
+                +uint8_t *get_buffer(uint8_t rank, Type type) const
+                +uint8_t *get_buffer_by_index(uint8_t rank, uint8_t index) const
+                +void shift_buffers(uint8_t rank)
+                +uint8_t get_index(uint8_t rank, Type type) const
+            }
+
+            struct RankMemory{
+                +static uint64_t get_max_object_size_in_bytes(...)
+                +static uint64_t get_objects_size_in_bytes(...)
+            }
+
+            struct RegionInfo {
+                -uint64_t size;
+                -uint64_t offset;
+            }
+
+            class MemInfo {
+                using of std::array<std::array<RegionInfo, AXDIMM_BLOCK_MAX>, NUM_OF_RANK>
+            }
+
+            class Control {
+                Used to interact with the device - query low-level 
+                statistics, set/unset configuration flags, reset
+                +Control()
+                +void get_compute_unit_info(...) const
+                +void get_region_info(...) const
+                +void sysfs_reset() const
+                +void get_acquisition_timeout(uint64_t &value) const
+                +void set_acquisition_timeout(uint64_t value) const
+                +void get_leaked(uint64_t &value) const
+                +void get_resource_cleanup(uint64_t &value) const
+                +void set_resource_cleanup(uint64_t value) const
+                +void get_mem_info(MemInfo &meminfo) const;
+            }
+
+            class BaseDevice{
+                +BaseDevice(...)
+                +static std::unique_ptr<BaseDevice> make_device(PNMDevice::Type dev_type)
+                +Type get_device_type() const final
+                +void enable_sls(uint8_t rank)
+                +void disable_sls(uint8_t rank)
+                +void exec_sls(uint8_t rank)
+                +void wait_for_completion_instr(uint8_t rank) const
+                +void write_cfgr_block(...)
+                +void read_cfgr_block(...)
+                +void read_and_reset_psum(...)
+                +void read_and_reset_tags(...)
+                +size_t get_min_block_size(...) const
+                +size_t get_base_memory_size() const
+                +int get_devmem_fd() const final
+                +int get_resource_fd() const final
+                +auto get_acquisition_timeout() const
+                +void set_acquisition_timeout(uint64_t value)
+                +void set_resource_cleanup(uint64_t value) const
+                +auto get_resource_cleanup() const
+                +auto get_leaked()
+                +auto get_compute_unit_info(uint8_t rank, SlsComputeUnitInfo key) const
+                +void read_poll(...)
+                +void get_num_processed_inst(uint8_t rank, uint8_t *buf_out)
+                +bool acquire_cunit_for_write_from_range(...)
+                +bool acquire_cunit_for_read(uint8_t rank) const
+                +void release_cunit_for_write(uint8_t rank) const
+                +void release_cunit_for_read(uint8_t rank) const
+            }
+
+            class RankAddressGenerator{
+                This class simplifies iteration over addresses within the 
+                same AXDIMM rank.
+                +RankAddressGenerator(uint8_t *start)
+                +uint8_t *operator*()
+                +const uint8_t *operator*() const
+                +uintptr_t get_chunk_offset() const
+                +bool is_at_start_of_chunk() const
+                +static uintptr_t interleaved_phys_offset(...)
+                +RankAddressGenerator &operator+=(uintptr_t offset_in_rank)
+            }
+
+            class RankStreamBase{
+                +explicit RankStreamBase(uint8_t *start)
+                +RankStreamBase(uint8_t *start, size_t bytes)
+                +RankStreamBase &ignore(size_t count)
+                +bool eof() const
+                +explicit operator bool() const
+                +void flush_last_chunk()
+                +void flush_current_chunk()
+            }
+
+            class InputRankStream{
+                +InputRankStream(const uint8_t *begin, size_t bytes)
+                +template <typename T> InputRankStream &read(...)
+                +template <typename T> InputRankStream &operator>>(T &value)
+            }
+
+            class OutputRankStream{
+                +template <typename T> OutputRankStream &write(const T *src, size_t count)
+                +template <typename T> OutputRankStream &operator<<(const T &value)
+            }
+
+        }
+
+        package imdb{
+
+            struct RegisterPointers{
+                Collection of pointers to all IMDB registers.
+                --
+                -volatile CommonCSR *common
+                -volatile StatusCSR *status
+                -std::array<volatile ThreadCSR *, MAX_THREADS> thread
+            }
+
+            class "Control" as Control2
+            class Control2 {
+                +Control()
+                +size_t memory_size() const
+                +size_t free_size() const
+                +size_t alignment() const
+                +bool thread_state(uint8_t thread) const
+                +void reset()
+            }
+
+            class "BaseDevice" as BaseDevice2
+            class BaseDevice2{
+                +static std::unique_ptr<BaseDevice> make_device()
+                +void reset() final
+                +volatile ThreadCSR *get_csr(uint8_t thread_id)
+                +const volatile ThreadCSR *get_csr(uint8_t thread_id) const
+                +void dump_thread_csr(uint8_t thread_id) const
+                +RegisterPointers register_pointers() const
+                +Type get_device_type() const final
+                +int get_devmem_fd() const final
+                +int get_resource_fd() const final
+                +uint8_t lock_thread()
+                +void release_thread(uint8_t thread)
+                +auto alignment() const
+                +auto memory_size() const
+                +auto free_size() const
+                +bool is_thread_busy(uint8_t thread) const
+            }
+
+            class HardwareDevice{
+                +HardwareDevice()
+            }
+
+            class SimulatorCore{
+                The core of the IMDB device simulator
+                +SimulatorCore(const RegisterPointers &regs, uint8_t *memory)
+                +void enable_thread(size_t thread_id)
+                +void disable_thread(size_t thread_id)
+                +bool is_thread_enabled(size_t thread_id) const
+            }
+
+            class SimulatorDevice {
+                +SimulatorDevice()
+            }
+
+        }
+
+        struct PNMDevice #palegreen{
+            Public API for device
+            --
+            -enum class Type { SLS_AXDIMM, SLS_CXL, IMDB_CXL }
+            --
+            -enum class ResetOptions : size_t {...} 
+            --
+            +PNMDevice()
+            +static std::unique_ptr<PNMDevice> make_device(Type type)
+            +void reset(ResetOptions options = ResetOptions::SoftwareOnly)
+            +virtual int get_devmem_fd() const
+            +virtual int get_resource_fd() const
+            +virtual Type get_device_type() const
+        }
+
+        class DevicePointer #palegreen{
+            using of std::unique_ptr<PNMDevice>
+        }
+
+    }
+
+    package Operations{
+
+        struct InternalOperator{
+            Internal operator
+        }
+
+        struct ReductionOperation{
+            An abstract reduction operation to run on PNM hardware. 
+            The operation can be split to smaller parts (execs) due 
+            to hardware restrictions (e.g. INST/PSUM buffer sizes).
+            +virtual uint32_t get_num_exec_iterations(uint8_t pack) const
+            +virtual const ... generate_instructions(...)
+            +virtual pnm::common_view<uint8_t> get_output_buffer(..)
+            +virtual uint8_t get_num_outputs() const
+        }
+
+        class Execution {
+            -struct TableData{ table_id_, table_batches_chunk_}
+            --
+            +void add_batch(uint32_t t_id, uint32_t b_lookups)
+            +auto get_num_lookups() const noexcept
+            +auto get_num_batches() const noexcept
+            +auto get_psum_read_size() const noexcept
+            +const auto &get_tables_data() const noexcept
+        }
+
+        class ExecutionGenerator {
+            +ExecutionGenerator(...)
+            +void init(...)
+            +const auto &get_pack_execs(uint8_t pack) const
+            +void generate(...)
+        }
+
+        class TraceGeneratorCore{
+            +explicit TraceGeneratorCore()
+            +void init(..)
+            +const std::vector<uint64_t> &generate_instructions(...)
+            +const std::vector<uint64_t> &get_traces() const
+        }
+
+        struct SLSOperation{
+            +SLSOperation(PNMSLSOperation &sls_op, const AxdimmBaseDevice &device)
+            +uint32_t get_num_exec_iterations(uint8_t pack) const override
+            +pnm::common_view<uint8_t> get_output_buffer(...) const override
+            +uint8_t get_num_outputs() const override
+            +const std::vector<uint64_t> & generate_instructions(...)
+        }
+
+    }
+
+    package Memory_associateed_classes {
+
+        class AccessorCore #palegreen{
+            Base class that define device-specific access logic
+            +template <typename T> const T &access(uint64_t index) const
+            +template <typename T> void store(T value, uint64_t index)
+            +auto virtual_range() const
+            +auto phys_range() const
+            +auto bytes() const
+        }
+
+        class Accessor #palegreen{
+            This is a facade class that provides 
+            user-friendly access to the "device" memory
+            --
+            -class Iterator
+            -class Reference
+            --
+            +... static Accessor create(Args &&...args)
+            +Reference at(uint64_t index)
+            +const T &at(uint64_t index) const
+            +Reference operator[](uint64_t index)
+            +const T &operator[](uint64_t index) const
+            +auto begin()
+            +auto end()
+            +auto size() const
+            +auto virtual_range() const
+            +auto phys_range() const
+            +void store(const T &value, uint64_t index)
+        }
+
+        class Allocator #palegreen{
+            Base class for PNM memory allocator
+            --
+            -enum class Option
+            --
+            +DeviceRegion allocate(uint64_t size, ... props = {})
+            +void deallocate(const DeviceRegion &region)
+        }
+
+        struct CURegion #palegreen{
+            +explicit CURegion(uint32_t compute_unit)
+            +auto rank() const
+        }
+
+        struct AllocPolicy #palegreen{
+            +explicit AllocPolicy(uint32_t policy)
+            +auto policy() const
+        }
+
+        class TransferManager #palegreen{
+            --
+            +... uint64_t copy_to_device(common_view<T> host_region, Accessor<T> accessor)
+            +... uint64_t copy_from_device(Accessor<T> accessor, common_view<T> host_region)
+            --
+            -struct DeviceRegionInfo {VirtualRegion virt; DeviceRegion phys; }
+        }
+
+        class RankedAllocator {
+            The class implements ranked memory allocation logic.
+            --
+            +explicit RankedAllocator(const PNMDevice *dev)
+        }
+
+        class SequentialAccessorCore {
+            The implementation of accessor logic for 
+            device with sequential memory layout.
+            --
+            +SequentialAccessorCore(...)
+        }
+
+        class SequentialAllocator {
+            The class implements sequential memory allocation logic.
+            --
+            explicit SequentialAllocator(const PNMDevice *dev)
+        }
+
+        package AXDIMM{
+
+            class AXDIMMTransferManager{
+                Transfer Manager for AXDIMM
+            }
+
+        }
+
+        package IMDB{
+
+            class IMDBAccessorCore {
+                Accessor core for IMDB
+                +IMDBAccessorCore(...)
+            }
+
+            class IMDBTransferManager {
+                Transfer manager for IMDB
+            }
+
+        }
+
+        package SLS {
+
+            class SLSAccessorCore {
+                +SLSAccessorCore(...)
+            }
+
+        }
+
+    }
+
+    package Runners{
+
+        class Runner #palegreen{
+            API Runner
+            +Runner()
+            +explicit Runner(const pnm::ContextHandler &context)
+            +template <typename T> void run(T &op) const
+        }
+
+        class InternalRunner{
+            +void run(InternalOperator &op)
+        }
+
+        class "Runner" as RunnerImdb
+        class RunnerImdb{
+            +explicit Runner(PNMDevice *device)
+        }
+
+        class ReductionRunner{
+            +explicit ReductionRunner(PNMDevice *device)
+        }
+
+    }
+
+}
+
+
+
+'Common
+
+Base <.. PropertiesTypes
+
+PropertiesTraits <.. PropertiesTypes
+
+PropertiesList o-- PropertiesTypes
+PropertiesList <.. PropertiesTraits
+
+
+
+'IMDB
+
+compressed_vector <|-- bit_compressed_view
+compressed_vector <.. aligned_allocator
+
+bit_vector <|-- bit_vector_view
+bit_vector <.. aligned_allocator
+
+bit_compressed_view <.. bitview_iterator
+
+bit_vector_view <.. bitview_iterator
+
+compressed_vector_view <|-- bit_compressed_view
+
+predictor_input_vector <|-- bit_vector
+
+predictor_input_vector_view <|-- bit_vector_view
+
+BitVectors <|-- "*" bit_vector
+
+IndexVectors <|-- "*" index_vector
+
+Ranges <|-- "*" RangeOperation
+
+Predictors <|-- "*" predictor_input_vector
+
+OutputContainer <-- bit_vector
+OutputContainer <-- index_vector
+
+Scan <.. RangeOperation
+Scan o-- OutputType
+Scan *-- Buffer #orange
+
+IRunner *-- compressed_vector
+IRunner <.. BitVectors
+IRunner <.. IndexVectors
+IRunner <.. Ranges
+IRunner <.. Predictors
+
+CPURunner <|-- IRunner
+
+AVX2Runner <|-- IRunner
+AVX2Runner <.. compressed_vector
+AVX2Runner <.. index_vector_view
+
+
+Operation o-- Scan
+Operation <.. ThreadCSR
+Operation <|-- InternalOperator #orange
+
+
+
+'AI
+
+EmbeddedTables *-- Buffer #red
+EmbeddedTables <.. ContextHandler #red
+
+EmbeddedTablesHandler *-- EmbeddedTables
+
+PNMSLSOperation o-- SLSType
+PNMSLSOperation o-- EmbeddedTables
+
+
+
+'Core
+
+Buffer o-- Allocator #SaddleBrown
+Buffer o-- DeviceRegion #SaddleBrown
+Buffer <.. Accessor #SaddleBrown
+Buffer o-- PropertiesList #SaddleBrown
+Buffer *-- Context #SaddleBrown
+Buffer <.. ContextHandler #SaddleBrown
+
+Context o-- PNMDevice
+Context o-- DevicePointer
+Context *-- Allocator
+Context *-- TransferManager
+Context *-- InternalRunner
+Context *-- Dispatcher
+
+ContextHandler *-- Context
+
+IMDBContext <|-- Context
+IMDBContext <.. Scan #DeepPink
+IMDBContext <.. Operation #DeepPink
+
+SlsContext <|-- Context
+SlsContext <.. PNMSLSOperation #Aqua
+SlsContext <.. SLSOperation #Aqua
+
+Dispatcher <.. Context
+
+DeviceRegion <.. SequentialRegion
+DeviceRegion <.. RankedRegion
+
+VirtualRegion <.. VirtualSequentialRegion
+VirtualRegion <.. VirtualRankedRegion
+
+SLSMemBlockHandler <.. MemInfo
+SLSMemBlockHandler <.. OutputRankStream
+
+AxdimmMemBlockHandler <|-- SLSMemBlockHandler
+
+AxdimmHardwareMemBlockHandler <|-- AxdimmMemBlockHandler
+AxdimmHardwareMemBlockHandler <.. InputRankStream #RoyalBlue
+
+AxdimmSimulatorMemBlockHandler <|-- AxdimmMemBlockHandler
+AxdimmSimulatorMemBlockHandler <.. InstGenerator
+AxdimmSimulatorMemBlockHandler <.. NBufferedMemory
+AxdimmSimulatorMemBlockHandler <.. InputRankStream #RoyalBlue
+AxdimmSimulatorMemBlockHandler <.. OutputRankStream
+AxdimmSimulatorMemBlockHandler <.. RankAddressGenerator
+
+CXLMemBlockHandler <|-- SLSMemBlockHandler
+
+CXLHardwareMemBlockHandler <|-- CXLMemBlockHandler
+
+CXLSimulatorMemBlockHandler <|-- CXLMemBlockHandler
+
+SlsDevice *-- BaseDevice
+SlsDevice <.. SlsComputeUnitInfo
+SlsDevice <.. PNMDevice
+
+MemMap o-- "*" memAddr
+
+NBufferedMemory o-- MemMap
+
+MemInfo *-- "*" RegionInfo
+
+Control <.. SlsComputeUnitInfo
+Control <.. RegionInfo
+Control <.. MemInfo
+
+BaseDevice <|-- PNMDevice #purple
+BaseDevice <.. SlsComputeUnitInfo
+BaseDevice <.. SLSMemBlockHandler
+BaseDevice <.. RankMemory #purple
+
+NBufferedMemory <.. RankAddressGenerator
+
+RankStreamBase o-- RankAddressGenerator
+
+InputRankStream <|-- RankStreamBase
+
+OutputRankStream <|-- RankStreamBase
+
+RegisterPointers o-- libimdb
+
+BaseDevice2 <|-- PNMDevice #Lime
+BaseDevice2 o-- RegisterPointers
+BaseDevice2 o-- Control2
+
+HardwareDevice <|-- BaseDevice2
+
+SimulatorCore o-- bit_compressed_view #Lime
+SimulatorCore o-- libimdb #Lime
+SimulatorCore o-- RegisterPointers
+SimulatorCore <.. OutputType #Lime
+SimulatorCore <.. OperationType #Lime
+
+SimulatorDevice *-- SimulatorCore
+SimulatorDevice <|-- BaseDevice2
+
+DevicePointer *-- PNMDevice
+
+ReductionOperation <|-- InternalOperator
+
+ExecutionGenerator o-- Execution
+ExecutionGenerator <.. RankMemory #DarkBlue
+
+TraceGeneratorCore <.. Execution
+TraceGeneratorCore <.. InstGenerator
+TraceGeneratorCore <.. RankMemory
+TraceGeneratorCore <.. Opcode
+
+SLSOperation <|-- ReductionOperation
+SLSOperation o-- RankMemory #RoyalBlue
+SLSOperation o-- ExecutionGenerator
+SLSOperation <.. TraceGeneratorCore
+SLSOperation o-- PNMSLSOperation #RoyalBlue
+SLSOperation <.. BaseDevice #RoyalBlue
+SLSOperation <.. Execution
+
+AccessorCore <.. Regions #Green
+
+Accessor *-- AccessorCore
+
+Allocator <.. PropertiesList #Aqua
+Allocator <.. Regions #Aqua
+
+CURegion <.. Properties #purple
+
+AllocPolicy <.. Properties #purple
+
+TransferManager <.. Accessor
+TransferManager <.. Regions #purple
+
+RankedAllocator <|-- Allocator
+RankedAllocator o-- PNMDevice #RoyalBlue
+RankedAllocator <.. PropertiesList #RoyalBlue
+
+SequentialAccessorCore <|-- AccessorCore
+SequentialAccessorCore o-- Regions #IndianRed
+SequentialAccessorCore <.. DevicePointer #IndianRed
+
+SequentialAllocator <|-- Allocator
+SequentialAllocator <.. Properties #HotPink
+SequentialAllocator o-- PNMDevice #HotPink
+
+AXDIMMTransferManager <|-- TransferManager
+AXDIMMTransferManager <.. VirtualRankedRegion #SlateGray
+AXDIMMTransferManager <.. InputRankStream #SlateGray
+AXDIMMTransferManager <.. OutputRankStream #SlateGray
+AXDIMMTransferManager <..  RankAddressGenerator #SlateGray
+
+IMDBAccessorCore <|-- SequentialAccessorCore
+IMDBAccessorCore <.. BaseDevice2 #Teal
+
+IMDBTransferManager <|-- TransferManager
+
+SLSAccessorCore <|-- AccessorCore
+SLSAccessorCore <.. DevicePointer #Green
+
+InternalRunner <.. InternalOperator #HotPink
+
+Runner *-- Context
+
+RunnerImdb <|-- InternalRunner
+RunnerImdb <.. PNMDevice #GoldenRod
+RunnerImdb <.. Operation #GoldenRod
+RunnerImdb <.. ThreadCSR #GoldenRod
+RunnerImdb o-- BaseDevice2 #GoldenRod
+
+ReductionRunner <|-- InternalRunner
+ReductionRunner <.. PNMDevice
+ReductionRunner <.. BaseDevice #OrangeRed
+ReductionRunner <.. ReductionOperation #OrangeRed
+ReductionRunner <.. ExecutionPool #OrangeRed
+
+@enduml

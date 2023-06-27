@@ -1,0 +1,102 @@
+From cd5a612d836a1220ed67f4a1b37664b4ab0242e7 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 17 May 2023 14:24:29 +0300
+Subject: [PATCH 109/161] [imdb] Add scale for dba_resource allocator
+
+Add CONFIG_IMDB_MEMORY_SCALE for scaling IMDB's allocator size
+Update PNM_HOW_TO_BUILD.md descriptions
+
+Resolves MCS23-747
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md                        |  9 +++++++--
+ drivers/pnm/Kconfig                        |  9 ++++++++-
+ drivers/pnm/dba_resource/Kconfig           | 13 +++++++++++++
+ drivers/pnm/dba_resource/resource_device.h |  4 +++-
+ 4 files changed, 31 insertions(+), 4 deletions(-)
+ create mode 100644 drivers/pnm/dba_resource/Kconfig
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 349d46e06..edd124496 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -15,8 +15,13 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+     PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
+   HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
+   KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+-  A base physical address of AXDIMM range in gigabytes (AXDIMM_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
+-  A scale of AXDIMM memory range (AXDIMM_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 1 for simulation 32GB range, 0 for FPGA)
++    A base physical address of AXDIMM range in gigabytes (AXDIMM_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
++    A scale of AXDIMM memory range (AXDIMM_MEMORY_SCALE) [1] (NEW) 1 -> choose your scale here (2 for simulation 16GB range, 1 for simulation 32GB range, 0 for FPGA)
++*
++* DBA Resource Manager
++*
++DBA Resource Manager (DBA_RESOURCE) [M/n/y/?] m
++  A scale of IMDB memory range (IMDB_MEMORY_SCALE) [0] (NEW) 0 -> choose IMDB scale here (0 for 32GB, 1 for 16GB, 2 for 8GB and etc)
+ ```
+ 
+ ## Install
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 74ea99414..e463aac58 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -8,7 +8,7 @@ config AXDIMM_RESOURCE
+ 	  for interaction with rank and memory allocator and other AXDIMM device
+ 	  resources.
+ 
+-config DBA_RESOURCE
++menuconfig DBA_RESOURCE
+ 	tristate "DBA Resource Manager"
+ 	help
+ 	  Support for management of CXL-DBA device resources
+@@ -16,3 +16,10 @@ config DBA_RESOURCE
+ 	  Create /dev/pnm/dba_resourceX device that provides IOCTL
+ 	  interface to handle DBA resources like memory, threads and
+ 	  cores.
++
++
++if DBA_RESOURCE
++
++source "drivers/pnm/dba_resource/Kconfig"
++
++endif
+diff --git a/drivers/pnm/dba_resource/Kconfig b/drivers/pnm/dba_resource/Kconfig
+new file mode 100644
+index 000000000..9a486f2ec
+--- /dev/null
++++ b/drivers/pnm/dba_resource/Kconfig
+@@ -0,0 +1,13 @@
++config IMDB_MEMORY_SCALE
++	int "A scale of IMDB memory range"
++	depends on DBA_RESOURCE
++	range 0 4
++	default 0
++	help
++	  Setup memory range size for IMDB
++
++	  This value is used to scale the total IMDB memory.
++	  The maximum possible memory is 32 gigabytes. And the scale
++	  parameter allows to scale this down by powers of 2. The calculation
++	  for the real memory size is total_size = 32 / (2^scale) gigabytes.
++	  By default scale = 0, and so the default total_size = 32 gigabytes
+diff --git a/drivers/pnm/dba_resource/resource_device.h b/drivers/pnm/dba_resource/resource_device.h
+index 3be244b4a..316b4cd36 100644
+--- a/drivers/pnm/dba_resource/resource_device.h
++++ b/drivers/pnm/dba_resource/resource_device.h
+@@ -1,9 +1,11 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
++#define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
++
+ // The default alignment for DAX device is 2M
+ #define DBA_MEMORY_ADDRESS_ALIGN (2ULL << 20)
+ 
+-#define DBA_MEMORY_TOTAL_SIZE (32ULL << 30)
++#define DBA_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
+ 
+ #define DBA_RW_MODE 0666
+-- 
+2.34.1
+

@@ -1,0 +1,67 @@
+@startuml
+participant ":DLRM" as DLRM
+
+participant ":Operator Executor" as OE
+participant ":SecurePostprocessor" as TH
+participant ":EncryptionEngine" as EE
+participant ":VerificationEngine" as VE
+participant ":OTPGenerator" as OTPGen
+participant ":AXDIMM\nControl library" as AXCL
+
+DLRM -> AXCL: axdimm_init(minibatch_size,\n\t sparse_feature_size,\n\t num_table,\n\t tables_rows_num, num_lookup)
+activate AXCL
+AXCL --> DLRM: returm
+
+DLRM -> OE: runSLS(lengths, indices, &psum)
+activate OE
+OE -> AXCL: run(lengths, indices, &psum_enc)
+
+AXCL -> AXCL: SLS_exec(lengths,\n\t indices,\n\t &psum_enc,\n\t &ctag)
+AXCL --> OE: return
+deactivate AXCL
+
+OE -> TH: "decrypt_psum(psum_enc, indices, length)\n\
+validate(begin, end, indices, length, ctag)\nContext switch"
+activate TH
+group SGX (Trusted environment)
+    TH -> TH: generate_offsets(indices, length)
+
+    TH -> EE: decrypt_psum(begin, end,\n\t offset_b, offset_e, output, op)
+
+    activate EE
+    loop for each offset
+        EE -> OTPGen: generate_otp(0x00, offset, version,\n\t AES_Encoder, &otp)
+        activate OTPGen
+        OTPGen --> EE: return
+        deactivate OTPGen
+
+        EE -> EE: otp_psum = op(otp_psum, otp)
+    end
+
+    EE -> EE: std::transform(begin, end, otp_psum,\n\t output, std::plus{})
+
+    EE --> TH: return
+    deactivate EE
+
+    TH -> VE: validate(begin, end, offsets_b, offsets_e, ctag, op)
+
+
+    activate VE
+
+    VE -> VE: H = linear_checksum(begin, end)
+    loop for each offset
+        VE -> OTPGen: generate_otp(0x10, offset,\n\t version,\n\t AES_Encoder, &otp)
+        activate OTPGen
+        OTPGen --> VE: return
+        deactivate OTPGen
+
+        VE -> VE: otp_tag = op(tag, otp)
+    end
+
+    VE --> TH: return H == otp_tag + ctag
+end
+deactivate VE
+TH --> OE: return psum\nContext switch
+deactivate TH
+OE --> DLRM--: return
+@enduml

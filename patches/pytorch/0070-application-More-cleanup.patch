@@ -1,0 +1,91 @@
+From 14e0fd7eaa8eaf8c75b18faff0664c44a3551c98 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 20 Sep 2022 15:55:43 +0300
+Subject: [PATCH 070/128] [application] More cleanup
+
+Related to: AXDIMM-319
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc  | 17 ++++++++++-------
+ .../operators/lengths_reducer_ops_sec_axdimm.h  |  2 +-
+ 2 files changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index a26ad76a..0554b5cd 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -133,7 +133,13 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     // following format:
+     //    N := block_size_
+     //    [T1, T2, ..., TN, I1, I2, ..., IN, L1, L2, ..., LN]
++    CAFFE_ENFORCE_EQ(InputSize() % 3, 0, "InputSize should be divisible by 3");
++
+     block_size_ = InputSize() / 3;
++
++    CAFFE_ENFORCE_NE(
++        block_size_, 0, "The number of tables should be greater than 0");
++
+     tables_vec_start_idx_ = 0;
+     indices_vec_start_idx_ = tables_vec_start_idx_ + block_size_;
+     lengths_vec_start_idx_ = indices_vec_start_idx_ + block_size_;
+@@ -145,7 +151,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         "tables_layout_descriptor", 0);
+     device_ = axdimm_create_base_device();
+ 
+-    private_tables_ = !tables_descriptor_;
++    private_tables_ = tables_descriptor_ != 0;
+ 
+     if (private_tables_) {
+       LoadTables();
+@@ -165,6 +171,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     if (private_tables_) {
+       axdimm_deallocate_tables(device_, tables_descriptor_);
++      LOG(INFO) << "Deallocated private tables with descriptor: "
++                << tables_descriptor_;
+     }
+ 
+     axdimm_destroy_base_device(device_);
+@@ -218,8 +226,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
+       (void)dataInput;
+ 
+-      static_assert(sizeof(uint32_t) == sizeof(int), "int must have 32 bits");
+-
+       const uint32_t* lengths =
+           reinterpret_cast<uint32_t*>(lengthsInput.template data<int>());
+ 
+@@ -333,9 +339,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+  private:
+   void LoadTables() {
+-    CAFFE_ENFORCE_NE(
+-        block_size_, 0, "The number of tables should be greater than 0");
+-
+     auto sparse_feature_size =
+         this->template GetSingleArgument<uint64_t>("sparse_feature_size", 0);
+     CAFFE_ENFORCE_NE(
+@@ -409,7 +412,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   AxdimmOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
+   AxdimmTablesLayout* tables_layout_ = nullptr;
+ 
+-  bool private_tables_;
++  bool private_tables_ = false;
+   uint64_t tables_descriptor_ = 0;
+ };
+ 
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index cc5f1203..dbd606cc 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -320,7 +320,7 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+   // following format:
+   //    N := block_size_
+   //    [T1, T2, ..., TN, I1, I2, ..., IN, L1, L2, ..., LN]
+-  CAFFE_ENFORCE_EQ(InputSize() % 3, 0, "InputSize should divided by 3");
++  CAFFE_ENFORCE_EQ(InputSize() % 3, 0, "InputSize should be divisible by 3");
+   block_size_ = InputSize() / 3;
+ 
+   sparse_feature_size_ = Input(0).size_from_dim(1);
+-- 
+2.34.1
+

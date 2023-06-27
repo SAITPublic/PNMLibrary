@@ -1,0 +1,56 @@
+From 0eca04ec219d471e6372984b7f3257cb219f0cf2 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 19:00:52 +0900
+Subject: [PATCH 012/128] [lengths_reducer_ops_axdimm] Dummy implementation
+ with axdimm::axdimm_run
+
+To be debugged and refined further.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 4701182a..cfebf47e 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -4,6 +4,7 @@
+ #include "caffe2/core/operator.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ #include "caffe2/utils/math.h"
++#include "api/axdimm.h"
+ 
+ namespace caffe2 {
+ 
+@@ -87,6 +88,19 @@ class AXDIMMSparseLengthsReductionOp : public Operator<AXDIMMContext> {
+     }
+ 
+     // TODO: implement actual run here.
++    // FIXME: avoid ugly casts here, axdimm_run should have correct types
++    // instead.
++    // These variables seem unused when running with AXDIMM.
++    (void)N;
++    (void)D;
++    (void)in_data;
++    axd_status_e status = axdimm::axdimm_run(
++        (uint32_t*)lengths,
++        (uint32_t*)indices,
++        out_data /* psum buffer */,
++        0 /* Dummy value, unused */);
++    return status == AXDIMM_SUCCESS;
++
+     // // delegate work to perfkernel that branches based on architecture
+     // EmbeddingLookup<IndexType, InputType, T, USE_POSITIONAL_WEIGHT>(
+     //     D,
+@@ -100,7 +114,6 @@ class AXDIMMSparseLengthsReductionOp : public Operator<AXDIMMContext> {
+     //     nullptr, // scale_bias field is only used in SparseLengths8BitsRowwiseOp
+     //     USE_MEAN,
+     //     out_data);
+-    return true;
+   }
+ 
+   enum {
+-- 
+2.34.1
+

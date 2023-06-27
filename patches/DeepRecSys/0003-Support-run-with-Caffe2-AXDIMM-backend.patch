@@ -1,0 +1,140 @@
+From 2d8e8b9b1e05dd87873e955dc3bb7f7880f644b0 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 15 Feb 2022 15:37:24 +0900
+Subject: [PATCH 03/33] Support run with Caffe2 AXDIMM backend
+
+Add necessary code to offload SLS to AXDIMM using pytorch backend:
+
+* add calls to workspace.AxdimmStarter/workspace.AxdimmCloser.
+* add blobs combining code in case of AXDIMM.
+* add call to SparseLengthsSumVec in case of AXDIMM.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ DeepRecSys.py           | 20 ++++++++++++++++++++
+ models/dlrm_s_caffe2.py | 28 ++++++++++++++++++++++++++++
+ 2 files changed, 48 insertions(+)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index 7a399f0..6264ef3 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -18,6 +18,8 @@ import numpy as np
+ 
+ import signal
+ 
++from caffe2.python import workspace
++
+ def DeepRecSys():
+   print("Running DeepRecSys")
+ 
+@@ -40,6 +42,14 @@ def DeepRecSys():
+ 
+     print("[DeepRecSys] total inference engine ", args.inference_engines)
+ 
++    # [AXDIMM caffe2 backend] Initialize AXDIMM for parent process
++    status = 0
++    if args.use_axdimm_caffe2_backend:
++        status = workspace.AxdimmStarter(args.table_weight_path)
++
++    if (status != 0):
++        print("(axdimm) axd_starter didn't operate properly.")
++
+     # Setup single request Queue and multiple response queues
+     requestQueue    = Queue(maxsize=1024)
+     accelRequestQueue = Queue(maxsize=32)
+@@ -179,6 +189,16 @@ def DeepRecSys():
+     for i in range(args.inference_engines):
+       DeepRecEngines[i].terminate()
+ 
++    status = 0
++    # [AXDIMM caffe2 backend] Destroy AXDIMM for parent process.
++    if args.use_axdimm_caffe2_backend:
++        status = workspace.AxdimmCloser()
++
++    if (status != 0):
++        print("(axdimm) axd_closer didn't operate properly.")
++
++    sys.stdout.flush()
++
+   else: # No queue, run DeepRecSys in standalone mode
+     inferenceEngine(args)
+ 
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index bb933ee..3afa357 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -107,6 +107,7 @@ class DLRM_Wrapper(object):
+             print("(Wrapper) Using CPU...")
+ 
+         self.accel_en = accel_en
++        self.use_axdimm_caffe2_backend = cli_args.use_axdimm_caffe2_backend
+ 
+         num_tables = len(cli_args.arch_embedding_size.split("-"))
+ 
+@@ -217,6 +218,9 @@ class DLRM_Net(object):
+             _d = core.DeviceOption(caffe2_pb2.CUDA, 0)
+             # with core.DeviceScope(_d):
+             workspace.FeedBlob(tag, val, device_option=_d)
++        elif self.use_axdimm_caffe2_backend:
++            _d = core.DeviceOption(caffe2_pb2.AXDIMM, 0)
++            workspace.FeedBlob(tag, val, device_option=_d)
+         else:
+             workspace.FeedBlob(tag, val)
+ 
+@@ -282,6 +286,12 @@ class DLRM_Net(object):
+         (tag_layer, tag_in, tag_out) = tag
+         emb_l = []
+         weights_l = []
++
++        len_s_combined = []
++        ind_s_combined = []
++        tbl_s_combined = []
++        sls_s_combined = tag_layer + ":::" + "sls::axdimm"
++
+         for i in range(0, ln.size):
+             n = ln[i]
+ 
+@@ -313,6 +323,14 @@ class DLRM_Net(object):
+                 # Dequeue lengths vector as well
+                 model.net.DequeueBlobs(len_qs[i], len_s)
+ 
++            # [AXDIMM Caffe2 Backend] In case of use_axdimm_caffe2_backend we combine inputs together and
++            # use one "vectorized" SparseLengthsSumVec operation for best performance.
++            if self.use_axdimm_caffe2_backend:
++                tbl_s_combined.append(tbl_s)
++                ind_s_combined.append(ind_s)
++                len_s_combined.append(len_s)
++                continue
++
+             # create operator
+             if self.accel_en:
+                 with core.DeviceScope(core.DeviceOption(caffe2_pb2.CUDA, 0)):
+@@ -323,7 +341,12 @@ class DLRM_Net(object):
+                 EE = model.net.SparseLengthsSum([tbl_s, ind_s, len_s], [sum_s],
+                     engine=self.args.engine,
+                     max_num_tasks=self.args.sls_workers)
++            emb_l.append(EE)
+ 
++        if self.use_axdimm_caffe2_backend:
++            with core.DeviceScope(core.DeviceOption(caffe2_pb2.AXDIMM, 0)):
++                EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
++                                                   [sls_s_combined])
+             emb_l.append(EE)
+ 
+         return emb_l, weights_l
+@@ -412,6 +435,11 @@ class DLRM_Net(object):
+ 
+         accel_en = self.args.use_accel
+ 
++        # ##########################
++        # setup AXDIMM device
++        # ##########################
++        self.use_axdimm_caffe2_backend = cli_args.use_axdimm_caffe2_backend
++
+         if cli_args.arch_interaction_op == "dot":
+             # approach 1: all
+             # num_int = num_fea * num_fea + m_den_out
+-- 
+2.34.1
+

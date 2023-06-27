@@ -1,0 +1,645 @@
+From f54ef408646f4dde5728ddd77cccd12e3ecff158 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Fri, 12 May 2023 15:13:08 +0300
+Subject: [PATCH 107/161] [dba][sysfs] Add sysfs for dba_resource
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Move DBA_MEMORY_ADDRESS_ALIGN macro to private header
+- Move DBA_MEMORY_TOTAL_SIZE to private header
+- Remove reset ioctl command
+- Change sysfs path from
+    /sys/class/pnm!dba_resource/pnm!dba_resource/ to
+    /sys/class/dba_resource/pnm!dba_resource/
+
+Sysfs paths
+
+/sys/class/dba_resource/pnm!dba_resource/
+├── 0
+│   └── state
+|-- 1, 2 (threads)
+├── mem_size
+├── free_size
+├── alignment_size
+└── reset
+
+Resolves: MCS23-941
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ MAINTAINERS                                 |   1 +
+ drivers/pnm/dba_resource/Makefile           |   1 +
+ drivers/pnm/dba_resource/dba_allocator.c    |  37 +++-
+ drivers/pnm/dba_resource/dba_allocator.h    |   6 +
+ drivers/pnm/dba_resource/dba_sysfs.c        | 225 ++++++++++++++++++++
+ drivers/pnm/dba_resource/dba_sysfs.h        |   7 +
+ drivers/pnm/dba_resource/dba_thread_sched.c |  29 ++-
+ drivers/pnm/dba_resource/dba_thread_sched.h |   2 +
+ drivers/pnm/dba_resource/resource_device.c  |  47 ++--
+ drivers/pnm/dba_resource/resource_device.h  |   9 +
+ include/uapi/linux/dba_resources.h          |  19 +-
+ 11 files changed, 333 insertions(+), 50 deletions(-)
+ create mode 100644 drivers/pnm/dba_resource/dba_sysfs.c
+ create mode 100644 drivers/pnm/dba_resource/dba_sysfs.h
+ create mode 100644 drivers/pnm/dba_resource/resource_device.h
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 5a46b969b..90ad5d1ce 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -5236,6 +5236,7 @@ M:	Youngsam Shin <youngsam.shin@samsung.com>
+ S:	Maintained
+ F:	PNM_HOW_TO_BUILD.md
+ F:	config-pnm
++F:	drivers/pnm/
+ F:	include/uapi/linux/dba_resources.h
+ F:	include/uapi/linux/libaxdimm.h
+ F:	install_axdimm_headers.sh
+diff --git a/drivers/pnm/dba_resource/Makefile b/drivers/pnm/dba_resource/Makefile
+index 6cc31f24e..6f96fa943 100644
+--- a/drivers/pnm/dba_resource/Makefile
++++ b/drivers/pnm/dba_resource/Makefile
+@@ -5,3 +5,4 @@ obj-$(CONFIG_DBA_RESOURCE) += dba_resource.o
+ dba_resource-y := resource_device.o
+ dba_resource-y += dba_allocator.o
+ dba_resource-y += dba_thread_sched.o
++dba_resource-y += dba_sysfs.o
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+index 5b23ce941..eb653ce29 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/dba_resource/dba_allocator.c
+@@ -1,9 +1,11 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
++#include "resource_device.h"
+ #include "dba_allocator.h"
+ #include "dba_log.h"
+ 
++#include <linux/mutex.h>
+ #include <linux/module.h>
+ #include <linux/kernel.h>
+ #include <linux/uaccess.h>
+@@ -25,9 +27,9 @@ static int init_memory_pool(struct MemoryAllocator *alloc)
+ 	}
+ 
+ 	if (gen_pool_add(alloc->pool, alloc->granularity,
+-			 DBA_MEMORY_TOTAL_SIZE - alloc->granularity, -1) < 0) {
++			 get_mem_size() - alloc->granularity, -1) < 0) {
+ 		DBA_ERR("Fail to init memory pool with size %llu.",
+-			DBA_MEMORY_TOTAL_SIZE);
++			get_mem_size());
+ 
+ 		gen_pool_destroy(alloc->pool);
+ 		return -EINVAL;
+@@ -110,6 +112,37 @@ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ 	return rc;
+ }
+ 
++uint64_t get_avail_size(void)
++{
++	uint64_t value;
++
++	mutex_lock(&allocator_lock);
++
++	value = gen_pool_avail(general_alloc.pool);
++
++	mutex_unlock(&allocator_lock);
++
++	return value;
++}
++
++uint64_t get_mem_size(void)
++{
++	return DBA_MEMORY_TOTAL_SIZE;
++}
++
++uint64_t get_granularity(void)
++{
++	uint64_t value;
++
++	mutex_lock(&allocator_lock);
++
++	value = general_alloc.granularity;
++
++	mutex_unlock(&allocator_lock);
++
++	return value;
++}
++
+ int initialize_memory_allocator(void)
+ {
+ 	int result = 0;
+diff --git a/drivers/pnm/dba_resource/dba_allocator.h b/drivers/pnm/dba_resource/dba_allocator.h
+index b2be488b2..25437ec3e 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.h
++++ b/drivers/pnm/dba_resource/dba_allocator.h
+@@ -18,4 +18,10 @@ int reset_memory_allocator(void);
+ 
+ int allocator_ioctl(unsigned int cmd, unsigned long __user arg);
+ 
++uint64_t get_avail_size(void);
++
++uint64_t get_mem_size(void);
++
++uint64_t get_granularity(void);
++
+ #endif
+diff --git a/drivers/pnm/dba_resource/dba_sysfs.c b/drivers/pnm/dba_resource/dba_sysfs.c
+new file mode 100644
+index 000000000..f6d8a4ba6
+--- /dev/null
++++ b/drivers/pnm/dba_resource/dba_sysfs.c
+@@ -0,0 +1,225 @@
++// SPDX-License-Identifier: GPL-2.0
++// Copyright(c) 2023 Samsung LTD. All rights reserved.
++
++#include "dba_sysfs.h"
++#include "dba_log.h"
++#include "dba_allocator.h"
++#include "dba_thread_sched.h"
++
++#include <linux/stringify.h>
++#include <linux/kobject.h>
++#include <linux/device.h>
++#include <linux/sysfs.h>
++#include <linux/dba_resources.h>
++
++#define THREAD_ATTR_COUNT 1
++#define WITH_NULL_TERM(var) ((var) + 1)
++#define DBA_RESET 1
++
++static ssize_t mem_size_show(struct device *device,
++			     struct device_attribute *attr, char *buf)
++{
++	uint64_t value = get_mem_size();
++
++	return sprintf(buf, "%llu\n", value);
++}
++static DEVICE_ATTR_RO(mem_size);
++
++static ssize_t free_size_show(struct device *device,
++			      struct device_attribute *attr, char *buf)
++{
++	uint64_t value = get_avail_size();
++
++	return sysfs_emit(buf, "%llu\n", value);
++}
++static DEVICE_ATTR_RO(free_size);
++
++static ssize_t alignment_show(struct device *device,
++			      struct device_attribute *attr, char *buf)
++{
++	uint64_t value = get_granularity();
++
++	return sysfs_emit(buf, "%llu\n", value);
++}
++static DEVICE_ATTR_RO(alignment);
++
++static ssize_t reset_store(struct device *device, struct device_attribute *attr,
++			   const char *buf, size_t count)
++{
++	int rc = 0;
++
++	if (sysfs_streq(buf, __stringify(DBA_RESET))) {
++		rc = reset_memory_allocator();
++		if (unlikely(rc)) {
++			DBA_ERR("DBA allocator reset failed\n");
++			return rc;
++		}
++
++		rc = reset_thread_sched();
++		if (unlikely(rc)) {
++			DBA_ERR("DBA threads scheduler reset failed\n");
++			return rc;
++		}
++	}
++
++	return count;
++}
++static DEVICE_ATTR_WO(reset);
++
++static struct attribute *dev_attrs[] = {
++	&dev_attr_mem_size.attr,
++	&dev_attr_free_size.attr,
++	&dev_attr_alignment.attr,
++	&dev_attr_reset.attr,
++	NULL,
++};
++
++static struct attribute_group dev_attr_group = {
++	.attrs = dev_attrs,
++};
++
++static const struct attribute_group *attr_groups[] = {
++	&dev_attr_group,
++	NULL,
++};
++
++struct thread_attribute {
++	struct attribute attr;
++	uint8_t thread;
++};
++
++struct thread_sysfs {
++	struct thread_attribute attrs[THREAD_ATTR_COUNT];
++	struct attribute *attributes[WITH_NULL_TERM(THREAD_ATTR_COUNT)];
++	struct attribute_group group;
++	const struct attribute_group *groups[WITH_NULL_TERM(THREAD_ATTR_COUNT)];
++	struct kobject thread_kobj;
++} thread_sysfs[DBA_THREAD_NUM];
++
++static const char *const thread_attr_name[] = {
++	"state",
++	NULL,
++};
++
++ssize_t thread_show(struct thread_attribute *attr, char *buf)
++{
++	bool state = false;
++
++	if (strcmp(attr->attr.name, "state") == 0) {
++		state = get_thread_state(attr->thread);
++		return sprintf(buf, "%d\n", state);
++	}
++
++	DBA_ERR("Invalid Thread attribute\n");
++
++	return 0;
++}
++
++static ssize_t thread_attr_show(struct kobject *kobj, struct attribute *attr,
++				char *buf)
++{
++	struct thread_attribute *thread_attr =
++		container_of(attr, struct thread_attribute, attr);
++
++	return thread_show(thread_attr, buf);
++}
++
++static const struct sysfs_ops thread_sysfs_ops = {
++	.show = thread_attr_show,
++};
++
++/* Operations on threads stats */
++static struct kobj_type thread_type = {
++	.sysfs_ops = &thread_sysfs_ops,
++};
++
++static int create_thread_kobject(struct thread_sysfs *tsysfs,
++				 struct kobject *parent, uint8_t thread)
++{
++	int rc = 0;
++	char name_buf[4];
++
++	kobject_init(&tsysfs->thread_kobj, &thread_type);
++	sprintf(name_buf, "%hhu", thread);
++
++	rc = kobject_add(&tsysfs->thread_kobj, parent, name_buf);
++
++	if (unlikely(rc))
++		kobject_put(&tsysfs->thread_kobj);
++
++	return rc;
++}
++
++static void fill_thread_sysfs(struct thread_sysfs *tsysfs, uint8_t thread)
++{
++	int attr_idx = 0;
++
++	for (attr_idx = 0; attr_idx < THREAD_ATTR_COUNT; ++attr_idx) {
++		tsysfs->attrs[attr_idx].attr.name = thread_attr_name[attr_idx];
++		tsysfs->attrs[attr_idx].attr.mode = 0444;
++		tsysfs->attrs[attr_idx].thread = thread;
++
++		tsysfs->attributes[attr_idx] = &tsysfs->attrs[attr_idx].attr;
++	}
++
++	tsysfs->attributes[THREAD_ATTR_COUNT] = NULL;
++}
++
++static int build_thread_sysfs(struct kobject *parent)
++{
++	struct thread_sysfs *tsysfs = NULL;
++	int rc = 0;
++	uint8_t thread = 0;
++
++	for (thread = 0; thread < DBA_THREAD_NUM; ++thread) {
++		tsysfs = &thread_sysfs[thread];
++		rc = create_thread_kobject(tsysfs, parent, thread);
++		if (unlikely(rc)) {
++			DBA_ERR("Can't create thread kobject\n");
++			return -EFAULT;
++		}
++
++		fill_thread_sysfs(tsysfs, thread);
++
++		tsysfs->group.attrs = tsysfs->attributes;
++		tsysfs->groups[0] = &tsysfs->group;
++		tsysfs->groups[1] = NULL;
++
++		rc = sysfs_create_groups(&tsysfs->thread_kobj, tsysfs->groups);
++		if (unlikely(rc)) {
++			DBA_ERR("Can't create thread group\n");
++			return -EFAULT;
++		}
++	}
++
++	return rc;
++}
++
++int dba_build_sysfs(struct device *dev)
++{
++	int rc = 0;
++
++	rc = sysfs_create_groups(&dev->kobj, attr_groups);
++
++	if (unlikely(rc))
++		return rc;
++
++	rc = build_thread_sysfs(&dev->kobj);
++
++	return rc;
++}
++
++void dba_destroy_sysfs(struct device *dev)
++{
++	struct kobject *kobj = &dev->kobj;
++	struct thread_sysfs *tsysfs = NULL;
++	uint8_t thread = 0;
++
++	for (thread = 0; thread < DBA_THREAD_NUM; ++thread) {
++		tsysfs = thread_sysfs + thread;
++		sysfs_remove_groups(kobj, thread_sysfs->groups);
++		kobject_del(&tsysfs->thread_kobj);
++	}
++
++	sysfs_remove_groups(kobj, attr_groups);
++}
+diff --git a/drivers/pnm/dba_resource/dba_sysfs.h b/drivers/pnm/dba_resource/dba_sysfs.h
+new file mode 100644
+index 000000000..67319651a
+--- /dev/null
++++ b/drivers/pnm/dba_resource/dba_sysfs.h
+@@ -0,0 +1,7 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include <linux/device.h>
++
++int dba_build_sysfs(struct device *dba_resource);
++void dba_destroy_sysfs(struct device *dev);
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.c b/drivers/pnm/dba_resource/dba_thread_sched.c
+index 6b390e59b..384448767 100644
+--- a/drivers/pnm/dba_resource/dba_thread_sched.c
++++ b/drivers/pnm/dba_resource/dba_thread_sched.c
+@@ -8,9 +8,6 @@
+ #include <linux/fs.h>
+ #include <linux/dba_resources.h>
+ 
+-#define BUSY 1
+-#define IDLE 0
+-
+ static struct dba_thread_sched dba_thread_sched = {
+ 	.threads = {},
+ 	.lock = __MUTEX_INITIALIZER(dba_thread_sched.lock),
+@@ -28,8 +25,9 @@ static bool dba_find_free_thread(uint8_t *out)
+ 	mutex_lock(&dba_thread_sched.lock);
+ 
+ 	for (; thread < DBA_THREAD_NUM; ++thread) {
+-		if (dba_thread_sched.threads[thread].state == IDLE) {
+-			dba_thread_sched.threads[thread].state = BUSY;
++		if (dba_thread_sched.threads[thread].state == DBA_THREAD_IDLE) {
++			dba_thread_sched.threads[thread].state =
++				DBA_THREAD_BUSY;
+ 			found_free_thread = true;
+ 			break;
+ 		}
+@@ -54,8 +52,8 @@ static int dba_release_thread(unsigned long __user arg)
+ 
+ 	mutex_lock(&dba_thread_sched.lock);
+ 
+-	if (dba_thread_sched.threads[thread].state == BUSY) {
+-		dba_thread_sched.threads[thread].state = IDLE;
++	if (dba_thread_sched.threads[thread].state == DBA_THREAD_BUSY) {
++		dba_thread_sched.threads[thread].state = DBA_THREAD_IDLE;
+ 	} else {
+ 		DBA_ERR("Thread is already IDLE");
+ 		rc = -EINVAL;
+@@ -90,6 +88,19 @@ static int dba_get_thread(void)
+ 	return thread;
+ }
+ 
++bool get_thread_state(uint8_t thread)
++{
++	bool state = false;
++
++	mutex_lock(&dba_thread_sched.lock);
++
++	state = dba_thread_sched.threads[thread].state == DBA_THREAD_BUSY;
++
++	mutex_unlock(&dba_thread_sched.lock);
++
++	return state;
++}
++
+ int reset_thread_sched(void)
+ {
+ 	int rc = 0;
+@@ -100,10 +111,10 @@ int reset_thread_sched(void)
+ 	mutex_lock(&dba_thread_sched.lock);
+ 
+ 	for (; thread < DBA_THREAD_NUM; ++thread) {
+-		if (dba_thread_sched.threads[thread].state == BUSY)
++		if (dba_thread_sched.threads[thread].state == DBA_THREAD_BUSY)
+ 			DBA_WRN("Busy thread hard reset %u", thread);
+ 
+-		dba_thread_sched.threads[thread].state = IDLE;
++		dba_thread_sched.threads[thread].state = DBA_THREAD_IDLE;
+ 	}
+ 
+ 	mutex_unlock(&dba_thread_sched.lock);
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.h b/drivers/pnm/dba_resource/dba_thread_sched.h
+index d1f2c35cd..13b7f03f5 100644
+--- a/drivers/pnm/dba_resource/dba_thread_sched.h
++++ b/drivers/pnm/dba_resource/dba_thread_sched.h
+@@ -24,4 +24,6 @@ int reset_thread_sched(void);
+ 
+ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg);
+ 
++bool get_thread_state(uint8_t thread);
++
+ #endif //__dba_thread_sched_H__
+diff --git a/drivers/pnm/dba_resource/resource_device.c b/drivers/pnm/dba_resource/resource_device.c
+index c23fcc4d4..b9ecddc1f 100644
+--- a/drivers/pnm/dba_resource/resource_device.c
++++ b/drivers/pnm/dba_resource/resource_device.c
+@@ -1,9 +1,11 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
++#include "resource_device.h"
+ #include "dba_log.h"
+ #include "dba_allocator.h"
+ #include "dba_thread_sched.h"
++#include "dba_sysfs.h"
+ 
+ #include <linux/init.h>
+ #include <linux/module.h>
+@@ -13,27 +15,8 @@
+ #include <linux/device.h>
+ #include <linux/dba_resources.h>
+ 
+-static int dba_reset(void)
+-{
+-	int rc = 0;
+-
+-	rc = reset_memory_allocator();
+-	if (rc) {
+-		DBA_ERR("DBA allocator reset failed");
+-		return rc;
+-	}
+-
+-	rc = reset_thread_sched();
+-
+-	if (rc) {
+-		DBA_ERR("DBA threads scheduler reset failed");
+-		return rc;
+-	}
+-
+-	return rc;
+-}
+-
+-long dba_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
++static long dba_ioctl(struct file *file, unsigned int cmd,
++		      unsigned long __user arg)
+ {
+ 	int result = 0;
+ 
+@@ -43,9 +26,6 @@ long dba_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
+ 	}
+ 
+ 	switch (cmd) {
+-	case DBA_IOCTL_RESET:
+-		result = dba_reset();
+-		break;
+ 	case DBA_IOCTL_ALLOCATE:
+ 	case DBA_IOCTL_DEALLOCATE:
+ 		result = allocator_ioctl(cmd, arg);
+@@ -70,6 +50,7 @@ static const struct file_operations dba_resource_operation = {
+ static int device_major_number = -1;
+ static struct cdev resource_device;
+ static struct class *device_class;
++static struct device *device;
+ 
+ static void destroy_resource_device(int device_created)
+ {
+@@ -107,8 +88,7 @@ static int create_resource_device(void)
+ 		goto fail;
+ 	}
+ 
+-	device_class =
+-		class_create(THIS_MODULE, DBA_RESOURCE_DEVICE_NAME "_sys");
++	device_class = class_create(THIS_MODULE, DBA_RESOURCE_CLASS_NAME);
+ 	if (device_class == NULL) {
+ 		DBA_ERR("Fail to create device class");
+ 		goto fail;
+@@ -116,8 +96,10 @@ static int create_resource_device(void)
+ 
+ 	device_class->devnode = devnode_func;
+ 
+-	if (device_create(device_class, NULL, device_major_number, NULL,
+-			  DBA_RESOURCE_DEVICE_NAME) == NULL) {
++	device = device_create(device_class, NULL, device_major_number, NULL,
++			       DBA_RESOURCE_DEVICE_NAME);
++
++	if (unlikely(!device)) {
+ 		DBA_ERR("Fail to create device in /dev/*");
+ 		goto fail;
+ 	}
+@@ -166,12 +148,21 @@ static int __init init_dba_resource_module(void)
+ 		return result;
+ 	}
+ 
++	result = dba_build_sysfs(device);
++
++	if (result) {
++		DBA_ERR("Fail to build sysfs.");
++		return result;
++	}
++
+ 	DBA_INF("Initialization is done");
+ 	return 0;
+ }
+ 
+ static void __exit exit_dba_resource_module(void)
+ {
++	dba_destroy_sysfs(device);
++
+ 	destroy_resource_device(1);
+ 
+ 	destroy_memory_allocator();
+diff --git a/drivers/pnm/dba_resource/resource_device.h b/drivers/pnm/dba_resource/resource_device.h
+new file mode 100644
+index 000000000..3be244b4a
+--- /dev/null
++++ b/drivers/pnm/dba_resource/resource_device.h
+@@ -0,0 +1,9 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++// The default alignment for DAX device is 2M
++#define DBA_MEMORY_ADDRESS_ALIGN (2ULL << 20)
++
++#define DBA_MEMORY_TOTAL_SIZE (32ULL << 30)
++
++#define DBA_RW_MODE 0666
+diff --git a/include/uapi/linux/dba_resources.h b/include/uapi/linux/dba_resources.h
+index 08a529a73..b5f2967a6 100644
+--- a/include/uapi/linux/dba_resources.h
++++ b/include/uapi/linux/dba_resources.h
+@@ -20,17 +20,17 @@
+ 
+ // [TODO: y-lavrinenko] Should be merged with libimdb.h when the last is on kernel
+ 
+-#define DBA_RESOURCE_DEVICE_NAME "pnm/dba_resource"
++#define DBA_RESOURCE_CLASS_NAME "dba_resource"
++#define DBA_RESOURCE_DEVICE_NAME "pnm/" DBA_RESOURCE_CLASS_NAME
+ #define DBA_RESOURCE_DEVICE_PATH "/dev/" DBA_RESOURCE_DEVICE_NAME
+ 
+-#define DBA_MEMORY_TOTAL_SIZE (4ULL * 1024 * 1024 * 1024)
+-#define DBA_RW_MODE 0666
+-
+-// The default alignment for DAX device is 2M
+-#define DBA_MEMORY_ADDRESS_ALIGN 0x200000
++#define DBA_SYSFS_PATH "/sys/class/"DBA_RESOURCE_CLASS_NAME"/pnm!"DBA_RESOURCE_CLASS_NAME
+ 
+ #define DBA_THREAD_NUM 3
+ 
++#define DBA_THREAD_BUSY 1
++#define DBA_THREAD_IDLE 0
++
+ struct dba_allocation {
+ 	uint64_t address;
+ 	uint64_t size;
+@@ -38,14 +38,11 @@ struct dba_allocation {
+ 
+ #define DBA_RESOURCE_IOC_MAGIC 'D'
+ 
+-#define DBA_IOCTL_RESET _IO(DBA_RESOURCE_IOC_MAGIC, 0)
+ #define DBA_IOCTL_ALLOCATE \
+ 	_IOWR(DBA_RESOURCE_IOC_MAGIC, 1, struct dba_allocation)
+ #define DBA_IOCTL_DEALLOCATE \
+ 	_IOW(DBA_RESOURCE_IOC_MAGIC, 2, struct dba_allocation)
+-#define DBA_IOCTL_GET_THREAD \
+-	_IO(DBA_RESOURCE_IOC_MAGIC, 3)
+-#define DBA_IOCTL_RELEASE_THREAD \
+-	_IOW(DBA_RESOURCE_IOC_MAGIC, 4, uint8_t)
++#define DBA_IOCTL_GET_THREAD _IO(DBA_RESOURCE_IOC_MAGIC, 3)
++#define DBA_IOCTL_RELEASE_THREAD _IOW(DBA_RESOURCE_IOC_MAGIC, 4, uint8_t)
+ 
+ #endif /* __DBA_RESOURCES_H__ */
+-- 
+2.34.1
+

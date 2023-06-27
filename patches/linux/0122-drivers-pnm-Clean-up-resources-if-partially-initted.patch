@@ -1,0 +1,154 @@
+From 5f2dcffe57b62f56533e025f8924bebca943f7d7 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Mon, 19 Jun 2023 14:06:15 +0000
+Subject: [PATCH 122/161] [drivers/pnm] Clean up resources if partially initted
+
+* Call cleanup functions on successfully initialized subsystems in
+  `dba_resource` and `sls_resource`
+* Also add a function to deinit sls rank scheduler and call it
+
+Related to: MCS23-905
+
+Signed-off-by: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+---
+ drivers/pnm/dba_resource/resource_device.c    | 17 +++++++++++++----
+ drivers/pnm/sls_resource/sls.c                | 17 ++++++++++++-----
+ drivers/pnm/sls_resource/sls_rank_scheduler.c |  6 ++++++
+ drivers/pnm/sls_resource/sls_rank_scheduler.h |  1 +
+ 4 files changed, 32 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/pnm/dba_resource/resource_device.c b/drivers/pnm/dba_resource/resource_device.c
+index df3946e48..ffabe6553 100644
+--- a/drivers/pnm/dba_resource/resource_device.c
++++ b/drivers/pnm/dba_resource/resource_device.c
+@@ -144,32 +144,41 @@ static int __init init_dba_resource_module(void)
+ 
+ 	if (unlikely(result < 0)) {
+ 		DBA_ERR("DBA Resource Manager initialization failed");
+-		return result;
++		goto resource_device_fail;
+ 	}
+ 
+ 	result = initialize_memory_allocator();
+ 
+ 	if (unlikely(result < 0)) {
+ 		DBA_ERR("Fail to initialize memory allocator.");
+-		return result;
++		goto allocator_fail;
+ 	}
+ 
+ 	result = init_thread_sched();
+ 
+ 	if (unlikely(result)) {
+ 		DBA_ERR("Fail to initialize memory threads scheduler.");
+-		return result;
++		goto thread_sched_fail;
+ 	}
+ 
+ 	result = dba_build_sysfs(device);
+ 
+ 	if (unlikely(result)) {
+ 		DBA_ERR("Fail to build sysfs.");
+-		return result;
++		goto build_sysfs_fail;
+ 	}
+ 
+ 	DBA_INF("Initialization is done");
+ 	return 0;
++
++build_sysfs_fail:
++	destroy_thread_sched();
++thread_sched_fail:
++	destroy_memory_allocator();
++allocator_fail:
++	destroy_resource_device(1);
++resource_device_fail:
++	return result;
+ }
+ 
+ static void __exit exit_dba_resource_module(void)
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 17d1f3930..0c23aaf85 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -201,7 +201,7 @@ int init_sls_device(void)
+ 	/* Initialize sls_resource device */
+ 	err = init_sls_resource_dev();
+ 	if (err)
+-		goto out;
++		goto resource_device_fail;
+ 
+ 	/* Initialize device mem_info */
+ 	sls_set_mem_info(&sls_device.mem_info);
+@@ -209,7 +209,7 @@ int init_sls_device(void)
+ 	/* Initialize memory allocator */
+ 	err = init_sls_allocator(&sls_device);
+ 	if (err)
+-		goto out_resource_dev;
++		goto allocator_fail;
+ 
+ 	/* Initialize manager of processes which use SLS resources */
+ 	init_sls_process_manager(&sls_proc_mgr);
+@@ -220,13 +220,17 @@ int init_sls_device(void)
+ 	/* Create sysfs subsystem for the device */
+ 	err = build_sls_sysfs(&sls_device, sls_resource_device);
+ 	if (err)
+-		goto out_resource_dev;
++		goto build_sysfs_fail;
+ 
++	SLS_INF("Initialization is done");
+ 	return 0;
+ 
+-out_resource_dev:
++build_sysfs_fail:
++	destroy_sls_rank_scheduler(&sls_rank_sched);
++	cleanup_sls_process_manager(&sls_proc_mgr);
++allocator_fail:
+ 	destroy_sls_resource_dev();
+-out:
++resource_device_fail:
+ 	return err;
+ }
+ 
+@@ -240,6 +244,9 @@ void cleanup_sls_device(void)
+ 	/* Free allocated memory if any user processes alive upon device remove*/
+ 	cleanup_sls_process_manager(&sls_proc_mgr);
+ 
++	/* Reset state */
++	destroy_sls_rank_scheduler(&sls_rank_sched);
++
+ 	/* Remove test attribute */
+ 	destroy_sls_sysfs();
+ 
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.c b/drivers/pnm/sls_resource/sls_rank_scheduler.c
+index 79752150f..4aefd8057 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.c
++++ b/drivers/pnm/sls_resource/sls_rank_scheduler.c
+@@ -81,6 +81,12 @@ void init_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched)
+ 	mutex_init(&rank_sched->rank_stat_lock);
+ }
+ 
++void destroy_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched)
++{
++	reset_sls_rank_scheduler(rank_sched);
++	mutex_destroy(&rank_sched->rank_stat_lock);
++}
++
+ static int get_rank_write(struct sls_rank_scheduler *rank_sched,
+ 			  unsigned int msk)
+ {
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.h b/drivers/pnm/sls_resource/sls_rank_scheduler.h
+index ef6f8edf2..41ec62c5f 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.h
++++ b/drivers/pnm/sls_resource/sls_rank_scheduler.h
+@@ -29,6 +29,7 @@ extern struct sls_process_manager sls_proc_mgr;
+ 
+ void reset_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched);
+ void init_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched);
++void destroy_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched);
+ int get_sls_rank(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
+ 		    unsigned int arg);
+ int release_sls_rank(struct sls_rank_scheduler *rank_sched,
+-- 
+2.34.1
+

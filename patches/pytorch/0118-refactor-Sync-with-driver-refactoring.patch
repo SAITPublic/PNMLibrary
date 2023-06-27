@@ -1,0 +1,300 @@
+From 2ae44a426f54be0ffcab2cf107268f352b48c8dd Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Wed, 3 May 2023 15:33:31 +0300
+Subject: [PATCH 118/128] [refactor] Sync with driver refactoring
+
+* update includes from PNM library
+* update namespaces
+
+Resolves: MCS23-925
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ .../native/axdimm/AxdimmDeviceContext.cpp     |  4 ++--
+ .../ATen/native/axdimm/AxdimmDeviceContext.h  |  4 ++--
+ .../ATen/native/axdimm/AxdimmSecureTensor.cpp | 16 +++++++--------
+ .../ATen/native/axdimm/AxdimmSecureTensor.h   |  6 +++---
+ aten/src/ATen/native/axdimm/AxdimmTensor.h    |  4 ++--
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   |  2 +-
+ .../operators/lengths_reducer_ops_axdimm.cc   |  8 ++++----
+ .../lengths_reducer_ops_sec_axdimm.cc         |  4 ++--
+ .../lengths_reducer_ops_sec_axdimm.h          | 20 +++++++++----------
+ caffe2/python/pybind_state_axdimm.cc          |  4 ++--
+ 10 files changed, 36 insertions(+), 36 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+index f3b4f0e7..2b358c10 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+@@ -1,4 +1,4 @@
+-#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls.h>
+ 
+ #include <ATen/native/axdimm/AxdimmDeviceContext.h>
+ 
+@@ -7,7 +7,7 @@ namespace native {
+ namespace axdimm {
+ 
+ Device& AxdimmDeviceContext::device() {
+-  static auto static_device = AxdimmDevice::make();
++  static auto static_device = SlsDevice::make();
+   return static_device;
+ }
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+index 0dacb64a..0840cd77 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+@@ -1,7 +1,7 @@
+ #ifndef __AXDIMM_DEVICE_CONTEXT__
+ #define __AXDIMM_DEVICE_CONTEXT__
+ 
+-#include <pnmlib/core/axdimm_device.h>
++#include <pnmlib/core/sls_device.h>
+ #include <pnmlib/core/context.h>
+ 
+ #include <c10/util/Exception.h>
+@@ -12,7 +12,7 @@ namespace at {
+ namespace native {
+ namespace axdimm {
+ 
+-using Device = AxdimmDevice;
++using Device = SlsDevice;
+ 
+ class AxdimmDeviceContext {
+  public:
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+index 086250ea..13b74ccd 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+@@ -1,6 +1,6 @@
+-#include <pnmlib/secure/axdimm_runner_factory.h>
++#include <pnmlib/secure/sls_runner_factory.h>
+ #include <pnmlib/secure/base_device.h>
+-#include <pnmlib/secure/untrusted_axdimm_params.h>
++#include <pnmlib/secure/untrusted_sls_params.h>
+ 
+ #include <ATen/native/axdimm/AxdimmSecureTensor.h>
+ 
+@@ -81,18 +81,18 @@ void AxdimmSecureTensor::load(const void* weights_data) {
+   TORCH_INTERNAL_ASSERT(weights_data, "Weights data can't be null");
+   if (type_ == AxdimmTensorType::AXDIMM_SECURE) {
+     if (scalar_type_ == torch::kFloat32) {
+-      runner_ = ::axdimm::secure::make_runner(
+-          ::axdimm::secure::RunnerType::FLOAT);
++      runner_ = ::sls::secure::make_runner(
++          ::sls::secure::RunnerType::FLOAT);
+     } else {
+-      runner_ = ::axdimm::secure::make_runner(
+-          ::axdimm::secure::RunnerType::INT);
++      runner_ = ::sls::secure::make_runner(
++          ::sls::secure::RunnerType::INT);
+     }
+   }
+ 
+   const auto& rows_view = ::pnm::make_view(std::cref(tables_rows_num_).get());
+ 
+-  ::axdimm::secure::DeviceArguments args(
+-      ::axdimm::secure::UntrustedDeviceParams{
++  ::sls::secure::DeviceArguments args(
++      ::sls::secure::UntrustedDeviceParams{
+           .rows = rows_view,
+           .sparse_feature_size = sparse_feature_size_,
+           .with_tag = with_tag_,
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+index 37ec4faa..a7c893f7 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+@@ -1,7 +1,7 @@
+ #ifndef __AXDIMM_SECURE_TENSOR__
+ #define __AXDIMM_SECURE_TENSOR__
+ 
+-#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls.h>
+ #include <pnmlib/secure/base_runner.h>
+ 
+ #include <ATen/ATen.h>
+@@ -46,7 +46,7 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+     return with_tag_;
+   }
+ 
+-  ::axdimm::secure::IRunner& get_runner() const {
++  ::sls::secure::IRunner& get_runner() const {
+     return *runner_;
+   }
+ 
+@@ -67,7 +67,7 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+   void check_params(const at::Tensor& weights) const;
+   void load(const void* weights_data);
+ 
+-  std::shared_ptr<::axdimm::secure::IRunner> runner_;
++  std::shared_ptr<::sls::secure::IRunner> runner_;
+   bool with_tag_;
+ };
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index c9d46dff..6a0f11a1 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -1,11 +1,11 @@
+ #ifndef __AXDIMM_TENSOR__
+ #define __AXDIMM_TENSOR__
+ 
+-#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls.h>
+ #include <pnmlib/ai/embedded_tables.h>
+ #include <pnmlib/ai/sls_type.h>
+ 
+-#include <pnmlib/core/axdimm_device.h>
++#include <pnmlib/core/sls_device.h>
+ #include <pnmlib/core/runner.h>
+ 
+ #include <ATen/ATen.h>
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index 8b4ee23b..625a5531 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -1,4 +1,4 @@
+-#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls.h>
+ #include <pnmlib/ai/sls_operation.h>
+ 
+ #include <ATen/native/axdimm/AxdimmTensorConvert.h>
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 762564fc..07b79a44 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -5,12 +5,12 @@
+ #include "caffe2/operators/segment_reduction_op.h"
+ #include "caffe2/utils/math.h"
+ 
+-#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls.h>
+ #include <pnmlib/ai/embedded_tables.h>
+ #include <pnmlib/ai/sls_operation.h>
+ #include <pnmlib/common/error.h>
+ #include <pnmlib/common/views.h>
+-#include <pnmlib/core/axdimm_device.h>
++#include <pnmlib/core/sls_device.h>
+ #include <pnmlib/core/runner.h>
+ 
+ #include <algorithm>
+@@ -389,8 +389,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked indices buffer
+   uint64_t lengths_total_size_in_bytes_ =
+       0; // Size of currently allocated blocked lengths buffer
+-  AxdimmDevice device_ =
+-      AxdimmDevice::make(); // AXDIMM device. TODO: move into AXDIMMContext
++  SlsDevice device_ =
++      SlsDevice::make(); // SLS device. TODO: move into AXDIMMContext
+ 
+   pnm::ContextHandler pnm_ctx_ = pnm::make_context(pnm::ContextType::AXDIMM);
+   pnm::Runner runner_{pnm_ctx_};
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 0132a90a..fe5eff07 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -11,7 +11,7 @@ REGISTER_AXDIMM_OPERATOR(
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         float,
+         TensorTypes<float, at::Half>,
+-        ::axdimm::secure::RunnerType::FLOAT>);
++        ::sls::secure::RunnerType::FLOAT>);
+ 
+ // Dummy
+ REGISTER_CPU_OPERATOR(SecureSparseLengthsSumVec, NoDefaultEngineOp<CPUContext>);
+@@ -22,7 +22,7 @@ REGISTER_AXDIMM_OPERATOR(
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         int32_t,
+         TensorTypes<int32_t>,
+-        ::axdimm::secure::RunnerType::INT>);
++        ::sls::secure::RunnerType::INT>);
+ 
+ // Dummy
+ REGISTER_CPU_OPERATOR(
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 7b7a5bb5..768d7f85 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -7,12 +7,12 @@
+ #include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ 
+-#include <pnmlib/secure/axdimm_runner_factory.h>
++#include <pnmlib/secure/sls_runner_factory.h>
+ #include <pnmlib/secure/base_device.h>
+ #include <pnmlib/secure/base_runner.h>
+-#include <pnmlib/secure/untrusted_axdimm_params.h>
++#include <pnmlib/secure/untrusted_sls_params.h>
+ 
+-#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls.h>
+ 
+ #include <pnmlib/common/128bit_math.h>
+ 
+@@ -28,7 +28,7 @@ namespace caffe2 {
+ template <
+     typename T, // output type
+     typename InputTypes, // supported input types, such as TensorTypes<float>
+-    axdimm::secure::RunnerType runner_type>
++    sls::secure::RunnerType runner_type>
+ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+  public:
+   USE_OPERATOR_FUNCTIONS(AXDIMMContext);
+@@ -178,8 +178,8 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     const auto memory_preference = this->template GetSingleArgument<int>(
+         "mem_preference", AXDIMM_ALLOC_AUTO);
+ 
+-    axdimm::secure::DeviceArguments args(
+-        axdimm::secure::UntrustedDeviceParams{
++    sls::secure::DeviceArguments args(
++        sls::secure::UntrustedDeviceParams{
+             .rows = rows,
+             .sparse_feature_size = sparse_feature_size,
+             .with_tag = with_tag_,
+@@ -211,14 +211,14 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   std::vector<uint8_t> tag_checks_;
+   std::vector<secure_core_value_type> psum_buffer_;
+ 
+-  std::unique_ptr<axdimm::secure::IRunner> runner_ =
+-      axdimm::secure::make_runner(runner_type);
++  std::unique_ptr<sls::secure::IRunner> runner_ =
++      sls::secure::make_runner(runner_type);
+ };
+ 
+ template <
+     typename T,
+     typename InputTypes,
+-    axdimm::secure::RunnerType runner_type>
++    sls::secure::RunnerType runner_type>
+ void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+     init_from_file() {
+   block_size_ = this->template GetSingleArgument<int>("num_tables", 0);
+@@ -278,7 +278,7 @@ void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+ template <
+     typename T,
+     typename InputTypes,
+-    axdimm::secure::RunnerType runner_type>
++    sls::secure::RunnerType runner_type>
+ void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+     init_from_input() {
+   // Setup input pointers for tables/indices/lengths. The input comes in
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 21124ccf..210822b1 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -14,9 +14,9 @@
+ #include "caffe2/operators/operator_fallback_axdimm.h"
+ #include "caffe2/python/pybind_state_registry.h"
+ 
+-#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls.h>
+ #include <pnmlib/ai/embedded_tables.h>
+-#include <pnmlib/core/axdimm_device.h>
++#include <pnmlib/core/sls_device.h>
+ 
+ #include <fcntl.h>
+ #include <sys/mman.h>
+-- 
+2.34.1
+

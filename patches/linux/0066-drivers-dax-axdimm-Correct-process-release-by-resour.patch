@@ -1,0 +1,56 @@
+From 548a0d6fe7b3a2d1a580f7df9bf39dbf1a84c230 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Wed, 2 Nov 2022 11:38:50 +0300
+Subject: [PATCH 066/161] [drivers/dax/axdimm] Correct process release by
+ resource manager
+
+Relates: AXDIMM-451
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/dax/axdimm_process_manager.c | 22 +++-------------------
+ 1 file changed, 3 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/dax/axdimm_process_manager.c b/drivers/dax/axdimm_process_manager.c
+index c01849faa..7bf8823c2 100644
+--- a/drivers/dax/axdimm_process_manager.c
++++ b/drivers/dax/axdimm_process_manager.c
+@@ -12,18 +12,6 @@
+ 
+ enum rank_access_type { RANK_ACCESS_RD, RANK_ACCESS_WR, RANK_ACCESS_INVAL };
+ 
+-static inline bool is_abnormal_exit_signal(int exit_sig)
+-{
+-	return exit_sig & PF_SIGNALED && exit_sig != SIGCHLD && exit_sig != -1;
+-}
+-
+-static inline bool is_abnormal_process_exit(void)
+-{
+-	return current->exit_state == EXIT_DEAD ||
+-	       current->exit_state == EXIT_ZOMBIE || current->exit_code != 0 ||
+-	       is_abnormal_exit_signal(current->exit_signal);
+-}
+-
+ static inline enum rank_access_type get_rank_access_type(unsigned int cmd)
+ {
+ 	if (cmd == GET_RANK_FOR_WRITE || cmd == RELEASE_WRITE_RANK)
+@@ -158,13 +146,9 @@ int release_axdimm_process(struct axdimm_process_manager *mgr,
+ 	 *   - we are in last close syscall from userspace
+ 	 *   - process got finished abnormally
+ 	 */
+-	if (proc_res->ref_cnt == 0 || is_abnormal_process_exit()) {
+-		AXDIMM_DBG("Releasing process pid: %d, tid: %d, "
+-			   "exit_state: %d, exit_code: %d, exit_sig: %d, "
+-			   "flags (PF_* from include/linux/sched.h): 0x%x\n",
+-			   get_current_process_id(), current->pid,
+-			   current->exit_state, current->exit_code,
+-			   current->exit_signal, current->flags);
++	if (proc_res->ref_cnt == 0) {
++		AXDIMM_DBG("Releasing process pid: %d, tid: %d\n",
++			   get_current_process_id(), current->pid);
+ 
+ 		res_leaked = has_resources_leaked(proc_res);
+ 		if (!res_leaked)
+-- 
+2.34.1
+

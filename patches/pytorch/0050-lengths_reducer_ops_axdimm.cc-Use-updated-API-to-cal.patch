@@ -1,0 +1,93 @@
+From e90491b47a2e49e7fc5ceb2ca6bb13d41995700b Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 24 Jun 2022 14:46:21 +0900
+Subject: [PATCH 050/128] [lengths_reducer_ops_axdimm.cc] Use updated API to
+ call AXDIMM lib
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ .../operators/lengths_reducer_ops_axdimm.cc   | 30 ++++++++-----------
+ 1 file changed, 12 insertions(+), 18 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 558c2109..bdf41c84 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -150,12 +150,10 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     indices_blocked_ = nullptr;
+     lengths_blocked_ = nullptr;
+ 
+-    axdimm_destroy_execution_context(exec_context_);
+-    axdimm_destroy_model_context(model_context_);
++    axdimm_destroy_op(sls_op_);
+     axdimm_destroy_base_device(device_);
+     axdimm_destroy_tables_layout(tables_layout_);
+-    exec_context_ = nullptr;
+-    model_context_ = nullptr;
++    sls_op_ = nullptr;
+     device_ = nullptr;
+     tables_layout_ = nullptr;
+   }
+@@ -215,11 +213,10 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       }
+     }
+ 
+-    // 2) Call axd_init if needed.
++    // 2) Create device and SLS operation on first call.
+     if (!device_) {
+       CAFFE_ENFORCE_EQ(
+-          nullptr, model_context_, "model_context_ must be nullptr");
+-      CAFFE_ENFORCE_EQ(nullptr, exec_context_, "exec_context_ must be nullptr");
++          nullptr, sls_op_, "sls_op_ must be nullptr");
+ 
+       device_ = axdimm_create_base_device();
+ 
+@@ -234,14 +231,16 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       }
+ 
+       // Create model context for SLS operation.
+-      model_context_ = axdimm_create_model_context(
++      sls_op_ = axdimm_create_sls_op(
+           M,
+           D,
+           block_size_,
+           table_entry_list.data(),
+-          num_indices_per_lookup_.data(), AXDIMM_SLS_FLOAT);
++          num_indices_per_lookup_.data(),
++          tables_layout_,
++          AXDIMM_SLS_FLOAT);
+ 
+-      exec_context_ = axdimm_create_execution_context(model_context_, device_);
++      axdimm_precompile_op(sls_op_, device_);
+     }
+ 
+     // 3.1) If new operator invocation consumes more memory for indices,
+@@ -298,11 +297,9 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     T* output_buf = output->template data<T>();
+ 
+     // 6) And finally run the operator.
+-    int status = axdimm_run(
+-        model_context_,
++    int status = axdimm_run_sls(
++        sls_op_,
+         device_,
+-        exec_context_,
+-        tables_layout_,
+         (uint32_t*)lengths_blocked_,
+         (uint32_t*)indices_blocked_,
+         (uint8_t*)output_buf /* psum buffer */
+@@ -339,10 +336,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked lengths buffer
+   AxdimmBaseDevice* device_ =
+       nullptr; // AXDIMM device. TODO: move into AXDIMMContext
+-  AxdimmModelContext* model_context_ =
+-      nullptr; // AXDIMM model context. TODO: move into AXDIMMContext
+-  AxdimmExecutionContext* exec_context_ =
+-      nullptr; // AXDIMM exec context. TODO: move into AXDIMMContext
++  AxdimmOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
+   AxdimmTablesLayout* tables_layout_ = nullptr;
+ };
+ 
+-- 
+2.34.1
+

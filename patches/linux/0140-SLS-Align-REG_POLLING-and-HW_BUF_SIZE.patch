@@ -1,0 +1,87 @@
+From e492e4f594b285fbde6c125275f4352c509132b6 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Wed, 19 Jul 2023 17:09:30 +0300
+Subject: [PATCH 140/161] [SLS] Align REG_POLLING and HW_BUF_SIZE
+
+* For SLS CXL we should use own
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/dax/Kconfig                            |  2 +-
+ drivers/pnm/sls_resource/sls_topology_export.c | 17 +++++++++++++----
+ include/uapi/linux/sls_resources.h             |  8 --------
+ 3 files changed, 14 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index ad7a68340..11876f478 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -133,7 +133,7 @@ config DEV_SLS_CXL
+ 	help
+ 	  CXL SLS accelerator placed in CXL slot. It has 2 channels
+ 	  and 2 rank in each channel. One rank has 16GB of memory, but
+-	  only first rank in each channel accessible, so SLS cxl can
++	  only first rank in each channel accessible, so SLS CXL can
+ 	  use only 32GB of memory. Every channel has one SLS compute unit,
+ 	  which can access only their own channel.
+ 
+diff --git a/drivers/pnm/sls_resource/sls_topology_export.c b/drivers/pnm/sls_resource/sls_topology_export.c
+index 4da267262..3f3b4cd06 100644
+--- a/drivers/pnm/sls_resource/sls_topology_export.c
++++ b/drivers/pnm/sls_resource/sls_topology_export.c
+@@ -11,13 +11,22 @@
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+ 
+-//[TODO: s-motov] move to common header when
+-// sls_mem_topology.h removed from exported headers
+-#if CONFIG_DEV_SLS_BUS == SLS_TYPE_CXL
+-#undef REG_POLLING
++//[TODO: p.bred] Fix within MCS23-1081
++#if CONFIG_DEV_SLS_BUS == SLS_TYPE_AXDIMM
++#define REG_POLLING 0x840
++/* Instruction, Psum & Tags Buffers Size (Bytes) */
++#define HW_BUF_SIZE (256 * 1024)
++#elif CONFIG_DEV_SLS_BUS == SLS_TYPE_CXL
+ #define REG_POLLING 0x440
++#define HW_BUF_SIZE (256 * 1024 - 64)
++#else /* CONFIG_DEV_SLS_BUS == SLS_TYPE_CXL */
++#error "SLS bus/interface should be selected!"
+ #endif
+ 
++#define INST_BUF_SIZE HW_BUF_SIZE
++#define PSUM_BUF_SIZE HW_BUF_SIZE
++#define TAGS_BUF_SIZE HW_BUF_SIZE
++
+ #define SINGLE_VALUE_ATTR(name, value)                                       \
+ 	static ssize_t name##_show(struct device *device,                    \
+ 				   struct device_attribute *attr, char *buf) \
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 155f1c78c..f1fdf049a 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -23,7 +23,6 @@
+ /* Offset at config reg */
+ #define REG_SLS_EN 0x0
+ #define REG_SLS_EXEC 0x40
+-#define REG_POLLING 0x840
+ 
+ /* number of Instruction, Psum & Tags buffers */
+ #define NUM_OF_INST_BUF 1
+@@ -39,13 +38,6 @@
+ /* Data Size (Bytes) */
+ #define DATA_SIZE 4
+ 
+-/* Instruction, Psum & Tags Buffers Size (Bytes) */
+-#define HW_BUF_SIZE (256 * 1024 - 64) //[TODO: MCS23-1373] revert this changes
+-
+-#define INST_BUF_SIZE HW_BUF_SIZE
+-#define PSUM_BUF_SIZE HW_BUF_SIZE
+-#define TAGS_BUF_SIZE HW_BUF_SIZE
+-
+ /* Path to SLS resource manager device within /dev */
+ #define SLS_RESOURCE_PATH_INTERNAL "pnm/sls_resource"
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,44 @@
+From f66e73526bf66373c7557c704bb8a9427b5880e3 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 11 Jul 2022 12:02:57 +0900
+Subject: [PATCH 060/128] [lengths_reducer_ops_sec_axdimm.h] NFC: fix
+ formatting
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 7a0c265a..b90e75f8 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -190,11 +190,11 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       // [TODO: AXDIMM-256] remove rank_offsets after rank allocator is ready
+       size_t tables_size_bytes = tables_size_ * sizeof(T);
+       if (with_tag_) {
+-        tables_size_bytes += (tables_size_ / sparse_feature_size_) * sizeof(axdimm::uint128_t);
++        tables_size_bytes +=
++            (tables_size_ / sparse_feature_size_) * sizeof(axdimm::uint128_t);
+       }
+       std::vector<uint64_t> rank_offsets(
+-          NUM_OF_RANK,
+-          engine_id_ * tables_size_bytes);
++          NUM_OF_RANK, engine_id_ * tables_size_bytes);
+       LOG(INFO) << "Operator " << engine_id_
+                 << " using rank offset: " << rank_offsets.back()
+                 << " tables size in bytes: " << tables_size_bytes;
+@@ -210,8 +210,8 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+     } else if constexpr (std::is_same_v<Context, CPUContext>) {
+       axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
+           .rows = rows,
+-	  .sparse_feature_size = sparse_feature_size,
+-	  .with_tag = with_tag_});
++          .sparse_feature_size = sparse_feature_size,
++          .with_tag = with_tag_});
+       runner_.init(&args);
+     } else {
+       static_assert(always_false<Context> && "Wrong context type");
+-- 
+2.34.1
+

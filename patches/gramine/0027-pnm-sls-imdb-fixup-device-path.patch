@@ -1,0 +1,46 @@
+From bd2a01de8debfbf2b10b2beb44c2caafd9882bee Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Fri, 21 Jul 2023 03:35:40 +0300
+Subject: [PATCH 27/27] [pnm][sls/imdb] fixup device path
+
+Refers to MCS23-1024
+
+Signed-off-by: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+---
+ application/pytorch/conf.pytorch.manifest.template   | 4 ++--
+ application/sls_secndp_test/secndp.manifest.template | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index 2f354141..2ab6a8e3 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -50,8 +50,8 @@ sgx.trusted_files = [
+ sgx.allowed_files = [
+   "file:/dev/shm/", # We need to allow sls device to enable write access to it
+   "file:./run_kaggle_pt/",
+-  "file:/sys/class/sls_resource/pnm!sls_resource/ranks/",
+-  "file:/sys/class/sls_resource/pnm!sls_resource/topology/",
++  "file:/sys/class/pnm/sls_resource/ranks/",
++  "file:/sys/class/pnm/sls_resource/topology/",
+   "file:/dev/pnm/sls_resource",
+   "file:{{ dlrm_data_path }}",
+   # In production we should place pillow path into sgx.trusted_files
+diff --git a/application/sls_secndp_test/secndp.manifest.template b/application/sls_secndp_test/secndp.manifest.template
+index 53e87c79..758252d0 100644
+--- a/application/sls_secndp_test/secndp.manifest.template
++++ b/application/sls_secndp_test/secndp.manifest.template
+@@ -34,8 +34,8 @@ sgx.max_threads = 512
+ sgx.debug = true
+ 
+ sgx.allowed_files = [
+-  "file:/sys/class/sls_resource/pnm!sls_resource/ranks/",
+-  "file:/sys/class/sls_resource/pnm!sls_resource/topology/",
++  "file:/sys/class/pnm/sls_resource/ranks/",
++  "file:/sys/class/pnm/sls_resource/topology/",
+   "file:/dev/pnm/sls_resource"
+ ]
+ 
+-- 
+2.34.1
+

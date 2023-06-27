@@ -1,0 +1,53 @@
+From 11f55d25c14b8a4fbfa4df3c4cd2d0566edf3600 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Mon, 22 May 2023 19:06:08 +0300
+Subject: [PATCH 115/161] [DBA][Allocator] Alignment control
+
+* Align memory chunks in the kernel, where kernel is the owner,
+to hide such a low-level process from userspace.
+It would be nice to return the actual size to userspace also,
+but to do this - userspace layer should be aligned additionally.
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/dba_resource/dba_allocator.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+index c1b8fdd4a..7375122f1 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/dba_resource/dba_allocator.c
+@@ -145,6 +145,7 @@ static uint8_t get_rank_most_free(void)
+ 
+ static int allocate_memory(struct dba_allocation *req)
+ {
++	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
+ 	int result = 0;
+ 
+ 	mutex_lock(&allocator_lock);
+@@ -153,7 +154,7 @@ static int allocate_memory(struct dba_allocation *req)
+ 		req->rank = get_rank_most_free();
+ 
+ 	req->address =
+-		gen_pool_alloc(general_alloc.pools[req->rank], req->size);
++		gen_pool_alloc(general_alloc.pools[req->rank], aligned_size);
+ 	if (req->address == 0) {
+ 		DBA_ERR("Fail to allocate %llu bytes.", req->size);
+ 		result = -ENOMEM;
+@@ -171,9 +172,12 @@ static int allocate_memory(struct dba_allocation *req)
+ 
+ static void deallocate_memory(struct dba_allocation *req)
+ {
++	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
++
+ 	mutex_lock(&allocator_lock);
+ 	req->address += general_alloc.gran;
+-	gen_pool_free(general_alloc.pools[req->rank], req->address, req->size);
++	gen_pool_free(general_alloc.pools[req->rank], req->address,
++		      aligned_size);
+ 	mutex_unlock(&allocator_lock);
+ }
+ 
+-- 
+2.34.1
+

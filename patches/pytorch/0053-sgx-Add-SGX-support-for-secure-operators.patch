@@ -1,0 +1,739 @@
+From d9bf2c57432d3ae5dfb2507b1ef38a739fa254ed Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Wed, 29 Jun 2022 18:16:27 +0300
+Subject: [PATCH 053/128] [sgx] Add SGX support for secure operators
+
+Make USE_AXDIMM_SGX a dependent option and forward it through
+setup.py.
+
+Related to: AXDIMM-255
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ caffe2/CMakeLists.txt                         |  18 +-
+ .../lengths_reducer_ops_sec_axdimm.cc         | 351 ++++--------------
+ .../lengths_reducer_ops_sec_axdimm.h          | 296 +++++++++++++++
+ 3 files changed, 377 insertions(+), 288 deletions(-)
+ create mode 100644 caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 8e1ee443..75bc1e95 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1372,9 +1372,23 @@ target_include_directories(torch_cpu INTERFACE $<INSTALL_INTERFACE:include>)
+ target_include_directories(torch_cpu PRIVATE ${Caffe2_CPU_INCLUDE})
+ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE}")
+ 
+-if(USE_AXDIMM)
++if (USE_AXDIMM)
++  option(AXDIMM_SGX OFF "Use SGX for secure SLS")
++
++  if (DEFINED ENV{AXDIMM_SGX})
++    set(AXDIMM_SGX $ENV{AXDIMM_SGX})
++  endif ()
++
+   target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+-  target_link_libraries(torch_axdimm PUBLIC "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/libAxdimmAI.so" "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecure.a")
++  set(AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/libAxdimmAI.so"
++          "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecure.a")
++
++  if (AXDIMM_SGX)
++    target_compile_definitions(torch_axdimm PUBLIC -DSGX_ENABLE)
++    list(APPEND AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecureSgx.so")
++  endif ()
++
++  target_link_libraries(torch_axdimm PUBLIC ${AXDIMM_LIBS})
+   target_include_directories(torch_axdimm PRIVATE ${Caffe2_AXDIMM_INCLUDE})
+ endif()
+ 
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index eaa71246..8b0888f1 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -1,297 +1,16 @@
+ #undef USE_FBGEMM
+ 
+-#include "caffe2/core/context.h"
+-#include "caffe2/core/logging.h"
+-#include "caffe2/core/operator.h"
+-#include "caffe2/operators/lengths_reducer_ops.h"
+-#include "caffe2/operators/segment_reduction_op.h"
+-
+-#include "ai/api/axdimm.h"
++#include "lengths_reducer_ops_sec_axdimm.h"
+ 
+ #include "secure/plain/axdimm_secure.h"
+-#include "secure/plain/devices/trivial_cpu.h"
+ 
+-#include <fcntl.h>
+-#include <sys/mman.h>
++#ifdef SGX_ENABLE
++#include "secure/intel_sgx/axdimm_secure_sgx.h"
++#endif
+ 
+ namespace caffe2 {
+ 
+-// Compile type helper to resolve types for sls operator
+-template <typename T>
+-struct SecureTypeTraits {
+-  using secure_engine_value_t = T;
+-  static constexpr bool apply_scale = false;
+-};
+-
+-// Instantiation for float
+-template <>
+-struct SecureTypeTraits<float> {
+-  using secure_engine_value_t = uint32_t;
+-  static constexpr bool apply_scale = true;
+-  static constexpr auto SCALE_FACTOR =
+-      10'000'000; // Crop float to 7 digit after decimal
+-};
+-
+-// Instantiation for double
+-template <>
+-struct SecureTypeTraits<double> {
+-  using secure_engine_value_t = uint64_t;
+-  static constexpr bool apply_scale = true;
+-  static constexpr auto SCALE_FACTOR =
+-      10'000'000; // Crop float to 7 digit after decimal
+-};
+-
+-// A templated class that implements SparseLengths[Sum,WeightedSum,Mean] for
+-// AXDIMM.
+-template <
+-    typename T, // output type
+-    typename InputTypes, // supported input types, such as TensorTypes<float>
+-    typename SecureRunner,
+-    typename Context>
+-class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+- public:
+-  USE_OPERATOR_FUNCTIONS(Context);
+-  template <class... Args>
+-  explicit AXDIMMSecureSparseLengthsReductionOpVec(Args&&... args)
+-      : Operator<Context>(std::forward<Args>(args)...) {
+-    if constexpr (SecureTypeTraits<T>::apply_scale) {
+-      LOG(WARNING) << "Secure operator works only with integer types. "
+-                      "The floating values will be converted to integer "
+-                      "by expression I = static_cast<I>(F * "
+-                   << SecureTypeTraits<T>::SCALE_FACTOR << " )";
+-    }
+-    if (!this->template GetSingleArgument<bool>("from_file", false)) {
+-      init_from_input();
+-    } else {
+-      init_from_file();
+-    }
+-
+-    num_indices_per_lookup_.resize(block_size_, 0);
+-  }
+-
+-  bool RunOnDevice() override {
+-    int tables_vec_start_idx = 0;
+-    return DispatchHelper<InputTypes>::call(this, Input(tables_vec_start_idx));
+-  }
+-
+-  template <typename InputType>
+-  bool DoRunWithType() {
+-    int indices_vec_start_idx = InputSize() / 3;
+-    return DispatchHelper<TensorTypes2<int32_t, int64_t>, InputType>::call(
+-        this, Input(indices_vec_start_idx));
+-  }
+-
+-  template <typename InputType, typename IndexType>
+-  bool DoRunWithType2() {
+-    CAFFE_ENFORCE_EQ(
+-        InputSize() % 3,
+-        0,
+-        "Operator input must consist of 3 equal vectors: TablesVec, IndicesVec and LengthsVec.");
+-
+-    auto indices_vec_start_idx = block_size_;
+-    auto lengths_vec_start_idx = indices_vec_start_idx + block_size_;
+-
+-    indices_blocked_.clear();
+-    lengths_blocked_.clear();
+-    for (int i = 0; i < block_size_; ++i) {
+-      auto& indicesInput = Input(indices_vec_start_idx + i);
+-      auto& lengthsInput = Input(lengths_vec_start_idx + i);
+-
+-      auto indices = axdimm::make_view(
+-          indicesInput.template data<IndexType>(), indicesInput.numel());
+-      auto lengths = axdimm::make_view(
+-          lengthsInput.template data<int>(), lengthsInput.numel());
+-
+-      CAFFE_ENFORCE_GT(indices.size(), 0, "indicesInput can't be empty");
+-      CAFFE_ENFORCE_EQ(1, indicesInput.dim(), "INDICES must be a vector");
+-      CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
+-
+-      if (*lengths.begin() != num_indices_per_lookup_[i]) {
+-        CAFFE_ENFORCE_EQ(
+-            num_indices_per_lookup_[i],
+-            0,
+-            "Multiple axd_init calls are not supported at the moment.");
+-        num_indices_per_lookup_[i] = *lengths.begin();
+-      }
+-
+-      std::copy(
+-          indices.begin(), indices.end(), std::back_inserter(indices_blocked_));
+-      std::copy(
+-          lengths.begin(), lengths.end(), std::back_inserter(lengths_blocked_));
+-    }
+-
+-    const auto minibatch_size = Input(lengths_vec_start_idx).size(0);
+-
+-    auto* output = Output(
+-        0,
+-        {minibatch_size, block_size_ * sparse_feature_size_},
+-        at::dtype<T>());
+-
+-    T* output_buf = output->template data<T>();
+-
+-    auto output_view = axdimm::make_view(
+-        output_buf,
+-        output_buf + minibatch_size * block_size_ * sparse_feature_size_);
+-
+-    auto status = runner_.run(
+-        minibatch_size,
+-        axdimm::make_view(std::cref(lengths_blocked_).get()),
+-        axdimm::make_view(std::cref(indices_blocked_).get()),
+-        axdimm::view_cast<uint8_t>(output_view));
+-
+-    auto output_int_v = axdimm::view_cast<uint32_t>(output_view);
+-
+-    if constexpr (SecureTypeTraits<T>::apply_scale) {
+-      std::transform(
+-          output_int_v.begin(),
+-          output_int_v.end(),
+-          output_view.begin(),
+-          [this](const auto v) {
+-            return static_cast<T>(v) / SecureTypeTraits<T>::SCALE_FACTOR;
+-          }); // Restore floating point values
+-    }
+-
+-    return status;
+-  }
+-
+- private:
+-  using secure_core_value_type =
+-      typename SecureTypeTraits<T>::secure_engine_value_t;
+-
+-  void init_secure_runner(
+-      uint64_t sparse_feature_size,
+-      axdimm::common_view<const uint64_t> rows,
+-      axdimm::common_view<const secure_core_value_type> data) {
+-    axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
+-        .rows = rows, .sparse_feature_size = sparse_feature_size});
+-    runner_.init(&args);
+-    runner_.load_tables(data.begin(), rows, sparse_feature_size, false);
+-  }
+-
+-  void init_from_file();
+-
+-  void init_from_input();
+-
+-  std::vector<uint32_t> indices_blocked_; // Concatenated indices arrays
+-  std::vector<uint32_t> lengths_blocked_; // Concatenated lengths arrays
+-
+-  int block_size_{}; // Number of tables/indices/lengths to be blocked
+-  std::vector<uint32_t>
+-      num_indices_per_lookup_; // Number of indices per one SLS lookup (we have
+-                               // "block_size_" of them).
+-
+-  int64_t sparse_feature_size_{};
+-  std::vector<uint64_t> rows_;
+-
+-  SecureRunner runner_;
+-};
+-
+-template <
+-    typename T,
+-    typename InputTypes,
+-    typename SecureRunner,
+-    typename Context>
+-void AXDIMMSecureSparseLengthsReductionOpVec<
+-    T,
+-    InputTypes,
+-    SecureRunner,
+-    Context>::init_from_file() {
+-  block_size_ = this->template GetSingleArgument<int>("num_tables", 0);
+-  CAFFE_ENFORCE_NE(
+-      block_size_, 0, "The number of tables should be greater than 0");
+-
+-  sparse_feature_size_ =
+-      this->template GetSingleArgument<uint64_t>("sparse_feature_size", 0);
+-  CAFFE_ENFORCE_NE(
+-      sparse_feature_size_,
+-      0,
+-      "The sparse feature size should be greater than 0");
+-
+-  auto path = this->template GetSingleArgument<std::string>("path", "");
+-  CAFFE_ENFORCE(!path.empty(), "Empty file path");
+-
+-  rows_ = this->template GetRepeatedArgument<uint64_t>("rows", {});
+-  CAFFE_ENFORCE_NE(rows_.size(), 0, "Empty rows array");
+-
+-  auto fd = open(path.c_str(), O_RDONLY);
+-  CAFFE_ENFORCE_NE(fd, -1, "Fail to open embedded tables file");
+-
+-  const auto tables_size =
+-      std::accumulate(rows_.begin(), rows_.end(), 0ULL) * sparse_feature_size_;
+-
+-  auto data =
+-      mmap(nullptr, tables_size * sizeof(T), PROT_READ, MAP_PRIVATE, fd, 0);
+-  CAFFE_ENFORCE_NE(data, MAP_FAILED, "Fail to map embedded tables file");
+-
+-  auto data_v = axdimm::make_view(
+-      static_cast<const T*>(data), static_cast<const T*>(data) + tables_size);
+-
+-  if constexpr (SecureTypeTraits<T>::apply_scale) {
+-    std::vector<secure_core_value_type> qdata(tables_size);
+-    std::transform(
+-        data_v.begin(), data_v.end(), qdata.begin(), [](const auto v) {
+-          return static_cast<secure_core_value_type>(
+-              v * SecureTypeTraits<T>::SCALE_FACTOR); // Transform floating
+-                                                      // point values to integer
+-        });
+-    init_secure_runner(
+-        sparse_feature_size_,
+-        axdimm::make_view(std::cref(rows_).get()),
+-        axdimm::make_view(std::cref(qdata).get()));
+-  } else {
+-    init_secure_runner(
+-        sparse_feature_size_,
+-        axdimm::make_view(std::cref(rows_).get()),
+-        data_v);
+-  }
+-
+-  CAFFE_ENFORCE_EQ(
+-      munmap(data, tables_size * sizeof(T)), 0, "Fail to unmap file");
+-}
+-
+-template <
+-    typename T,
+-    typename InputTypes,
+-    typename SecureRunner,
+-    typename Context>
+-void AXDIMMSecureSparseLengthsReductionOpVec<
+-    T,
+-    InputTypes,
+-    SecureRunner,
+-    Context>::init_from_input() {
+-  // Setup input pointers for tables/indices/lengths. The input comes in
+-  // following format:
+-  //    N := block_size_
+-  //    [T1, T2, ..., TN, I1, I2, ..., IN, L1, L2, ..., LN]
+-  CAFFE_ENFORCE_EQ(InputSize() % 3, 0, "InputSize should divided by 3");
+-  block_size_ = InputSize() / 3;
+-
+-  sparse_feature_size_ = Input(0).size_from_dim(1);
+-
+-  std::vector<secure_core_value_type> qdata;
+-
+-  rows_.resize(block_size_);
+-  for (int i = 0; i < block_size_; ++i) {
+-    rows_[i] = Input(i).size(0);
+-    std::transform(
+-        Input(i).template data<T>(),
+-        Input(i).template data<T>() + rows_[i] * sparse_feature_size_,
+-        std::back_inserter(qdata),
+-        [](const auto v) {
+-          if constexpr (SecureTypeTraits<T>::apply_scale)
+-            return static_cast<secure_core_value_type>(
+-                v * SecureTypeTraits<T>::SCALE_FACTOR);
+-          else
+-            return v;
+-        });
+-  }
+-
+-  init_secure_runner(
+-      sparse_feature_size_,
+-      axdimm::make_view(std::cref(rows_).get()),
+-      axdimm::make_view(std::cref(qdata).get()));
+-}
+-
++//-------------------FLOAT OPERATORS---------------------------------
+ REGISTER_AXDIMM_OPERATOR(
+     SecureSparseLengthsSumVec,
+     AXDIMMSecureSparseLengthsReductionOpVec<
+@@ -310,6 +29,7 @@ REGISTER_CPU_OPERATOR(
+             typename SecureTypeTraits<float>::secure_engine_value_t>,
+         CPUContext>);
+ 
++//-------------------UINT32_T OPERATORS---------------------------------
+ REGISTER_AXDIMM_OPERATOR(
+     SecureSparseLengthsSumIntVec,
+     AXDIMMSecureSparseLengthsReductionOpVec<
+@@ -328,6 +48,7 @@ REGISTER_CPU_OPERATOR(
+             typename SecureTypeTraits<int32_t>::secure_engine_value_t>,
+         CPUContext>);
+ 
++//-------------------OPERATORS SCHEMA---------------------------------
+ OPERATOR_SCHEMA(SecureSparseLengthsSumVec)
+     .NumInputs(2, INT_MAX)
+     .NumOutputs(1)
+@@ -358,4 +79,62 @@ OPERATOR_SCHEMA(SecureSparseLengthsSumIntVec)
+         "*(type: Tensor`<int>`)* List of input tensors: lengths and indices.")
+     .Output(0, "OUTPUT", "Aggregated tensor");
+ 
++#ifdef SGX_ENABLE
++//-------------------FLOAT OPERATORS---------------------------------
++//------------------------------------------------------------------
++// AXDIMM-with-SGX operator should be here
++//------------------------------------------------------------------
++
++REGISTER_CPU_OPERATOR(
++    SgxSecureSparseLengthsSumVec,
++    AXDIMMSecureSparseLengthsReductionOpVec<
++        float,
++        TensorTypes<float, at::Half>,
++        axdimm::secure::sgx::SgxSecureRunnerASync,
++        CPUContext>);
++
++//-------------------UINT32_T OPERATORS---------------------------------
++//------------------------------------------------------------------
++// AXDIMM-with-SGX operator should be here
++//------------------------------------------------------------------
++REGISTER_CPU_OPERATOR(
++    SgxSecureSparseLengthsSumIntVec,
++    AXDIMMSecureSparseLengthsReductionOpVec<
++        int32_t,
++        TensorTypes<int32_t>,
++        axdimm::secure::sgx::SgxSecureRunnerASync,
++        CPUContext>);
++
++//-------------------SGX OPERATORS SCHEMA---------------------------------
++OPERATOR_SCHEMA(SgxSecureSparseLengthsSumVec)
++    .NumInputs(2, INT_MAX)
++    .NumOutputs(1)
++    .SetDoc(R"(Operator for Secure AXDIMM)")
++    .Arg("from_file", "bool: read embedded tables from file")
++    .Arg("path", "string: path of embedded tables")
++    .Arg("num_tables", "uint: number of embedded tables")
++    .Arg("sparse_feature_size", "uint: sparse feature size")
++    .Arg("rows", "vector<uint64>: number of rows for each table")
++    .Input(
++        0,
++        "T1, ..., TN, I1, ..., IN, L1, ..., LN",
++        "*(type: Tensor`<int>`)* List of input tensors: lengths and indices.")
++    .Output(0, "OUTPUT", "Aggregated tensor");
++
++OPERATOR_SCHEMA(SgxSecureSparseLengthsSumIntVec)
++    .NumInputs(2, INT_MAX)
++    .NumOutputs(1)
++    .SetDoc(R"(Unsigned int32_t operator for Secure AXDIMM)")
++    .Arg("from_file", "bool: read embedded tables from file")
++    .Arg("path", "string: path of embedded tables")
++    .Arg("num_tables", "uint: number of embedded tables")
++    .Arg("sparse_feature_size", "uint: sparse feature size")
++    .Arg("rows", "vector<uint64>: number of rows for each table")
++    .Input(
++        0,
++        "T1, ..., TN, I1, ..., IN, L1, ..., LN",
++        "*(type: Tensor`<int>`)* List of input tensors: lengths and indices.")
++    .Output(0, "OUTPUT", "Aggregated tensor");
++#endif
++
+ } // namespace caffe2
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+new file mode 100644
+index 00000000..3cd63582
+--- /dev/null
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -0,0 +1,296 @@
++#ifndef AXDIMM_PYTORCH_LENGTHS_REDUCER_OPS_SEC_AXDIMM_H
++#define AXDIMM_PYTORCH_LENGTHS_REDUCER_OPS_SEC_AXDIMM_H
++
++#include "caffe2/core/context.h"
++#include "caffe2/core/logging.h"
++#include "caffe2/core/operator.h"
++#include "caffe2/operators/lengths_reducer_ops.h"
++#include "caffe2/operators/segment_reduction_op.h"
++
++#include "ai/api/axdimm.h"
++
++#include "secure/plain/devices/trivial_cpu.h"
++
++#include <fcntl.h>
++#include <sys/mman.h>
++
++namespace caffe2 {
++
++// Compile type helper to resolve types for sls operator
++template <typename T>
++struct SecureTypeTraits {
++  using secure_engine_value_t = T;
++  static constexpr bool apply_scale = false;
++};
++
++// Instantiation for float
++template <>
++struct SecureTypeTraits<float> {
++  using secure_engine_value_t = uint32_t;
++  static constexpr bool apply_scale = true;
++  static constexpr auto SCALE_FACTOR =
++      10'000'000; // Crop float to 7 digit after decimal
++};
++
++// Instantiation for double
++template <>
++struct SecureTypeTraits<double> {
++  using secure_engine_value_t = uint64_t;
++  static constexpr bool apply_scale = true;
++  static constexpr auto SCALE_FACTOR =
++      10'000'000; // Crop float to 7 digit after decimal
++};
++
++// A templated class that implements SparseLengths[Sum,WeightedSum,Mean] for
++// AXDIMM.
++template <
++    typename T, // output type
++    typename InputTypes, // supported input types, such as TensorTypes<float>
++    typename SecureRunner,
++    typename Context>
++class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
++ public:
++  USE_OPERATOR_FUNCTIONS(Context);
++  template <class... Args>
++  explicit AXDIMMSecureSparseLengthsReductionOpVec(Args&&... args)
++      : Operator<Context>(std::forward<Args>(args)...) {
++    if constexpr (SecureTypeTraits<T>::apply_scale) {
++      LOG(WARNING) << "Secure operator works only with integer types. "
++                      "The floating values will be converted to integer "
++                      "by expression I = static_cast<I>(F * "
++                   << SecureTypeTraits<T>::SCALE_FACTOR << " )";
++    }
++    if (!this->template GetSingleArgument<bool>("from_file", false)) {
++      init_from_input();
++    } else {
++      init_from_file();
++    }
++
++    num_indices_per_lookup_.resize(block_size_, 0);
++  }
++
++  bool RunOnDevice() override {
++    int tables_vec_start_idx = 0;
++    return DispatchHelper<InputTypes>::call(this, Input(tables_vec_start_idx));
++  }
++
++  template <typename InputType>
++  bool DoRunWithType() {
++    int indices_vec_start_idx = InputSize() / 3;
++    return DispatchHelper<TensorTypes2<int32_t, int64_t>, InputType>::call(
++        this, Input(indices_vec_start_idx));
++  }
++
++  template <typename InputType, typename IndexType>
++  bool DoRunWithType2() {
++    CAFFE_ENFORCE_EQ(
++        InputSize() % 3,
++        0,
++        "Operator input must consist of 3 equal vectors: TablesVec, IndicesVec and LengthsVec.");
++
++    auto indices_vec_start_idx = block_size_;
++    auto lengths_vec_start_idx = indices_vec_start_idx + block_size_;
++
++    indices_blocked_.clear();
++    lengths_blocked_.clear();
++    for (int i = 0; i < block_size_; ++i) {
++      auto& indicesInput = Input(indices_vec_start_idx + i);
++      auto& lengthsInput = Input(lengths_vec_start_idx + i);
++
++      auto indices = axdimm::make_view(
++          indicesInput.template data<IndexType>(), indicesInput.numel());
++      auto lengths = axdimm::make_view(
++          lengthsInput.template data<int>(), lengthsInput.numel());
++
++      CAFFE_ENFORCE_GT(indices.size(), 0, "indicesInput can't be empty");
++      CAFFE_ENFORCE_EQ(1, indicesInput.dim(), "INDICES must be a vector");
++      CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
++
++      if (*lengths.begin() != num_indices_per_lookup_[i]) {
++        CAFFE_ENFORCE_EQ(
++            num_indices_per_lookup_[i],
++            0,
++            "Multiple axd_init calls are not supported at the moment.");
++        num_indices_per_lookup_[i] = *lengths.begin();
++      }
++
++      std::copy(
++          indices.begin(), indices.end(), std::back_inserter(indices_blocked_));
++      std::copy(
++          lengths.begin(), lengths.end(), std::back_inserter(lengths_blocked_));
++    }
++
++    const auto minibatch_size = Input(lengths_vec_start_idx).size(0);
++
++    auto* output = Output(
++        0,
++        {minibatch_size, block_size_ * sparse_feature_size_},
++        at::dtype<T>());
++
++    T* output_buf = output->template data<T>();
++
++    auto output_view = axdimm::make_view(
++        output_buf,
++        output_buf + minibatch_size * block_size_ * sparse_feature_size_);
++
++    auto status = runner_.run(
++        minibatch_size,
++        axdimm::make_view(std::cref(lengths_blocked_).get()),
++        axdimm::make_view(std::cref(indices_blocked_).get()),
++        axdimm::view_cast<uint8_t>(output_view));
++
++    auto output_int_v = axdimm::view_cast<uint32_t>(output_view);
++
++    if constexpr (SecureTypeTraits<T>::apply_scale) {
++      std::transform(
++          output_int_v.begin(),
++          output_int_v.end(),
++          output_view.begin(),
++          [this](const auto v) {
++            return static_cast<T>(v) / SecureTypeTraits<T>::SCALE_FACTOR;
++          }); // Restore floating point values
++    }
++
++    return status;
++  }
++
++ private:
++  using secure_core_value_type =
++      typename SecureTypeTraits<T>::secure_engine_value_t;
++
++  void init_secure_runner(
++      uint64_t sparse_feature_size,
++      axdimm::common_view<const uint64_t> rows,
++      axdimm::common_view<const secure_core_value_type> data) {
++    axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
++        .rows = rows, .sparse_feature_size = sparse_feature_size});
++    runner_.init(&args);
++    runner_.load_tables(data.begin(), rows, sparse_feature_size, false);
++  }
++
++  void init_from_file();
++
++  void init_from_input();
++
++  std::vector<uint32_t> indices_blocked_; // Concatenated indices arrays
++  std::vector<uint32_t> lengths_blocked_; // Concatenated lengths arrays
++
++  int block_size_{}; // Number of tables/indices/lengths to be blocked
++  std::vector<uint32_t>
++      num_indices_per_lookup_; // Number of indices per one SLS lookup (we have
++                               // "block_size_" of them).
++
++  int64_t sparse_feature_size_{};
++  std::vector<uint64_t> rows_;
++
++  SecureRunner runner_;
++};
++
++template <
++    typename T,
++    typename InputTypes,
++    typename SecureRunner,
++    typename Context>
++void AXDIMMSecureSparseLengthsReductionOpVec<
++    T,
++    InputTypes,
++    SecureRunner,
++    Context>::init_from_file() {
++  block_size_ = this->template GetSingleArgument<int>("num_tables", 0);
++  CAFFE_ENFORCE_NE(
++      block_size_, 0, "The number of tables should be greater than 0");
++
++  sparse_feature_size_ =
++      this->template GetSingleArgument<uint64_t>("sparse_feature_size", 0);
++  CAFFE_ENFORCE_NE(
++      sparse_feature_size_,
++      0,
++      "The sparse feature size should be greater than 0");
++
++  auto path = this->template GetSingleArgument<std::string>("path", "");
++  CAFFE_ENFORCE(!path.empty(), "Empty file path");
++
++  rows_ = this->template GetRepeatedArgument<uint64_t>("rows", {});
++  CAFFE_ENFORCE_NE(rows_.size(), 0, "Empty rows array");
++
++  auto fd = open(path.c_str(), O_RDONLY);
++  CAFFE_ENFORCE_NE(fd, -1, "Fail to open embedded tables file");
++
++  const auto tables_size =
++      std::accumulate(rows_.begin(), rows_.end(), 0ULL) * sparse_feature_size_;
++
++  auto data =
++      mmap(nullptr, tables_size * sizeof(T), PROT_READ, MAP_PRIVATE, fd, 0);
++  CAFFE_ENFORCE_NE(data, MAP_FAILED, "Fail to map embedded tables file");
++
++  auto data_v = axdimm::make_view(
++      static_cast<const T*>(data), static_cast<const T*>(data) + tables_size);
++
++  if constexpr (SecureTypeTraits<T>::apply_scale) {
++    std::vector<secure_core_value_type> qdata(tables_size);
++    std::transform(
++        data_v.begin(), data_v.end(), qdata.begin(), [](const auto v) {
++          return static_cast<secure_core_value_type>(
++              v * SecureTypeTraits<T>::SCALE_FACTOR); // Transform floating
++                                                      // point values to integer
++        });
++    init_secure_runner(
++        sparse_feature_size_,
++        axdimm::make_view(std::cref(rows_).get()),
++        axdimm::make_view(std::cref(qdata).get()));
++  } else {
++    init_secure_runner(
++        sparse_feature_size_,
++        axdimm::make_view(std::cref(rows_).get()),
++        data_v);
++  }
++
++  CAFFE_ENFORCE_EQ(
++      munmap(data, tables_size * sizeof(T)), 0, "Fail to unmap file");
++}
++
++template <
++    typename T,
++    typename InputTypes,
++    typename SecureRunner,
++    typename Context>
++void AXDIMMSecureSparseLengthsReductionOpVec<
++    T,
++    InputTypes,
++    SecureRunner,
++    Context>::init_from_input() {
++  // Setup input pointers for tables/indices/lengths. The input comes in
++  // following format:
++  //    N := block_size_
++  //    [T1, T2, ..., TN, I1, I2, ..., IN, L1, L2, ..., LN]
++  CAFFE_ENFORCE_EQ(InputSize() % 3, 0, "InputSize should divided by 3");
++  block_size_ = InputSize() / 3;
++
++  sparse_feature_size_ = Input(0).size_from_dim(1);
++
++  std::vector<secure_core_value_type> qdata;
++
++  rows_.resize(block_size_);
++  for (int i = 0; i < block_size_; ++i) {
++    rows_[i] = Input(i).size(0);
++    std::transform(
++        Input(i).template data<T>(),
++        Input(i).template data<T>() + rows_[i] * sparse_feature_size_,
++        std::back_inserter(qdata),
++        [](const auto v) {
++          if constexpr (SecureTypeTraits<T>::apply_scale)
++            return static_cast<secure_core_value_type>(
++                v * SecureTypeTraits<T>::SCALE_FACTOR);
++          else
++            return v;
++        });
++  }
++
++  init_secure_runner(
++      sparse_feature_size_,
++      axdimm::make_view(std::cref(rows_).get()),
++      axdimm::make_view(std::cref(qdata).get()));
++}
++} // namespace caffe2
++
++#endif // AXDIMM_PYTORCH_LENGTHS_REDUCER_OPS_SEC_AXDIMM_H
+-- 
+2.34.1
+

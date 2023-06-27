@@ -1,0 +1,30 @@
+From cd743064bd82bfd3b53fd628213f4df92d00cf68 Mon Sep 17 00:00:00 2001
+From: "s.koval" <s.koval@samsung.com>
+Date: Mon, 5 Sep 2022 13:05:30 +0300
+Subject: [PATCH 067/128] [caffe2] Process zero layout descriptor
+
+* Check whether table layout descriptor is zero
+
+Relates to: AXDIMM-380
+
+Signed-off-by: Semyon Koval <s.koval@samsung.com>
+---
+ caffe2/python/pybind_state_axdimm.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 5af25d39..47124921 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -86,6 +86,8 @@ void addAXDIMMGlobalMethods(py::module& m) {
+             row_size_in_bytes,
+             static_cast<axd_user_preferences>(mem_preference));
+ 
++        CAFFE_ENFORCE_NE(0, descriptor, "AXDIMM memory allocation failure");
++
+         load_tables(base_device, weight_file, descriptor);
+         return descriptor;
+       });
+-- 
+2.34.1
+

@@ -1,0 +1,100 @@
+From 547b203183907a04759d62de77c621797b7dd933 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 3 Nov 2021 12:43:13 +0900
+Subject: [PATCH 019/128] [caffe2/python] Add missed AXDIMM support in python
+
+* support AXDIMM in 'extension_loader.DlopenGuard'
+* add caffe2_pb2.AXDIMM initialization in __init__.py
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/python/__init__.py             |  1 +
+ caffe2/python/_import_c_extension.py  | 17 ++++++++++++-----
+ caffe2/python/_import_c_extension.pyi |  1 +
+ caffe2/python/workspace.py            |  4 ++++
+ 4 files changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/caffe2/python/__init__.py b/caffe2/python/__init__.py
+index 888d2864..ec7fdf20 100644
+--- a/caffe2/python/__init__.py
++++ b/caffe2/python/__init__.py
+@@ -18,6 +18,7 @@ caffe2_pb2.OPENGL = caffe2_pb2.PROTO_OPENGL
+ caffe2_pb2.OPENCL = caffe2_pb2.PROTO_OPENCL
+ caffe2_pb2.IDEEP = caffe2_pb2.PROTO_IDEEP
+ caffe2_pb2.HIP = caffe2_pb2.PROTO_HIP
++caffe2_pb2.AXDIMM = caffe2_pb2.PROTO_AXDIMM
+ caffe2_pb2.COMPILE_TIME_MAX_DEVICE_TYPES = caffe2_pb2.PROTO_COMPILE_TIME_MAX_DEVICE_TYPES
+ 
+ if sys.platform == "win32":
+diff --git a/caffe2/python/_import_c_extension.py b/caffe2/python/_import_c_extension.py
+index 32b9ec34..432c5c8b 100644
+--- a/caffe2/python/_import_c_extension.py
++++ b/caffe2/python/_import_c_extension.py
+@@ -9,6 +9,7 @@ from caffe2.python import extension_loader
+ # attempt to load the cpu version. The cpu backend is the minimum required, so
+ # if that still fails, we will exit loud.
+ with extension_loader.DlopenGuard():
++    has_axdimm_support = False
+     has_hip_support = False
+     has_cuda_support = False
+     has_gpu_support = False
+@@ -34,11 +35,17 @@ with extension_loader.DlopenGuard():
+                 'and AMD hip module:{}.'
+                 'Will run in CPU only mode.'.format(gpu_e, hip_e))
+             try:
+-                from caffe2.python.caffe2_pybind11_state import *  # noqa
+-            except ImportError as cpu_e:
+-                logging.critical(
+-                    'Cannot load caffe2.python. Error: {0}'.format(str(cpu_e)))
+-                sys.exit(1)
++                from caffe2.python.caffe2_pybind11_state_axdimm import *  # noqa
++                has_axdimm_support = True
++                logging.info('This caffe2 python run has AXDIMM support!')
++            except ImportError as axdimm_e:
++                logging.info('Failed to import AXDIMM module: {}'.format(axdimm_e))
++                try:
++                    from caffe2.python.caffe2_pybind11_state import *  # noqa
++                except ImportError as cpu_e:
++                    logging.critical(
++                        'Cannot load caffe2.python. Error: {0}'.format(str(cpu_e)))
++                    sys.exit(1)
+ 
+ # libcaffe2_python contains a global Workspace that we need to properly delete
+ # when exiting. Otherwise, cudart will cause segfaults sometimes.
+diff --git a/caffe2/python/_import_c_extension.pyi b/caffe2/python/_import_c_extension.pyi
+index 3ea458ef..5d6efb0c 100644
+--- a/caffe2/python/_import_c_extension.pyi
++++ b/caffe2/python/_import_c_extension.pyi
+@@ -221,6 +221,7 @@ def num_hip_devices() -> int: ...
+ def get_hip_version() -> int: ...
+ def get_miopen_version() -> int: ...
+ 
++has_axdimm_support: bool
+ has_hip_support: bool
+ has_cuda_support: bool
+ has_gpu_support: bool
+diff --git a/caffe2/python/workspace.py b/caffe2/python/workspace.py
+index 97f64b06..079e6be1 100644
+--- a/caffe2/python/workspace.py
++++ b/caffe2/python/workspace.py
+@@ -49,6 +49,7 @@ has_fbgemm = C.has_fbgemm
+ has_cuda_support = C.has_cuda_support
+ has_hip_support = C.has_hip_support
+ has_gpu_support = C.has_gpu_support
++has_axdimm_support = C.has_axdimm_support
+ if has_cuda_support:
+     GpuDeviceType = caffe2_pb2.CUDA
+     NumCudaDevices = C.num_cuda_devices
+@@ -93,6 +94,9 @@ if not has_gpu_support:
+     # pyre-fixme[9]: incompatible type assignment
+     GetGPUMemoryInfo = lambda: None # noqa
+ 
++if has_axdimm_support:
++    AXDIMMDeviceType = caffe2_pb2.AXDIMM
++
+ IsNUMAEnabled = C.is_numa_enabled
+ GetNumNUMANodes = C.get_num_numa_nodes
+ GetBlobNUMANode = C.get_blob_numa_node
+-- 
+2.34.1
+

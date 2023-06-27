@@ -1,0 +1,30 @@
+From fb1d6e27f53329d2950d9565fa02606a20fabc43 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 6 Jul 2023 09:11:45 +0000
+Subject: [PATCH 161/161] [sls_resource][hotfix] Fix sls_memdev_path
+
+SLS_MEMDEV_PATH was corrupted due to path refactoring
+This commit return SLS_MEMDEV_PATH changes
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ include/uapi/linux/sls_resources.h | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 1f4e842da..cfada1822 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -50,8 +50,7 @@
+ 	"/dev/" SLS_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
+ 
+ /* Path to SLS memory device */
+-#define SLS_MEMDEV_PATH \
+-	"/dev/" SLS_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
++#define SLS_MEMDEV_PATH "/dev/sls_device"
+ 
+ /* Path to DAX device */
+ #define DAX_PATH "/dev/dax0.0"
+-- 
+2.34.1
+

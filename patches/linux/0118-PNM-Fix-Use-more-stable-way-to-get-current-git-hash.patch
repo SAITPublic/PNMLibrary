@@ -1,0 +1,28 @@
+From 9df20f469e13a834024693200d303a8720833c38 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Tue, 6 Jun 2023 15:27:05 +0300
+Subject: [PATCH 118/161] [PNM][Fix] Use more stable way to get current git
+ hash
+
+* The previous one doesn't work well, for example, when adding tags.
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/sls_resource/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index c0f1ffb6d..7feefca8f 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -1,6 +1,6 @@
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource.o
+ 
+-CFLAGS_sls.o += -DSLS_DRIVER_VERSION=\"$(shell git describe --first-parent --abbrev=0 --dirty --always)\"
++CFLAGS_sls.o += -DSLS_DRIVER_VERSION=\"$(shell git rev-parse --short HEAD)\"
+ sls_resource-y := resource.o
+ sls_resource-y += sls.o
+ sls_resource-y += sls_allocator.o
+-- 
+2.34.1
+

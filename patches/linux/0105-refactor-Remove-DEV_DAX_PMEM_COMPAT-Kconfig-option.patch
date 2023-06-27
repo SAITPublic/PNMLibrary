@@ -1,0 +1,66 @@
+From c7af9a76827e42f50751336e7ce18e3dcf955e1c Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Fri, 28 Apr 2023 12:19:46 +0300
+Subject: [PATCH 105/161] [refactor] Remove DEV_DAX_PMEM_COMPAT Kconfig option
+
+Remove forementioned option, since it triggers checkpatch
+warning, while not more used.
+
+Resolves: MCS23-292
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md |  1 -
+ config-axdimm       |  1 -
+ drivers/dax/Kconfig | 11 -----------
+ 3 files changed, 13 deletions(-)
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 964805de4..43d68a4ce 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -15,7 +15,6 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+     PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
+   HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
+   KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+-  PMEM DAX: support the deprecated /sys/class/dax interface (DEV_DAX_PMEM_COMPAT) [N/m/?] n
+   A base physical address of AXDIMM range in gigabytes (AXDIMM_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
+   A scale of AXDIMM memory range (AXDIMM_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 1 for simulation 32GB range, 0 for FPGA)
+ ```
+diff --git a/config-axdimm b/config-axdimm
+index fc1fdc572..cf86a2ad8 100644
+--- a/config-axdimm
++++ b/config-axdimm
+@@ -10011,7 +10011,6 @@ CONFIG_DEV_DAX_PMEM=m
+ CONFIG_DEV_DAX_HMEM=m
+ CONFIG_DEV_DAX_HMEM_DEVICES=y
+ CONFIG_DEV_DAX_KMEM=m
+-# CONFIG_DEV_DAX_PMEM_COMPAT is not set
+ CONFIG_AXDIMM=y
+ CONFIG_AXDIMM_RESOURCE=m
+ CONFIG_DBA=y
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 328901f3e..63891fd9c 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -66,17 +66,6 @@ config DEV_DAX_KMEM
+ 
+ 	  Say N if unsure.
+ 
+-config DEV_DAX_PMEM_COMPAT
+-	tristate "PMEM DAX: tools compatibility"
+-	depends on m && DEV_DAX_PMEM=m
+-	default DEV_DAX_PMEM
+-	help
+-	  Support the deprecated /sys/class/dax interface
+-
+-	  Older versions of the libdaxctl library expect to find all
+-	  device-dax instances under /sys/class/dax. If libdaxctl in
+-	  your distribution is older than v58 say M, otherwise say N.
+-
+ config AXDIMM
+ 	bool "AXDIMM support"
+ 	depends on DEV_DAX || DEV_DAX=m
+-- 
+2.34.1
+

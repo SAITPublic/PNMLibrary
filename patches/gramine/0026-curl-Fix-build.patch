@@ -1,0 +1,32 @@
+From 5461d16d802ba59c180eb31b69c341883024aacf Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Tue, 25 Jul 2023 09:41:37 +0000
+Subject: [PATCH 26/27] [curl] Fix build
+
+Workaround for gramineproject/gramine#1459.
+
+Temporarily export dependency as installable before we get proper fix in upstream.
+
+Related to MCS23-1394
+
+Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>
+---
+ subprojects/packagefiles/curl-7.84.0/meson.build | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/subprojects/packagefiles/curl-7.84.0/meson.build b/subprojects/packagefiles/curl-7.84.0/meson.build
+index e164c040..067874e2 100644
+--- a/subprojects/packagefiles/curl-7.84.0/meson.build
++++ b/subprojects/packagefiles/curl-7.84.0/meson.build
+@@ -15,6 +15,8 @@ curl = custom_target('curl',
+ 
+     depends: subproject('mbedtls-mbedtls-3.4.0').get_variable('mbedtls_curl_libs'),
+     output: curl_libs_output,
++    install: true,
++    install_dir: get_option('libdir') / 'curl',
+ )
+ 
+ curl_minimal_dep = declare_dependency(
+-- 
+2.34.1
+

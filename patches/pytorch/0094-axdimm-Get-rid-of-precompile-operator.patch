@@ -1,0 +1,512 @@
+From a5e34af8dbcbaf82433723e449448b7be4955154 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 24 Nov 2022 12:55:53 +0300
+Subject: [PATCH 094/128] [axdimm] Get rid of precompile operator
+
+Remove functionals for precompile operators to fix latest AXDIMM API.
+
+Resolve: AXDIMM-480
+---
+ .../native/axdimm/AxdimmPrecompiledOp.cpp     | 79 -------------------
+ .../ATen/native/axdimm/AxdimmPrecompiledOp.h  | 47 -----------
+ .../ATen/native/axdimm/AxdimmSecureTensor.cpp |  9 +--
+ .../ATen/native/axdimm/AxdimmSecureTensor.h   |  4 -
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   | 37 +++------
+ aten/src/ATen/native/axdimm/ops/Factory.cpp   |  8 +-
+ .../operators/lengths_reducer_ops_axdimm.cc   | 21 -----
+ .../lengths_reducer_ops_sec_axdimm.h          | 15 ++--
+ torch/nn/modules/sparse.py                    | 10 +--
+ 9 files changed, 25 insertions(+), 205 deletions(-)
+ delete mode 100644 aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp
+ delete mode 100644 aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.h
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp b/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp
+deleted file mode 100644
+index 7baf8c07..00000000
+--- a/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp
++++ /dev/null
+@@ -1,79 +0,0 @@
+-#include <ATen/native/axdimm/AxdimmPrecompiledOp.h>
+-#include <ATen/native/axdimm/AxdimmTensorConvert.h>
+-
+-#include <algorithm>
+-
+-namespace at {
+-namespace native {
+-namespace axdimm {
+-
+-std::unordered_map<intptr_t, OpPtr> AxdimmPrecompiledOp::g_precompiled_ops_;
+-
+-AxdimmPrecompiledOp::AxdimmPrecompiledOp(
+-    const at::Tensor& weights,
+-    const at::Tensor& offsets) {
+-  const auto num_tables = offsets.sizes()[0];
+-  const auto minibatch_size = offsets.sizes()[1] - 1;
+-  const AxdimmTensor& ten = convert<AxdimmTensor>(weights);
+-  lookups_.reserve(num_tables);
+-
+-  auto batch = static_cast<const uint32_t*>(offsets.data_ptr());
+-  for (size_t table_idx = 0; table_idx < num_tables; ++table_idx) {
+-    lookups_.push_back(batch[1]);
+-    batch += minibatch_size + 1;
+-  }
+-
+-  TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
+-      std::adjacent_find(
+-          std::begin(lookups_), std::end(lookups_), std::not_equal_to<>()) ==
+-      std::end(lookups_));
+-
+-  op_id_ = create_precompiled_op(
+-      minibatch_size,
+-      ten.get_sparse_feature_size(),
+-      ten.get_num_tables(),
+-      const_cast<uint32_t*>(ten.get_tables_rows_num().data()),
+-      lookups_.data(),
+-      ten.get_tables_layout(),
+-      ten.get_sls_type());
+-}
+-
+-AxdimmPrecompiledOp::~AxdimmPrecompiledOp() {
+-  g_precompiled_ops_.erase(op_id_);
+-}
+-
+-intptr_t AxdimmPrecompiledOp::get_precompiled_op_id() const {
+-  return op_id_;
+-}
+-
+-AxdimmOperation* AxdimmPrecompiledOp::get_precompiled_op_by_id(
+-    intptr_t id) {
+-  auto op_it = g_precompiled_ops_.find(id);
+-  TORCH_INTERNAL_ASSERT(
+-      op_it != std::end(g_precompiled_ops_),
+-      "Precompiled operation should exist");
+-  return op_it->second.get();
+-}
+-
+-template <typename... Args>
+-intptr_t AxdimmPrecompiledOp::create_precompiled_op(Args&&... args) {
+-  auto op_ptr = OpPtr(
+-      axdimm_create_sls_op(std::forward<Args>(args)...),
+-      [](AxdimmOperation* op) { axdimm_destroy_op(op); });
+-  TORCH_CHECK(op_ptr, "Failed to create AxdimmOperation");
+-  auto op_id = reinterpret_cast<intptr_t>(op_ptr.get());
+-  g_precompiled_ops_.emplace(op_id, std::move(op_ptr));
+-  return op_id;
+-}
+-
+-TORCH_LIBRARY(axdimm_helpers, m) {
+-  m.class_<AxdimmPrecompiledOp>("AxdimmPrecompiledOp")
+-      .def(torch::init<const at::Tensor&, const at::Tensor&>())
+-      .def(
+-          "get_precompiled_op_id",
+-          &AxdimmPrecompiledOp::get_precompiled_op_id);
+-}
+-
+-} // namespace axdimm
+-} // namespace native
+-} // namespace at
+diff --git a/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.h b/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.h
+deleted file mode 100644
+index 9265ab44..00000000
+--- a/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.h
++++ /dev/null
+@@ -1,47 +0,0 @@
+-#ifndef __AXDIMM_OPERATIONS_STORAGE__
+-#define __AXDIMM_OPERATIONS_STORAGE__
+-
+-#include "ai/api/axdimm.h"
+-
+-#include <ATen/native/axdimm/AxdimmTensor.h>
+-
+-#include <functional>
+-#include <memory>
+-#include <unordered_map>
+-
+-namespace at {
+-namespace native {
+-namespace axdimm {
+-
+-using OpPtr =
+-    std::unique_ptr<AxdimmOperation, std::function<void(AxdimmOperation*)>>;
+-
+-/*!
+- * Class for precompiled axdimm operations management.
+- * Available in python via: torch.classes.axdimm_helpers.AxdimmPrecompiledOp
+- */
+-class AxdimmPrecompiledOp : public torch::CustomClassHolder {
+- public:
+-  AxdimmPrecompiledOp(const at::Tensor& weights, const at::Tensor& offsets);
+-  ~AxdimmPrecompiledOp() override;
+-
+-  intptr_t get_precompiled_op_id() const;
+-  static AxdimmOperation* get_precompiled_op_by_id(intptr_t id);
+-
+- private:
+-  template <typename... Args>
+-  static intptr_t create_precompiled_op(Args&&... args);
+-
+-  std::vector<uint32_t> lookups_;
+-  intptr_t op_id_{-1};
+-
+-  // Global state is required to store precompiled operations,
+-  // since there's no simple way to pass operation object to aten operator
+-  static std::unordered_map<intptr_t, OpPtr> g_precompiled_ops_;
+-};
+-
+-} // namespace axdimm
+-} // namespace native
+-} // namespace at
+-
+-#endif
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+index b766b440..92deb726 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+@@ -19,7 +19,6 @@ AxdimmSecureTensor::AxdimmSecureTensor(
+     uint32_t num_tables,
+     uint32_t sparse_feature_size,
+     axd_user_preferences preference,
+-    bool precompile,
+     bool with_tag)
+     : AxdimmBaseTensor(
+           weights_path,
+@@ -29,7 +28,6 @@ AxdimmSecureTensor::AxdimmSecureTensor(
+           num_tables,
+           sparse_feature_size,
+           preference),
+-      precompile_(precompile),
+       with_tag_(with_tag) {
+   load(mmap_weights_file());
+ }
+@@ -41,7 +39,6 @@ AxdimmSecureTensor::AxdimmSecureTensor(
+     uint32_t features_per_table,
+     uint32_t sparse_feature_size,
+     axd_user_preferences preference,
+-    bool precompile,
+     bool with_tag)
+     : AxdimmBaseTensor(
+           weights,
+@@ -50,7 +47,6 @@ AxdimmSecureTensor::AxdimmSecureTensor(
+           features_per_table,
+           sparse_feature_size,
+           preference),
+-      precompile_(precompile),
+       with_tag_(with_tag) {
+   check_params(weights);
+   load(weights.data_ptr());
+@@ -60,7 +56,6 @@ AxdimmSecureTensor::AxdimmSecureTensor(
+     const at::Tensor& weights,
+     AxdimmTensorType type,
+     axd_user_preferences preference,
+-    bool precompile,
+     bool with_tag)
+     : AxdimmBaseTensor(
+           weights,
+@@ -69,7 +64,6 @@ AxdimmSecureTensor::AxdimmSecureTensor(
+           weights.sizes()[1],
+           weights.sizes()[2],
+           preference),
+-      precompile_(precompile),
+       with_tag_(with_tag) {
+   check_params(weights);
+   load(weights.data_ptr());
+@@ -111,8 +105,7 @@ void AxdimmSecureTensor::load(const void* weights_data) {
+           .rows = rows_view,
+           .sparse_feature_size = sparse_feature_size_,
+           .with_tag = with_tag_,
+-          .preference = static_cast<axd_user_preferences>(preference_),
+-          .cache_exec_context = precompile_});
++          .preference = static_cast<axd_user_preferences>(preference_)});
+   runner_->init(&args);
+ 
+   if (scalar_type_ == torch::kFloat32) {
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+index 98776725..c081824a 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+@@ -26,7 +26,6 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+       uint32_t num_tables,
+       uint32_t sparse_feature_size,
+       axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
+-      bool precompile = true,
+       bool with_tag = false);
+   AxdimmSecureTensor(
+       const at::Tensor& tables,
+@@ -35,14 +34,12 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+       uint32_t features_per_table,
+       uint32_t sparse_feature_size,
+       axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
+-      bool precompile = true,
+       bool with_tag = false);
+ 
+   AxdimmSecureTensor(
+       const at::Tensor& weights,
+       AxdimmTensorType type,
+       axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
+-      bool precompile = true,
+       bool with_tag = false);
+ 
+   bool with_tag() const {
+@@ -73,7 +70,6 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+   std::shared_ptr<::axdimm::secure::ISecureRunner> runner_;
+   // [TODO AXDIMM-477: refactor secure part to use uint32_t tables length]
+   std::vector<uint64_t> rows_;
+-  bool precompile_;
+   bool with_tag_;
+ };
+ 
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index 99e53a7c..ba9ed544 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -1,4 +1,3 @@
+-#include <ATen/native/axdimm/AxdimmPrecompiledOp.h>
+ #include <ATen/native/axdimm/AxdimmTensorConvert.h>
+ 
+ #include <torch/autograd.h>
+@@ -32,24 +31,16 @@ at::Tensor embedding_bag_forward_simple_impl(
+     const at::Tensor& indices,
+     ::axdimm::common_view<const uint32_t> lengths_view,
+     ::axdimm::common_view<uint8_t> output_view,
+-    uint32_t minibatch_size,
+-    c10::optional<int64_t> precompiled_op_id) {
++    uint32_t minibatch_size) {
+   const AxdimmTensor& ten = convert<AxdimmTensor>(weights);
+   const auto& tables_rows_num = ten.get_tables_rows_num();
+-  AxdimmOperation* sls_op{};
+-  if (precompiled_op_id) {
+-    sls_op = AxdimmPrecompiledOp::get_precompiled_op_by_id(*precompiled_op_id);
+-    axdimm_precompile_op(sls_op, ten.get_device());
+-  } else {
+-    sls_op = axdimm_create_sls_op(
+-        minibatch_size,
+-        ten.get_sparse_feature_size(),
+-        ten.get_num_tables(),
+-        const_cast<uint32_t*>(tables_rows_num.data()),
+-        nullptr,
+-        ten.get_tables_layout(),
+-        ten.get_sls_type());
+-  }
++  AxdimmOperation* sls_op = axdimm_create_sls_op(
++      minibatch_size,
++      ten.get_sparse_feature_size(),
++      ten.get_num_tables(),
++      const_cast<uint32_t*>(tables_rows_num.data()),
++      ten.get_tables_layout(),
++      ten.get_sls_type());
+ 
+   auto status = axdimm_run_sls(
+       sls_op,
+@@ -119,8 +110,7 @@ at::Tensor embedding_bag_forward_secure_impl(
+ at::Tensor embedding_bag_forward_only_axdimm(
+     const at::Tensor& weights,
+     const at::Tensor& indices,
+-    const at::Tensor& offsets,
+-    c10::optional<int64_t> precompiled_op_id) {
++    const at::Tensor& offsets) {
+   TORCH_INTERNAL_ASSERT(weights.is_axdimm());
+   TORCH_CHECK(indices.is_cpu(), "Indices must be CPU tensor");
+   TORCH_CHECK(offsets.is_cpu(), "Offsets must be CPU tensor");
+@@ -159,12 +149,7 @@ at::Tensor embedding_bag_forward_only_axdimm(
+         weights, indices, lengths_view, output_view, minibatch_size);
+   } else if (base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SIMPLE) {
+     return embedding_bag_forward_simple_impl(
+-        weights,
+-        indices,
+-        lengths_view,
+-        output_view,
+-        minibatch_size,
+-        precompiled_op_id);
++        weights, indices, lengths_view, output_view, minibatch_size);
+   } else {
+     TORCH_CHECK(false, "Unsupported Axdimm tensor type");
+   }
+@@ -174,7 +159,7 @@ at::Tensor embedding_bag_forward_only_axdimm(
+ // (aten)
+ TORCH_LIBRARY_FRAGMENT(aten, m) {
+   m.def(
+-      "aten::embedding_bag_forward_only_axdimm(Tensor weights, Tensor indices, Tensor offsets, int? precompiled_op_id=None) -> Tensor");
++      "aten::embedding_bag_forward_only_axdimm(Tensor weights, Tensor indices, Tensor offsets) -> Tensor");
+ }
+ 
+ TORCH_LIBRARY_IMPL(aten, AXDIMM, m) {
+diff --git a/aten/src/ATen/native/axdimm/ops/Factory.cpp b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+index aedbde7a..8c7e5931 100644
+--- a/aten/src/ATen/native/axdimm/ops/Factory.cpp
++++ b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+@@ -83,7 +83,6 @@ at::Tensor create_tensor_from_weights(
+     int64_t features_per_table,
+     int64_t sparse_feature_size,
+     int64_t allocation_preference,
+-    c10::optional<bool> precompile = true,
+     c10::optional<bool> with_tag = {}) {
+   std::shared_ptr<AxdimmBaseTensor> tensor;
+   const auto tensor_type = get_tensor_type(tensor_type_name);
+@@ -105,7 +104,6 @@ at::Tensor create_tensor_from_weights(
+           features_per_table,
+           sparse_feature_size,
+           static_cast<axd_user_preferences>(allocation_preference),
+-          *precompile,
+           *with_tag);
+       break;
+   }
+@@ -125,7 +123,6 @@ at::Tensor create_tensor_from_file(
+     int64_t num_tables,
+     int64_t sparse_feature_size,
+     int64_t allocation_preference,
+-    c10::optional<bool> precompile = true,
+     c10::optional<bool> with_tag = {}) {
+   std::shared_ptr<AxdimmBaseTensor> tensor;
+   const auto tensor_type = get_tensor_type(tensor_type_name);
+@@ -149,7 +146,6 @@ at::Tensor create_tensor_from_file(
+           num_tables,
+           sparse_feature_size,
+           static_cast<axd_user_preferences>(allocation_preference),
+-          *precompile,
+           *with_tag);
+       break;
+   }
+@@ -161,10 +157,10 @@ at::Tensor create_tensor_from_file(
+ TORCH_LIBRARY(axdimm, m) {
+   m.def(TORCH_SELECTIVE_SCHEMA(
+       "axdimm::create_tensor.from_weights(str tensor_type_name, Tensor weights, int num_tables, int features_per_table,"
+-      "int sparse_feature_size, int allocation_preference, bool? precompile = True, bool? with_tag = False) -> Tensor"));
++      "int sparse_feature_size, int allocation_preference, bool? with_tag = False) -> Tensor"));
+   m.def(TORCH_SELECTIVE_SCHEMA(
+       "axdimm::create_tensor.from_file(str tensor_type_name, str weights_file_path, ScalarType scalar_type,"
+-      "Tensor tables_rows_num, int num_tables, int sparse_feature_size, int allocation_preference, bool? precompile = True, bool? with_tag = False) -> Tensor"));
++      "Tensor tables_rows_num, int num_tables, int sparse_feature_size, int allocation_preference, bool? with_tag = False) -> Tensor"));
+ }
+ 
+ TORCH_LIBRARY_IMPL(axdimm, CPU, m) {
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 7baca708..e79cef36 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -143,9 +143,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     tables_vec_start_idx_ = 0;
+     indices_vec_start_idx_ = tables_vec_start_idx_ + block_size_;
+     lengths_vec_start_idx_ = indices_vec_start_idx_ + block_size_;
+-    num_indices_per_lookup_.resize(block_size_);
+-    std::fill(
+-        num_indices_per_lookup_.begin(), num_indices_per_lookup_.end(), 0);
+ 
+     tables_descriptor_ = this->template GetSingleArgument<uint64_t>(
+         "tables_layout_descriptor", 0);
+@@ -225,17 +222,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       CAFFE_ENFORCE_EQ(1, indicesInput.dim(), "INDICES must be a vector");
+       CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
+       (void)dataInput;
+-
+-      const uint32_t* lengths =
+-          reinterpret_cast<uint32_t*>(lengthsInput.template data<int>());
+-
+-      if (lengths[0] != num_indices_per_lookup_[i]) {
+-        CAFFE_ENFORCE_EQ(
+-            num_indices_per_lookup_[i],
+-            0,
+-            "Multiple axd_init calls are not supported at the moment.");
+-        num_indices_per_lookup_[i] = lengths[0];
+-      }
+     }
+ 
+     // 2) Create SLS operation on first call.
+@@ -255,12 +241,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+           D,
+           block_size_,
+           table_entry_list.data(),
+-          num_indices_per_lookup_.data(),
+           tables_layout_,
+           AXDIMM_SLS_FLOAT);
+-
+-      // Precompile for better performance.
+-      axdimm_precompile_op(sls_op_, device_);
+     }
+ 
+     // 3.1) If new operator invocation consumes more memory for indices,
+@@ -394,9 +376,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   char* lengths_blocked_ = nullptr; // Concatenated lengths arrays
+ 
+   int block_size_; // Number of tables/indices/lengths to be blocked
+-  std::vector<uint32_t>
+-      num_indices_per_lookup_; // Number of indices per one SLS lookup (we have
+-                               // "block_size_" of them).
+ 
+   int tables_vec_start_idx_; // Starting input index for tables blobs
+   int indices_vec_start_idx_; // Starting input index for indices blobs
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 59b3705a..60ca65ce 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -36,7 +36,8 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       LOG(WARNING) << "Secure operator works only with integer types. "
+                       "The floating values will be converted to integer "
+                       "by expression I = static_cast<I>(F * "
+-                   << ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR << " )";
++                   << ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR
++                   << " )";
+     }
+     with_tag_ = this->template GetSingleArgument<bool>("with_tag", false);
+     if (with_tag_) {
+@@ -144,7 +145,8 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+           output_int_v.end(),
+           output_view.begin(),
+           [this](const auto v) {
+-            return static_cast<T>(v) / ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR;
++            return static_cast<T>(v) /
++                ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR;
+           }); // Restore floating point values
+     }
+ 
+@@ -180,8 +182,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+               .sparse_feature_size = sparse_feature_size,
+               .with_tag = with_tag_,
+               .preference =
+-                  static_cast<axd_user_preferences>(memory_preference),
+-              .cache_exec_context = true});
++                  static_cast<axd_user_preferences>(memory_preference)});
+       runner_.init(&args);
+     } else if constexpr (std::is_same_v<Context, CPUContext>) {
+       axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
+@@ -264,8 +265,10 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+     std::transform(
+         data_v.begin(), data_v.end(), qdata.begin(), [](const auto v) {
+           return static_cast<secure_core_value_type>(
+-              v * ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR); // Transform floating
+-                                                      // point values to integer
++              v *
++              ::at::native::axdimm::SecureTypeTraits<
++                  T>::SCALE_FACTOR); // Transform floating
++                                     // point values to integer
+         });
+     init_secure_runner(
+         sparse_feature_size_,
+diff --git a/torch/nn/modules/sparse.py b/torch/nn/modules/sparse.py
+index c3aa2e25..f8398c41 100644
+--- a/torch/nn/modules/sparse.py
++++ b/torch/nn/modules/sparse.py
+@@ -226,19 +226,13 @@ class Embedding(Module):
+ class EmbeddingBagAxdimm(Module):
+     weight: Tensor
+     op_id: int
+-    precompile: bool
+-    def __init__(self, weight, precompile = False):
++    def __init__(self, weight):
+         super(EmbeddingBagAxdimm, self).__init__()
+         self.weight = weight
+         self.op_context = None
+-        self.precompile = precompile
+-        self.op_id = None
+ 
+     def forward(self, indices: Tensor, offsets: Tensor) -> Tensor:
+-        if self.precompile and self.op_context is None:
+-            self.op_context = torch.classes.axdimm_helpers.AxdimmPrecompiledOp(self.weight, offsets)
+-            self.op_id = self.op_context.get_precompiled_op_id()
+-        return torch.ops.aten.embedding_bag_forward_only_axdimm(self.weight, indices, offsets, self.op_id)
++        return torch.ops.aten.embedding_bag_forward_only_axdimm(self.weight, indices, offsets)
+ 
+ 
+ class EmbeddingBag(Module):
+-- 
+2.34.1
+

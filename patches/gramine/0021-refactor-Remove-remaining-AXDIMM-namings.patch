@@ -1,0 +1,303 @@
+From 2e9a0c9c80a95228cc69f414bbf9976ba06bc9b1 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Fri, 19 May 2023 17:49:24 +0300
+Subject: [PATCH 21/27] [refactor] Remove remaining AXDIMM namings
+
+Resolves: MCS23-925
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ CI-Scripts/run_pytorch_test.sh                |  2 +-
+ CI-Scripts/run_tests.sh                       |  2 +-
+ .../Makefile                                  |  2 +-
+ .../secndp.manifest.template                  |  2 +-
+ pal/src/host/linux-sgx/meson.build            |  2 +-
+ pal/src/host/linux-sgx/pal_devices.c          |  6 +-
+ .../linux-sgx/{pal_axdimm.c => pal_sls.c}     | 64 +++++++++----------
+ .../linux-sgx/{pal_axdimm.h => pal_sls.h}     | 10 +--
+ 8 files changed, 45 insertions(+), 45 deletions(-)
+ rename application/{axdimm_secndp_test => sls_secndp_test}/Makefile (94%)
+ rename application/{axdimm_secndp_test => sls_secndp_test}/secndp.manifest.template (97%)
+ rename pal/src/host/linux-sgx/{pal_axdimm.c => pal_sls.c} (72%)
+ rename pal/src/host/linux-sgx/{pal_axdimm.h => pal_sls.h} (71%)
+
+diff --git a/CI-Scripts/run_pytorch_test.sh b/CI-Scripts/run_pytorch_test.sh
+index 0075d46a..ca84d708 100755
+--- a/CI-Scripts/run_pytorch_test.sh
++++ b/CI-Scripts/run_pytorch_test.sh
+@@ -11,4 +11,4 @@ TENSOR_TYPE=$3
+ DLRM_APP_DIR="$ROOT_DIR/application/pytorch/"
+ cd $DLRM_APP_DIR
+ 
+-${DLRM_PATH}/run_test.sh --weights-path $WEIGHTS_PATH --use-axdimm $TENSOR_TYPE --run-command "$GRAMINE_BINARY pytorch"
++${DLRM_PATH}/run_test.sh --weights-path $WEIGHTS_PATH --use-pnm $TENSOR_TYPE --run-command "$GRAMINE_BINARY pytorch"
+diff --git a/CI-Scripts/run_tests.sh b/CI-Scripts/run_tests.sh
+index c552e003..af869c03 100755
+--- a/CI-Scripts/run_tests.sh
++++ b/CI-Scripts/run_tests.sh
+@@ -5,7 +5,7 @@ set -e
+ 
+ gramine-sgx-gen-private-key -f
+ 
+-SECNDP_APP_DIR="$ROOT_DIR/application/axdimm_secndp_test"
++SECNDP_APP_DIR="$ROOT_DIR/application/sls_secndp_test"
+ cd $SECNDP_APP_DIR
+ make clean
+ make SGX=1
+diff --git a/application/axdimm_secndp_test/Makefile b/application/sls_secndp_test/Makefile
+similarity index 94%
+rename from application/axdimm_secndp_test/Makefile
+rename to application/sls_secndp_test/Makefile
+index ef6068a3..91c3d0b8 100644
+--- a/application/axdimm_secndp_test/Makefile
++++ b/application/sls_secndp_test/Makefile
+@@ -16,7 +16,7 @@ secndp.manifest: secndp.manifest.template
+ 	gramine-manifest \
+ 		-Dlog_level=$(GRAMINE_LOG_LEVEL) \
+ 		-Darch_libdir=$(ARCH_LIBDIR) \
+-		-Dentrypoint="${PNM_BUILD_DIR}/test/${AXDIMM_ENTRY}" \
++		-Dentrypoint="${PNM_BUILD_DIR}/test/${SLS_ENTRY}" \
+ 		-Dpnm_driver=${PNM_BUILD_DIR} \
+ 		$< > $@
+ 
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/sls_secndp_test/secndp.manifest.template
+similarity index 97%
+rename from application/axdimm_secndp_test/secndp.manifest.template
+rename to application/sls_secndp_test/secndp.manifest.template
+index be7c35ef..f25f29db 100644
+--- a/application/axdimm_secndp_test/secndp.manifest.template
++++ b/application/sls_secndp_test/secndp.manifest.template
+@@ -1,4 +1,4 @@
+-# secndp axdimm manifest template
++# secndp sls manifest template
+ 
+ loader.entrypoint = "file:{{ gramine.libos }}"
+ libos.entrypoint = "{{ entrypoint }}"
+diff --git a/pal/src/host/linux-sgx/meson.build b/pal/src/host/linux-sgx/meson.build
+index a7f04aa3..58250edb 100644
+--- a/pal/src/host/linux-sgx/meson.build
++++ b/pal/src/host/linux-sgx/meson.build
+@@ -73,7 +73,7 @@ libpal_sgx = shared_library('pal',
+     'pal_devices.c',
+     'pal_eventfd.c',
+     'pal_events.c',
+-    'pal_axdimm.c',
++    'pal_sls.c',
+     'pal_exception.c',
+     'pal_files.c',
+     'pal_main.c',
+diff --git a/pal/src/host/linux-sgx/pal_devices.c b/pal/src/host/linux-sgx/pal_devices.c
+index 9227fb32..efaee773 100644
+--- a/pal/src/host/linux-sgx/pal_devices.c
++++ b/pal/src/host/linux-sgx/pal_devices.c
+@@ -12,7 +12,7 @@
+ 
+ #include "api.h"
+ #include "pal.h"
+-#include "pal_axdimm.h"
++#include "pal_sls.h"
+ #include "pal_error.h"
+ #include "pal_flags_conv.h"
+ #include "pal_internal.h"
+@@ -1082,8 +1082,8 @@ int _PalDeviceIoControl(PAL_HANDLE handle, uint32_t cmd, unsigned long arg, int*
+     if (handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_DENIED;
+ 
+-    if (_IsAxdimmIoControl(cmd)) {
+-        return _PalAxdimmIoControl(handle, cmd, arg, out_ret);
++    if (_IsSlsIoControl(cmd)) {
++        return _PalSlsIoControl(handle, cmd, arg, out_ret);
+     }
+ 
+     toml_array_t* toml_ioctl_struct = NULL;
+diff --git a/pal/src/host/linux-sgx/pal_axdimm.c b/pal/src/host/linux-sgx/pal_sls.c
+similarity index 72%
+rename from pal/src/host/linux-sgx/pal_axdimm.c
+rename to pal/src/host/linux-sgx/pal_sls.c
+index 53224fcc..bf2520c5 100644
+--- a/pal/src/host/linux-sgx/pal_axdimm.c
++++ b/pal/src/host/linux-sgx/pal_sls.c
+@@ -10,21 +10,21 @@
+  *
+  */
+ 
+-#include "pal_axdimm.h"
++#include "pal_sls.h"
+ 
+ #include "enclave_ocalls.h"
+ #include "pal_linux_error.h"
+ 
+ #define REQ_AS(S, A)           ((S*)(A))
+-#define AXD_ALLOC_MEM_REQ(A)   REQ_AS(struct sls_memory_alloc_request, A)
+-#define AXD_GET_MEM_NUM_REQ(A) REQ_AS(struct sls_num_objects_request, A)
+-#define AXD_GET_MEM_ALLOC(A)   REQ_AS(struct sls_memory_alloc, A)
++#define SLS_ALLOC_MEM_REQ(A)   REQ_AS(struct sls_memory_alloc_request, A)
++#define SLS_GET_MEM_NUM_REQ(A) REQ_AS(struct sls_num_objects_request, A)
++#define SLS_GET_MEM_ALLOC(A)   REQ_AS(struct sls_memory_alloc, A)
+ 
+-bool _IsAxdimmIoControl(uint32_t cmd) {
+-    /* Assume that if we receive command with correct magic number and NR then we have AXDIMM
++bool _IsSlsIoControl(uint32_t cmd) {
++    /* Assume that if we receive command with correct magic number and NR then we have SLS
+      * IOCTL. Extra checks can be included in process function. This code refer to same checks in
+-     * axdimm.c:
+-     *      long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
++     * sls.c:
++     *      long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+      */
+     return _IOC_TYPE(cmd) == SLS_IOC_MAGIC &&
+            (0 <= _IOC_NR(cmd) && _IOC_NR(cmd) <= SLS_IOC_MAXNR);
+@@ -61,18 +61,18 @@ static void* deep_sls_get_memory_alloc_copy(struct sls_memory_alloc* req, void*
+ }
+ 
+ /* Get the request size */
+-static uint64_t axdimm_request_size(uint32_t cmd, uint64_t args) {
++static uint64_t sls_request_size(uint32_t cmd, uint64_t args) {
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+             return sizeof(struct sls_memory_alloc_request) +
+-                   AXD_ALLOC_MEM_REQ(args)->num_user_objects *
+-                       sizeof(AXD_ALLOC_MEM_REQ(args)->user_objects_sizes[0]);
++                   SLS_ALLOC_MEM_REQ(args)->num_user_objects *
++                       sizeof(SLS_ALLOC_MEM_REQ(args)->user_objects_sizes[0]);
+         case GET_MEMORY_OBJECTS_NUM:
+             return sizeof(struct sls_num_objects_request);
+         case GET_MEMORY_ALLOCATION:
+             return sizeof(struct sls_memory_alloc) +
+-                   AXD_GET_MEM_ALLOC(args)->num_objects *
+-                       sizeof(AXD_GET_MEM_ALLOC(args)->objects[0]);
++                   SLS_GET_MEM_ALLOC(args)->num_objects *
++                       sizeof(SLS_GET_MEM_ALLOC(args)->objects[0]);
+         default:
+             pal_log(LOG_LEVEL_ERROR, "Fail to get size of request. Unknown command cmd = %d", cmd);
+             return 0;
+@@ -83,12 +83,12 @@ static uint64_t axdimm_request_size(uint32_t cmd, uint64_t args) {
+ static void* copy_to_untrusted(uint32_t cmd, uint64_t trusted_ptr, void* untrusted_ptr) {
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+-            return deep_sls_memory_alloc_copy(AXD_ALLOC_MEM_REQ(trusted_ptr), untrusted_ptr);
++            return deep_sls_memory_alloc_copy(SLS_ALLOC_MEM_REQ(trusted_ptr), untrusted_ptr);
+         case GET_MEMORY_OBJECTS_NUM:
+-            *(struct sls_num_objects_request*)untrusted_ptr = *AXD_GET_MEM_NUM_REQ(trusted_ptr);
++            *(struct sls_num_objects_request*)untrusted_ptr = *SLS_GET_MEM_NUM_REQ(trusted_ptr);
+             return untrusted_ptr;
+         case GET_MEMORY_ALLOCATION:
+-            return deep_sls_get_memory_alloc_copy(AXD_GET_MEM_ALLOC(trusted_ptr), untrusted_ptr);
++            return deep_sls_get_memory_alloc_copy(SLS_GET_MEM_ALLOC(trusted_ptr), untrusted_ptr);
+         default:
+             return NULL;
+     }
+@@ -98,24 +98,24 @@ static void* copy_to_untrusted(uint32_t cmd, uint64_t trusted_ptr, void* untrust
+ static void copy_to_trusted(uint32_t cmd, void* untrusted_ptr, uint64_t trusted_ptr) {
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+-            AXD_ALLOC_MEM_REQ(trusted_ptr)->descriptor =
+-                AXD_ALLOC_MEM_REQ(untrusted_ptr)->descriptor;
++            SLS_ALLOC_MEM_REQ(trusted_ptr)->descriptor =
++                SLS_ALLOC_MEM_REQ(untrusted_ptr)->descriptor;
+             break;
+         case GET_MEMORY_OBJECTS_NUM:
+-            *AXD_GET_MEM_NUM_REQ(trusted_ptr) = *(struct sls_num_objects_request*)untrusted_ptr;
++            *SLS_GET_MEM_NUM_REQ(trusted_ptr) = *(struct sls_num_objects_request*)untrusted_ptr;
+             break;
+         case GET_MEMORY_ALLOCATION:
+-            memcpy(AXD_GET_MEM_ALLOC(trusted_ptr)->objects,
+-                   AXD_GET_MEM_ALLOC(untrusted_ptr)->objects,
+-                   AXD_GET_MEM_ALLOC(untrusted_ptr)->num_objects *
+-                       sizeof(AXD_GET_MEM_ALLOC(untrusted_ptr)->objects[0]));
++            memcpy(SLS_GET_MEM_ALLOC(trusted_ptr)->objects,
++                   SLS_GET_MEM_ALLOC(untrusted_ptr)->objects,
++                   SLS_GET_MEM_ALLOC(untrusted_ptr)->num_objects *
++                       sizeof(SLS_GET_MEM_ALLOC(untrusted_ptr)->objects[0]));
+             break;
+         default:
+             break;
+     }
+ }
+ 
+-static int axdimm_ioctl(int fd, uint32_t cmd, uint64_t arg, int* out_ret) {
++static int sls_ioctl(int fd, uint32_t cmd, uint64_t arg, int* out_ret) {
+     int ret = ocall_ioctl(fd, cmd, arg);
+     if (ret < 0) {
+         pal_log(LOG_LEVEL_ERROR, "Fail to make ioctl (%x) to device [%d]. PAL error code: %d (%s)",
+@@ -131,10 +131,10 @@ static int axdimm_ioctl(int fd, uint32_t cmd, uint64_t arg, int* out_ret) {
+     return ret;
+ }
+ 
+-int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret) {
+-    pal_log(LOG_LEVEL_DEBUG, "AXDIMM ioctl. cmd = %x, arg = %p.", cmd, (void*)arg);
++int _PalSlsIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret) {
++    pal_log(LOG_LEVEL_DEBUG, "SLS ioctl. cmd = %x, arg = %p.", cmd, (void*)arg);
+ 
+-    assert(_IsAxdimmIoControl(cmd));
++    assert(_IsSlsIoControl(cmd));
+ 
+     int ret = 0;
+ 
+@@ -142,7 +142,7 @@ int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_
+         case ALLOCATE_MEMORY:
+         case GET_MEMORY_OBJECTS_NUM:
+         case GET_MEMORY_ALLOCATION: {
+-            uint64_t req_size = axdimm_request_size(cmd, arg);
++            uint64_t req_size = sls_request_size(cmd, arg);
+             if (req_size == 0) {
+                 pal_log(LOG_LEVEL_ERROR,
+                         "Fail to serialize request for cmd = %u. Unable to get request size.", cmd);
+@@ -158,7 +158,7 @@ int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_
+ 
+             untrusted_addr = copy_to_untrusted(cmd, arg, untrusted_addr);
+ 
+-            ret = axdimm_ioctl((int)handle->dev.fd, cmd, (uint64_t)untrusted_addr, out_ret);
++            ret = sls_ioctl((int)handle->dev.fd, cmd, (uint64_t)untrusted_addr, out_ret);
+ 
+             if (ret == 0)
+                 copy_to_trusted(cmd, untrusted_addr, arg);
+@@ -168,12 +168,12 @@ int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_
+             break;
+         }
+         default:  // Here we have simple ioctl request
+-            /* Here we have simple axdimm requests that can be performed without
+-             * serialization/deserialization processes. We also can perform non-AXDIMM request if
++            /* Here we have simple sls requests that can be performed without
++             * serialization/deserialization processes. We also can perform non-SLS request if
+              * they don't return any values or return integer value.*/
+             assert(_IOC_SIZE(cmd) == _IOC_TYPECHECK(int) ||
+                    _IOC_SIZE(cmd) == _IOC_TYPECHECK(uint64_t) || _IOC_SIZE(cmd) == 0);
+-            ret = axdimm_ioctl((int)handle->dev.fd, cmd, arg, out_ret);
++            ret = sls_ioctl((int)handle->dev.fd, cmd, arg, out_ret);
+     }
+ 
+     return unix_to_pal_error(ret);
+diff --git a/pal/src/host/linux-sgx/pal_axdimm.h b/pal/src/host/linux-sgx/pal_sls.h
+similarity index 71%
+rename from pal/src/host/linux-sgx/pal_axdimm.h
+rename to pal/src/host/linux-sgx/pal_sls.h
+index eb1bf9e8..3a6028b5 100644
+--- a/pal/src/host/linux-sgx/pal_axdimm.h
++++ b/pal/src/host/linux-sgx/pal_sls.h
+@@ -10,8 +10,8 @@
+  *
+  */
+ 
+-#ifndef AXDIMM_GRAMINE_PAL_AXDIMM_H
+-#define AXDIMM_GRAMINE_PAL_AXDIMM_H
++#ifndef SLS_GRAMINE_PAL_SLS_H
++#define SLS_GRAMINE_PAL_SLS_H
+ 
+ #include <asm/ioctls.h>
+ #include <linux/sls_resources.h>
+@@ -19,8 +19,8 @@
+ #include "pal.h"
+ #include "pal_host.h"
+ 
+-int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret);
++int _PalSlsIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret);
+ 
+-bool _IsAxdimmIoControl(uint32_t cmd);
++bool _IsSlsIoControl(uint32_t cmd);
+ 
+-#endif  // AXDIMM_GRAMINE_PAL_AXDIMM_H
++#endif  // SLS_GRAMINE_PAL_SLS_H
+-- 
+2.34.1
+

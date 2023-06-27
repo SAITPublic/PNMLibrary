@@ -1,0 +1,25 @@
+From d65aeb845f7662e0048ab42b7f0678a57db31f2f Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Wed, 13 Jul 2022 10:49:08 +0300
+Subject: [PATCH 061/128] Use shared AxdimmSecure library
+
+---
+ caffe2/CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 194e44fe..06eb1481 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1374,7 +1374,7 @@ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE
+ 
+ if (USE_AXDIMM)
+   target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+-  set(AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/libAxdimmAI.so" "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecure.a")
++  set(AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/libAxdimmAI.so" "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecure.so")
+ 
+   if (USE_AXDIMM_SGX)
+     target_compile_definitions(torch_axdimm PUBLIC -DSGX_ENABLE)
+-- 
+2.34.1
+

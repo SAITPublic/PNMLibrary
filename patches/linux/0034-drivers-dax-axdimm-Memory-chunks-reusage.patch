@@ -1,0 +1,1370 @@
+From 29fbdc91072ba3396e31ab4e39d5b8118944fdba Mon Sep 17 00:00:00 2001
+From: "s.koval" <s.koval@samsung.com>
+Date: Thu, 11 Aug 2022 13:34:57 +0300
+Subject: [PATCH 034/161] [drivers/dax/axdimm] Memory chunks reusage
+
+* Add rbtree for memory chunks storage
+* Add list for allocations storage
+* Add rbtree unit tests
+
+Resolves: AXDIMM-314
+
+Signed-off-by: s.koval <s.koval@samsung.com>
+---
+ drivers/dax/Kconfig              |   7 +
+ drivers/dax/Makefile             |   4 +
+ drivers/dax/axdimm-private.h     |   2 +-
+ drivers/dax/axdimm.c             |  12 +-
+ drivers/dax/axdimm_allocator.c   | 279 +++++++++++-------
+ drivers/dax/axdimm_allocator.h   |  59 ++--
+ drivers/dax/axdimm_mem_tree.c    | 188 ++++++++++++
+ drivers/dax/axdimm_mem_tree.h    |  27 ++
+ drivers/dax/device.c             |   9 +-
+ drivers/dax/test_rank_mem_tree.c | 489 +++++++++++++++++++++++++++++++
+ 10 files changed, 945 insertions(+), 131 deletions(-)
+ create mode 100644 drivers/dax/axdimm_mem_tree.c
+ create mode 100644 drivers/dax/axdimm_mem_tree.h
+ create mode 100644 drivers/dax/test_rank_mem_tree.c
+
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 9cee4bd44..cadbd7129 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -94,4 +94,11 @@ config AXDIMM_MEMORY_SCALE
+ 	  For default memory range = 64 gigabytes and scale = 2,
+ 	  total range = 64/(2^scale) = 16 gigabytes.
+ 
++config AXDIMM_KUNIT_TESTS
++	bool "AxDIMM device test"
++	depends on KUNIT=y
++	help
++	  Unit tests for AxDIMM driver functionality. For now, it tests
++	  memory chunks reusage mechanism.
++
+ endif
+diff --git a/drivers/dax/Makefile b/drivers/dax/Makefile
+index 9d193e2f0..07606255f 100644
+--- a/drivers/dax/Makefile
++++ b/drivers/dax/Makefile
+@@ -11,6 +11,10 @@ CFLAGS_axdimm.o += -DAXDIMM_DRIVER_VERSION=\"$(shell git describe --first-parent
+ device_dax-y += axdimm.o
+ device_dax-y += axdimm_allocator.o
+ device_dax-y += axdimm_rank_scheduler.o
++device_dax-y += axdimm_mem_tree.o
+ dax_pmem-y := pmem.o
+ 
+ obj-y += hmem/
++
++obj-$(CONFIG_AXDIMM_KUNIT_TESTS) += axdimm_mem_tree.o
++obj-$(CONFIG_AXDIMM_KUNIT_TESTS) += test_rank_mem_tree.o
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index c8da88c6f..e9dd38146 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -61,7 +61,7 @@ static inline int is_axdimm_range(u64 start, u64 end)
+ 	       end < AXDIMM_BASE_ADDR + AXDIMM_MEMORY_SIZE;
+ }
+ 
+-void init_axdimm_device(struct dev_dax *dev_dax);
++int init_axdimm_device(struct dev_dax *dev_dax);
+ 
+ void cleanup_axdimm_device(void);
+ 
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 901d79547..ebfd59e34 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -368,8 +368,9 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		while (unlikely(axdimm_device.sem_axdimm.count < AXDIMM_SEM_VALUE)) {
+ 			up(&axdimm_device.sem_axdimm);
+ 		}
+-		reset_axdimm_allocator(&axdimm_allocator);
+ 		reset_axdimm_rank_scheduler(&axdimm_rank_sched);
++		retval = reset_axdimm_allocator(&axdimm_allocator,
++						&axdimm_device.mem_info);
+ 		break;
+ 	case SET_SC_LOCK:
+ 		if (down_interruptible(&axdimm_device.sem_axdimm)) {
+@@ -401,7 +402,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	return retval;
+ }
+ 
+-void init_axdimm_device(struct dev_dax *dev_dax)
++int init_axdimm_device(struct dev_dax *dev_dax)
+ {
+ 	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
+ 	dev_dax->is_axdimm_device = 1;
+@@ -420,11 +421,12 @@ void init_axdimm_device(struct dev_dax *dev_dax)
+ 	 */
+ 	setup_axdimm_ranges(dev_dax);
+ 
+-	/* Initialize memory allocator */
+-	init_axdimm_allocator(&axdimm_allocator, &axdimm_device.mem_info);
+-
+ 	/* Reset ranks status and synchronization primitives */
+ 	reset_axdimm_rank_scheduler(&axdimm_rank_sched);
++
++	/* Initialize memory allocator */
++	return init_axdimm_allocator(&axdimm_allocator,
++				     &axdimm_device.mem_info);
+ }
+ 
+ void cleanup_axdimm_device()
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 4c2bb3661..accadfab3 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -4,76 +4,122 @@
+ #include "axdimm-private.h"
+ #include "axdimm_allocator.h"
+ #include "axdimm_log.h"
++#include "axdimm_mem_tree.h"
+ 
+ #include <linux/math.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+-void init_axdimm_allocator(struct axdimm_allocator *alloc,
+-			   struct axdmem_info *mem_info)
++static int init_memory_trees(struct rb_root trees[NUM_OF_RANK],
++			     struct axdmem_info *mem_info)
+ {
+-	int cs;
++	uint8_t cs, cs_rank_idx;
++	uint64_t length;
++	int err_code = 0;
+ 
+-	/* Offset in allocation decisions storage */
+-	alloc->available_allocation_idx = 0;
+-	alloc->allocation_counter = 0;
++	memset(trees, 0, sizeof(struct rb_root) * NUM_OF_RANK);
+ 
+-	/* Ranks sizes and offsets */
+ 	for (cs = 0; cs < NUM_OF_CS; ++cs) {
+-		alloc->ranks_mem_tracker[cs].length =
+-			mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] /
+-			NUM_RANKS_PER_CS;
+-		alloc->ranks_mem_tracker[cs + 2].length =
+-			mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] /
+-			NUM_RANKS_PER_CS;
+-		alloc->ranks_mem_tracker[cs].offset =
+-			alloc->ranks_mem_tracker[cs + 2].offset = 0;
++		length = mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] /
++			 NUM_RANKS_PER_CS;
++		for (cs_rank_idx = cs;
++		     cs_rank_idx < NUM_RANKS_PER_CS * NUM_OF_CS;
++		     cs_rank_idx += NUM_RANKS_PER_CS) {
++			err_code = release_mem_chunk(&trees[cs_rank_idx], 0,
++						     length);
++			if (err_code) {
++				AXDIMM_ERR(
++					"Failed to setup memory limits with error [%d].\n",
++					err_code);
++				goto init_mem_trees_out;
++			}
++		}
+ 	}
+ 
++init_mem_trees_out:
++	return err_code;
++}
++
++int init_axdimm_allocator(struct axdimm_allocator *alloc,
++			  struct axdmem_info *mem_info)
++{
++	int err_code;
++
++	alloc->descriptor_counter = 0;
++
++	err_code = init_memory_trees(alloc->rank_mem_trees, mem_info);
++	if (err_code)
++		goto init_allocator_out;
++
++	INIT_LIST_HEAD(&alloc->alloc_list);
++
+ 	/* Protect memory allocation operations */
+ 	mutex_init(&alloc->memory_mutex);
++
++init_allocator_out:
++	return err_code;
+ }
+ 
+-void reset_axdimm_allocator(struct axdimm_allocator *alloc)
++int reset_axdimm_allocator(struct axdimm_allocator *alloc,
++			   struct axdmem_info *mem_info)
+ {
+-	uint8_t allocation;
+-	uint8_t rank;
++	struct list_head *cur, *n;
++	struct axdimm_allocation *entry;
+ 
+ 	if (unlikely(mutex_is_locked(&alloc->memory_mutex))) {
+ 		AXDIMM_WRN("Mutex unlock forced.\n");
+ 		mutex_unlock(&alloc->memory_mutex);
+ 	}
+ 
++	alloc->descriptor_counter = 0;
++
+ 	/* Cleanup allocation storage */
+-	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation)
+-		kfree(alloc->allocations[allocation].objects);
++	list_for_each_safe(cur, n, &alloc->alloc_list) {
++		entry = list_entry(cur, struct axdimm_allocation, list);
++		kfree(entry->objects);
++		list_del(cur);
++		kfree(entry);
++	}
+ 
+-	memset(alloc->allocations, 0, sizeof(alloc->allocations));
+-	alloc->available_allocation_idx = 0;
+-	alloc->allocation_counter = 0;
++	/* Cleanup memory rb-trees */
++	clear_memory_storage(alloc->rank_mem_trees, NUM_OF_RANK);
+ 
+-	/* Reset memory tracker's offset */
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank)
+-		alloc->ranks_mem_tracker[rank].offset = 0;
++	return mem_info ? init_memory_trees(alloc->rank_mem_trees, mem_info) :
++			  0;
+ }
+ 
+ void cleanup_axdimm_allocator(struct axdimm_allocator *alloc)
+ {
+-	reset_axdimm_allocator(alloc);
++	reset_axdimm_allocator(alloc, NULL);
+ 	mutex_destroy(&alloc->memory_mutex);
+ }
+ 
+-static inline void save_new_allocation(struct axdimm_allocator *alloc,
+-				       struct axd_memory_object *objects,
+-				       uint64_t num_obj)
++static inline int save_new_allocation(struct axdimm_allocator *alloc,
++				      struct axd_memory_object *objects,
++				      uint64_t num_obj)
+ {
+-	/* Save new allocation to allocation storage */
+-	alloc->allocations[alloc->available_allocation_idx].objects = objects;
++	int err_code = 0;
++	struct axdimm_allocation *allocation =
++		kmalloc(sizeof(struct axdimm_allocation), GFP_KERNEL);
++
++	if (unlikely(!allocation)) {
++		AXDIMM_ERR("kmalloc failed for axdimm_allocation [%zu]\n",
++			   sizeof(struct axdimm_allocation));
++		err_code = -ENOMEM;
++		goto new_alloc_out;
++	}
++
+ 	/* Set descriptor for this allocation */
+-	alloc->allocations[alloc->available_allocation_idx].descriptor =
+-		++alloc->allocation_counter;
++	allocation->descriptor = ++alloc->descriptor_counter;
+ 	/* Set objects count for this allocation */
+-	alloc->allocations[alloc->available_allocation_idx].num_obj = num_obj;
++	allocation->num_obj = num_obj;
++	/* Set memory objects for this allocation */
++	allocation->objects = objects;
++
++	list_add_tail(&allocation->list, &alloc->alloc_list);
++
++new_alloc_out:
++	return err_code;
+ }
+ 
+ /* Get total number of allocated objects depends on user memory policy. */
+@@ -131,14 +177,13 @@ static inline uint64_t get_user_obj_idx(uint64_t obj_idx, uint8_t rank,
+ }
+ 
+ /* Fill allocated object by the corresponding user object inside rank */
+-static int rank_insert_mem_obj(uint64_t obj_idx, uint8_t rank,
+-			       uint64_t rank_num_obj,
++static int rank_insert_mem_obj(struct axdimm_allocator *alloc, uint64_t obj_idx,
++			       uint8_t rank, uint64_t rank_num_obj,
+ 			       struct axd_memory_object *objects,
+-			       struct axd_memory_alloc_request *request,
+-			       uint64_t *free_size, uint64_t *offset)
++			       struct axd_memory_alloc_request *request)
+ {
+-	int err_code = 0;
+-	uint64_t user_obj_size;
++	int err_code;
++	uint64_t user_obj_size, offset;
+ 	const uint64_t user_obj_idx = get_user_obj_idx(
+ 		obj_idx, rank, rank_num_obj, request->preference);
+ 
+@@ -158,56 +203,77 @@ static int rank_insert_mem_obj(uint64_t obj_idx, uint8_t rank,
+ 			user_obj_idx);
+ 		goto insert_out;
+ 	}
+-	if (unlikely(user_obj_size > *free_size)) {
+-		err_code = -ENOSPC;
++
++	err_code = acquire_mem_chunk(&alloc->rank_mem_trees[rank],
++				     user_obj_size, &offset);
++	if (err_code) {
+ 		AXDIMM_ERR(
+-			"No free space at rank %hhu, user_obj_size = [%llu], user_object_id = [%llu], free rank size = [%llu]\n",
+-			rank, user_obj_size, user_obj_idx, *free_size);
++			"No free chunk for user_object_id = [%llu], user_obj_size = [%llu] at rank %hhu\n",
++			user_obj_idx, user_obj_size, rank);
+ 		goto insert_out;
+ 	}
+ 
+ 	objects[obj_idx].rank = rank;
+ 	objects[obj_idx].user_object_id = user_obj_idx;
+-	objects[obj_idx].offset = *offset;
++	objects[obj_idx].offset = offset;
+ 	objects[obj_idx].length = user_obj_size;
+ 
+-	*offset += user_obj_size;
+-	*free_size -= user_obj_size;
+-
+ insert_out:
+ 	return err_code;
+ }
+ 
++static int release_chunks(struct axdimm_allocator *alloc,
++			  struct axd_memory_object *objects,
++			  uint64_t actual_num)
++{
++	uint8_t rank;
++	int err_code = 0;
++	uint64_t obj_count;
++	uint64_t offset, length;
++	struct rb_root *root;
++
++	for (obj_count = 0; obj_count < actual_num; ++obj_count) {
++		rank = objects[obj_count].rank;
++		root = &alloc->rank_mem_trees[rank];
++		offset = objects[obj_count].offset;
++		length = objects[obj_count].length;
++		err_code = release_mem_chunk(root, offset, length);
++		if (err_code) {
++			AXDIMM_ERR(
++				"Failed to release memory chunk in rank [%hhu] and offset [%llu].\n",
++				rank, offset);
++			goto release_chunks_out;
++		}
++	}
++
++release_chunks_out:
++	return err_code;
++}
++
+ static int allocate_in_ranks(uint64_t num_obj, struct axdimm_allocator *alloc,
+ 			     struct axd_memory_object *objects,
+-			     struct axd_memory_alloc_request *request)
++			     struct axd_memory_alloc_request *request,
++			     uint64_t *actual_num)
+ {
+ 	uint8_t rank;
+ 	int err_code = 0;
+-	uint64_t idx, max_idx_in_rank, offset, free_size,
+-		new_ranks_offsets[NUM_OF_RANK] = {};
++	uint64_t idx, max_idx_in_rank;
+ 	const uint64_t rank_num_obj = gen_rank_num_obj(
+ 		request->num_user_objects, request->preference);
+ 
+ 	for (rank = 0, idx = 0; rank < NUM_OF_RANK && idx < num_obj; ++rank) {
+-		offset = alloc->ranks_mem_tracker[rank].offset;
+-		free_size = alloc->ranks_mem_tracker[rank].length - offset;
+ 		max_idx_in_rank = idx + rank_num_obj;
+ 		for (; idx < max_idx_in_rank && idx < num_obj; ++idx) {
+-			err_code = rank_insert_mem_obj(idx, rank, rank_num_obj,
+-						       objects, request,
+-						       &free_size, &offset);
+-			if (unlikely(err_code))
++			err_code = rank_insert_mem_obj(alloc, idx, rank,
++						       rank_num_obj, objects,
++						       request);
++			if (unlikely(err_code)) {
++				*actual_num = idx;
+ 				goto alloc_ranks_out;
++			}
+ 		}
+-
+-		new_ranks_offsets[rank] = offset;
+ 	}
+ 
+-	/* Set new offset values after successful allocation */
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank)
+-		alloc->ranks_mem_tracker[rank].offset = new_ranks_offsets[rank];
+-
+ alloc_ranks_out:
+ 	return err_code;
+ }
+@@ -216,8 +282,8 @@ static int allocate_memory(struct axdimm_allocator *alloc,
+ 			   struct axd_memory_alloc_request *request,
+ 			   uint64_t *descriptor)
+ {
+-	uint64_t idx;
+ 	int err_code = 0;
++	uint64_t actual_num = 0;
+ 	/* Array with allocated memory objects depends on user memory policy,
+ 	 * if no issues with allocation and filling by original user objects,
+ 	 * it's placed into allocation storage.
+@@ -238,32 +304,24 @@ static int allocate_memory(struct axdimm_allocator *alloc,
+ 	}
+ 
+ 	mutex_lock(&alloc->memory_mutex);
+-	err_code = allocate_in_ranks(num_obj, alloc, objects, request);
++	err_code = allocate_in_ranks(num_obj, alloc, objects, request,
++				     &actual_num);
+ 	if (unlikely(err_code)) {
++		if (release_chunks(alloc, objects, actual_num))
++			AXDIMM_ERR("Failed partial deallocate\n");
++
+ 		kfree(objects);
+ 		goto alloc_unlock_out;
+ 	}
+ 
+-	save_new_allocation(alloc, objects, num_obj);
+-
+-	/* Return new descriptor to user space */
+-	*descriptor = alloc->allocation_counter;
+-
+-	/* Acquire a free cell for the next allocation */
+-	for (idx = 0; idx < AXDIMM_ALLOCATION_MAX; ++idx) {
+-		if (alloc->allocations[idx].descriptor == 0) {
+-			alloc->available_allocation_idx = idx;
+-			goto alloc_unlock_out;
+-		}
++	err_code = save_new_allocation(alloc, objects, num_obj);
++	if (err_code) {
++		AXDIMM_ERR("Failed to save a new allocation.\n");
++		goto alloc_unlock_out;
+ 	}
+ 
+-	/*
+-	 * [TODO: @s.koval] Change storage for allocations
+-	 * to more appropriate one, e.g. hash table
+-	 */
+-	AXDIMM_ERR(
+-		"Next allocation won't be performed because of allocation storage capacity. Need to reset device.\n");
+-	err_code = -EBUSY;
++	/* Return new descriptor to user space */
++	*descriptor = alloc->descriptor_counter;
+ 
+ alloc_unlock_out:
+ 	mutex_unlock(&alloc->memory_mutex);
+@@ -319,17 +377,18 @@ static int allocate_memory_ioctl(struct axdimm_allocator *alloc,
+ static int get_num_obj(struct axdimm_allocator *alloc, uint64_t descriptor,
+ 		       uint64_t *num_obj)
+ {
+-	uint8_t allocation;
+-	int err_code;
++	int err_code = -EINVAL;
++	struct list_head *ptr;
++	struct axdimm_allocation *allocation;
+ 
+-	err_code = -EINVAL;
+ 	if (unlikely(descriptor == 0))
+ 		goto out_num_obj;
+ 
+ 	mutex_lock(&alloc->memory_mutex);
+-	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
+-		if (alloc->allocations[allocation].descriptor == descriptor) {
+-			*num_obj = alloc->allocations[allocation].num_obj;
++	list_for_each(ptr, &alloc->alloc_list) {
++		allocation = list_entry(ptr, struct axdimm_allocation, list);
++		if (allocation->descriptor == descriptor) {
++			*num_obj = allocation->num_obj;
+ 			err_code = 0;
+ 			goto unlock_num_obj;
+ 		}
+@@ -376,19 +435,20 @@ static int get_num_obj_ioctl(struct axdimm_allocator *alloc,
+ static int get_allocation(struct axdimm_allocator *alloc,
+ 			  struct axd_memory_alloc *request)
+ {
+-	uint8_t allocation;
+ 	int err_code = -EINVAL;
++	struct list_head *ptr;
++	struct axdimm_allocation *allocation;
+ 
+ 	if (unlikely(request->descriptor == 0))
+ 		goto out;
+ 
+ 	mutex_lock(&alloc->memory_mutex);
+-	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
+-		if (alloc->allocations[allocation].descriptor == request->descriptor) {
++	list_for_each(ptr, &alloc->alloc_list) {
++		allocation = list_entry(ptr, struct axdimm_allocation, list);
++		if (allocation->descriptor == request->descriptor) {
+ 			AXDIMM_COPY_TO_USER(
+-				err_code, request->objects,
+-				alloc->allocations[allocation].objects,
+-				alloc->allocations[allocation].num_obj *
++				err_code, request->objects, allocation->objects,
++				allocation->num_obj *
+ 					sizeof(struct axd_memory_object));
+ 			goto unlock;
+ 		}
+@@ -423,23 +483,34 @@ static int get_allocation_ioctl(struct axdimm_allocator *alloc,
+ 	return err_code;
+ }
+ 
+-static int deallocate_memory(struct axdimm_allocator *alloc, uint64_t descriptor)
++static int deallocate_memory(struct axdimm_allocator *alloc,
++			     uint64_t descriptor)
+ {
+-	uint8_t allocation;
+ 	int err_code = -EINVAL;
++	struct list_head *cur, *n;
++	struct axdimm_allocation *allocation;
+ 
+ 	if (unlikely(descriptor == 0))
+ 		goto out;
+ 
+ 	mutex_lock(&alloc->memory_mutex);
+-	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
+-		if (alloc->allocations[allocation].descriptor != descriptor)
++	list_for_each_safe(cur, n, &alloc->alloc_list) {
++		allocation = list_entry(cur, struct axdimm_allocation, list);
++		if (allocation->descriptor != descriptor)
+ 			continue;
+ 
+-		kfree(alloc->allocations[allocation].objects);
+-		memset(&alloc->allocations[allocation], 0,
+-		       sizeof(alloc->allocations[allocation]));
+-		err_code = 0;
++		err_code = release_chunks(alloc, allocation->objects,
++					  allocation->num_obj);
++		if (err_code) {
++			AXDIMM_ERR(
++				"Failed to deallocate memory by descriptor [%llu]\n",
++				descriptor);
++		}
++
++		kfree(allocation->objects);
++		list_del(cur);
++		kfree(allocation);
++
+ 		goto unlock;
+ 	}
+ 
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+index 4bf80f2f1..69cc5d3bc 100644
+--- a/drivers/dax/axdimm_allocator.h
++++ b/drivers/dax/axdimm_allocator.h
+@@ -6,36 +6,57 @@
+ 
+ #include <linux/mutex.h>
+ #include <linux/libaxdimm.h>
++#include <linux/list.h>
++#include <linux/rbtree.h>
+ #include <linux/types.h>
+ 
+-#define AXDIMM_ALLOCATION_MAX 50
++/*
++ * Processed red-black tree is supposed to store
++ * memory chunks like, e.g. [left_offset, right_offset),
++ * where 'left' is a key.
++ * There are tests present in 'test_rank_mem_tree.c'
++ * for detailed info.
++ */
++struct axdimm_mem_leaf {
++	struct rb_node node;
++	uint64_t left_offset;
++	uint64_t right_offset;
++};
++
++/* Element of the list with allocations */
++struct axdimm_allocation {
++	/* Allocation number in list */
++	uint64_t descriptor;
++	/* Number of memory objects in an allocation */
++	uint64_t num_obj;
++	struct list_head list;
++	/* Memory objects in an allocation */
++	struct axd_memory_object *objects;
++};
+ 
+ /* Helper structure for memory allocation */
+ struct axdimm_allocator {
+-	/* [TODO: s-koval AXDIMM-314] Add memory reusage logic */
+-	/* Simple storage for rank's free size and offset */
+-	struct axd_memory_object ranks_mem_tracker[NUM_OF_RANK];
+-	/* Simple storage for memory allocations */
+-	struct {
+-		uint64_t descriptor;
+-		uint64_t num_obj;
+-		struct axd_memory_object *objects;
+-	} allocations[AXDIMM_ALLOCATION_MAX];
+-	/* Index shows where to store allocation info in "allocations" array */
+-	uint8_t available_allocation_idx;
++	/* Ranks memory binary trees */
++	struct rb_root rank_mem_trees[NUM_OF_RANK];
++	/* Linked list to store memory allocations */
++	struct list_head alloc_list;
+ 	/* Allocation descriptor counter */
+-	uint64_t allocation_counter;
++	uint64_t descriptor_counter;
+ 	struct mutex memory_mutex;
+ };
+ 
+-void init_axdimm_allocator(struct axdimm_allocator *alloc,
++int init_axdimm_allocator(struct axdimm_allocator *alloc,
++			  struct axdmem_info *mem_info);
++/*
++ * Not proccess(thread)-safe.
++ * `mem_info` might be NULL, if it is
++ * then just reset allocator, if it's not
++ * then reset with memory rb-trees initialization.
++ */
++int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ 			   struct axdmem_info *mem_info);
+-/* Not proccess(thread)-safe */
+-void reset_axdimm_allocator(struct axdimm_allocator *alloc);
+ void cleanup_axdimm_allocator(struct axdimm_allocator *alloc);
+ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+ 		      unsigned long __user arg);
+ 
+-#endif
+-
+-/* __AXDIMM_ALLOCATOR_H__ */
++#endif /* __AXDIMM_ALLOCATOR_H__ */
+diff --git a/drivers/dax/axdimm_mem_tree.c b/drivers/dax/axdimm_mem_tree.c
+new file mode 100644
+index 000000000..0ed2b6417
+--- /dev/null
++++ b/drivers/dax/axdimm_mem_tree.c
+@@ -0,0 +1,188 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#include "axdimm_mem_tree.h"
++
++#include "axdimm_allocator.h"
++#include "axdimm_log.h"
++
++#include <linux/slab.h>
++
++static inline bool is_left_adjacent(struct axdimm_mem_leaf *dst,
++				    struct axdimm_mem_leaf *src)
++{
++	return dst && src && dst->right_offset == src->left_offset;
++}
++
++static inline void merge_to_left(struct axdimm_mem_leaf *dst_left,
++				 struct axdimm_mem_leaf *src)
++{
++	dst_left->right_offset = src->right_offset;
++}
++
++static inline void merge_to_right(struct axdimm_mem_leaf *dst_right,
++				  struct axdimm_mem_leaf *src)
++{
++	dst_right->left_offset = src->left_offset;
++}
++
++/* Find a place in a tree to insert a new node */
++static struct rb_node **find_addr_for_insert(struct rb_root *root, uint64_t key,
++				struct rb_node **parent)
++{
++	struct rb_node **new = &root->rb_node;
++
++	while (*new) {
++		struct axdimm_mem_leaf *this =
++			container_of(*new, struct axdimm_mem_leaf, node);
++
++		*parent = *new;
++		if (key < this->left_offset)
++			new = &(*new)->rb_left;
++		else if (key > this->left_offset)
++			new = &(*new)->rb_right;
++		else
++			return NULL;
++	}
++
++	return new;
++}
++
++/* Detect left and right nodes of an edge we insert into */
++static void find_neighbours(uint64_t key, struct rb_node *parent,
++			    struct axdimm_mem_leaf **left,
++			    struct axdimm_mem_leaf **right)
++{
++	struct axdimm_mem_leaf *parent_leaf = NULL;
++	struct rb_node *edge_node = NULL;
++
++	parent_leaf = container_of(parent, struct axdimm_mem_leaf, node);
++	if (key < parent_leaf->left_offset) {
++		edge_node = rb_prev(parent);
++		*left = container_of(edge_node, struct axdimm_mem_leaf, node);
++		*right = parent_leaf;
++	} else if (key > parent_leaf->left_offset) {
++		edge_node = rb_next(parent);
++		*left = parent_leaf;
++		*right = container_of(edge_node, struct axdimm_mem_leaf, node);
++	}
++}
++
++static bool try_merge_nodes(struct rb_root *root, struct axdimm_mem_leaf *src,
++			    struct axdimm_mem_leaf *dst_left,
++			    struct axdimm_mem_leaf *dst_right)
++{
++	bool result = true;
++
++	if (is_left_adjacent(dst_left, src) &&
++	    is_left_adjacent(src, dst_right)) {
++		merge_to_left(dst_left, dst_right);
++		rb_erase(&dst_right->node, root);
++	} else if (is_left_adjacent(src, dst_right)) {
++		merge_to_right(dst_right, src);
++	} else if (is_left_adjacent(dst_left, src)) {
++		merge_to_left(dst_left, src);
++	} else {
++		result = false;
++	}
++
++	return result;
++}
++
++int release_mem_chunk(struct rb_root *root, uint64_t offset, uint64_t length)
++{
++	int err_code = 0;
++	struct rb_node **new = NULL, *parent = NULL;
++	struct axdimm_mem_leaf *left_neighbour = NULL;
++	struct axdimm_mem_leaf *right_neighbour = NULL;
++	struct axdimm_mem_leaf *src_leaf = NULL;
++
++	/* Get a new address to put a node instead */
++	new = find_addr_for_insert(root, offset, &parent);
++	if (!new) {
++		AXDIMM_ERR("Failed to release chunk with offset [%llu].\n",
++			   offset);
++		err_code = -EINVAL;
++		goto insert_out;
++	}
++
++	/* Allocate a new node to insert */
++	src_leaf = kmalloc(sizeof(struct axdimm_mem_leaf), GFP_KERNEL);
++	if (!src_leaf) {
++		AXDIMM_ERR("kmalloc failed for axdimm_mem_leaf [%lu]\n",
++			   sizeof(struct axdimm_mem_leaf));
++		err_code = -ENOMEM;
++		goto insert_out;
++	}
++
++	src_leaf->left_offset = offset;
++	src_leaf->right_offset = offset + length;
++
++	if (*new == root->rb_node)
++		goto insert_node;
++
++	/*
++	 * Get left and right edges a new node
++	 * will be put in between
++	 */
++	find_neighbours(offset, parent, &left_neighbour, &right_neighbour);
++
++	/*
++	 * Do not insert a new node
++	 * just merge with left or right
++	 * neighbour if they are adjacent.
++	 */
++	if (try_merge_nodes(root, src_leaf, left_neighbour, right_neighbour)) {
++		kfree(src_leaf);
++		goto insert_out;
++	}
++
++	/* Add new node and rebalance tree. */
++insert_node:
++	rb_link_node(&src_leaf->node, parent, new);
++	rb_insert_color(&src_leaf->node, root);
++insert_out:
++	return err_code;
++}
++
++int acquire_mem_chunk(struct rb_root *root, uint64_t length, uint64_t *offset)
++{
++	struct rb_node *node;
++	struct axdimm_mem_leaf *node_leaf = NULL;
++	uint64_t node_leaf_length = 0;
++
++	for (node = rb_first(root); node; node = rb_next(node)) {
++		node_leaf = container_of(node, struct axdimm_mem_leaf, node);
++		node_leaf_length =
++			node_leaf->right_offset - node_leaf->left_offset;
++		if (length <= node_leaf_length) {
++			*offset = node_leaf->left_offset;
++
++			if (length == node_leaf_length)
++				rb_erase(node, root);
++			else
++				node_leaf->left_offset += length;
++
++			return 0;
++		}
++	}
++
++	return -ENOMEM;
++}
++
++void clear_memory_storage(struct rb_root *trees, uint8_t num)
++{
++	uint8_t tree_count;
++	struct axdimm_mem_leaf *pos, *n;
++	struct rb_root *root;
++
++	for (tree_count = 0; tree_count < num; ++tree_count)
++	{
++		root = &trees[tree_count];
++		rbtree_postorder_for_each_entry_safe(pos, n, root, node) {
++			kfree(pos);
++		}
++
++		*root = RB_ROOT;
++	}
++}
+diff --git a/drivers/dax/axdimm_mem_tree.h b/drivers/dax/axdimm_mem_tree.h
+new file mode 100644
+index 000000000..4ed48454a
+--- /dev/null
++++ b/drivers/dax/axdimm_mem_tree.h
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM_MEM_TREE_H__
++#define __AXDIMM_MEM_TREE_H__
++
++#include <linux/rbtree.h>
++#include <linux/types.h>
++
++/*
++ * When memory chunk is freed during deallocation,
++ * we put it back to chunks' storage tree.
++ */
++int release_mem_chunk(struct rb_root *root, uint64_t offset, uint64_t length);
++/*
++ * Acquire memory chunk during memory allocation,
++ * it goes sequentially from the smallest via all chunks
++ * in storage tree and takes the first suitable
++ * (aka 'first-fit' strategy).
++ */
++int acquire_mem_chunk(struct rb_root *root, uint64_t length, uint64_t *offset);
++/*
++ * Remove all memory chunks from rb_trees
++ */
++void clear_memory_storage(struct rb_root *trees, uint8_t num);
++
++#endif /* __AXDIMM_MEM_TREE_H__ */
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 7d73e3b43..36043e4ad 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -420,8 +420,13 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	is_axdimm_device = dev_dax->is_axdimm_device ||
+ 			   is_axdimm_range(range->start, range->end);
+ 
+-	if (is_axdimm_device)
+-		init_axdimm_device(dev_dax);
++	if (is_axdimm_device) {
++		rc = init_axdimm_device(dev_dax);
++		if (rc) {
++			dev_err(dev, "couldn't initialize axdimm device, error [%d]\n", rc);
++			goto out_err;
++		}
++	}
+ 
+ 	pgmap = dev_dax->pgmap;
+ 
+diff --git a/drivers/dax/test_rank_mem_tree.c b/drivers/dax/test_rank_mem_tree.c
+new file mode 100644
+index 000000000..4b61a9880
+--- /dev/null
++++ b/drivers/dax/test_rank_mem_tree.c
+@@ -0,0 +1,489 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * We store information about the chunks
++ * of memory on ranks in rbtree data structure,
++ * each node stores right (key) and left borders.
++ * When we free memory chunks (restore memory chunk
++ * to rbtree), we need to check whether this chunk
++ * adjacent with left or right edge nodes and either
++ * merge them or not.
++ * Copyright(c) 2022 Samsung LTD. All rights reserved.
++ */
++
++#include "axdimm_allocator.h"
++#include "axdimm_mem_tree.h"
++
++#include <kunit/test.h>
++#include <linux/list.h>
++#include <linux/slab.h>
++
++static struct rb_root tree = RB_ROOT;
++
++/* Base chunks */
++const uint64_t base_N = 8;
++const uint64_t base_left[] = { 200, 150, 250, 110, 80, 370, 10, 50 };
++const uint64_t base_right[] = { 210, 160, 260, 120, 90, 380, 20, 60 };
++
++/* One chunk */
++const uint64_t fill_one_left[] = { 100 };
++const uint64_t fill_one_right[] = { 110 };
++
++/* Two chunks */
++const uint64_t fill_two_left[] = { 100, 150 };
++const uint64_t fill_two_right[] = { 110, 160 };
++
++static void fill_rbtree(const uint64_t *left_offsets,
++			const uint64_t *right_offsets, uint64_t n)
++{
++	uint8_t i = 0;
++
++	for (; i < n; ++i)
++		release_mem_chunk(&tree, left_offsets[i],
++				  right_offsets[i] - left_offsets[i] + 1);
++}
++
++static void check_rbtree(struct kunit *test, uint64_t *left_offsets,
++			 uint64_t *right_offsets)
++{
++	uint8_t i = 0;
++	struct rb_node *node = rb_first(&tree);
++
++	for (; node; node = rb_next(node), ++i) {
++		KUNIT_EXPECT_EQ(
++			test,
++			rb_entry(node, struct axdimm_mem_leaf, node)->left_offset,
++			left_offsets[i]);
++		KUNIT_EXPECT_EQ(
++			test,
++			rb_entry(node, struct axdimm_mem_leaf, node)->right_offset,
++			right_offsets[i] + 1);
++	}
++}
++
++/* Base tree cases
++ *                        (200:210)
++ *                         /  \
++ *            5 case -->  /    \  <-- 6 case
++ *                       /      \
++ *                      /        \
++ *                   (110:120)   (250:260)
++ *                    /  \         \
++ *       3 case -->  /    \<--4 case\  <-- 7 case
++ *                  /      \         \
++ *                 /        \         \
++ *               (50:60)   (150:160)  (370:380)
++ *               /  \
++ *              /    \
++ *  2 case --> /      \ <-- 1 case
++ *            /        \
++ *          (10:20)   (80:90)
++ */
++
++static void rbtree_one_left_merge_test1(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 70, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 61, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_right_merge_test1(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 65, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 65, 15);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_double_merge_test1(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 61, 19);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_left_merge_test2(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 30, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 21, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_right_merge_test2(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 30, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 30, 20);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_double_merge_test2(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 21, 29);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_left_merge_test3(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 100, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 91, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_right_merge_test3(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 100, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 100, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_double_merge_test3(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 91, 19);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_left_merge_test4(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 130, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 121, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_right_merge_test4(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 130, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 130, 20);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_double_merge_test4(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 121, 29);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_left_merge_test5(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 170, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 161, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_right_merge_test5(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 180, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 180, 20);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_double_merge_test5(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 161, 39);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_left_merge_test6(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 220, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 211, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_right_merge_test6(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 230, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 230, 20);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_double_merge_test6(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 211, 39);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_left_merge_test7(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 370 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 270, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 261, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_right_merge_test7(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250, 360 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 260, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 360, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_double_merge_test7(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 10, 50, 80, 110, 150, 200, 250 };
++	uint64_t right_offsets[] = { 20, 60, 90, 120, 160, 210, 380 };
++
++	fill_rbtree(base_left, base_right, base_N);
++	release_mem_chunk(&tree, 261, 109);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++/* One node cases
++ *                 (100:110)
++ *                  /  \
++ * left merge -->  /    \  <-- right merge
++ *                /      \
++ *               /        \
++ *             NULL      NULL
++ */
++
++static void rbtree_one_node_merge_left(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 90 };
++	uint64_t right_offsets[] = { 110 };
++
++	fill_rbtree(fill_one_left, fill_one_right, 1);
++	release_mem_chunk(&tree, 90, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_one_node_merge_right(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 100 };
++	uint64_t right_offsets[] = { 120 };
++
++	fill_rbtree(fill_one_left, fill_one_right, 1);
++	release_mem_chunk(&tree, 111, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++/* Two nodes cases
++ *                 (100:110)
++ *                     \
++ *                      \
++ *                       \
++ *                        \
++ *                       (150:160)
++ */
++
++static void rbtree_two_node_merge_left(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 100, 150 };
++	uint64_t right_offsets[] = { 120, 160 };
++
++	fill_rbtree(fill_two_left, fill_two_right, 2);
++	release_mem_chunk(&tree, 111, 10);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_two_node_merge_right(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 100, 130 };
++	uint64_t right_offsets[] = { 110, 160 };
++
++	fill_rbtree(fill_two_left, fill_two_right, 2);
++	release_mem_chunk(&tree, 130, 20);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_two_node_merge_double(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 100 };
++	uint64_t right_offsets[] = { 160 };
++
++	fill_rbtree(fill_two_left, fill_two_right, 2);
++	release_mem_chunk(&tree, 111, 39);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static void rbtree_acquire_restore(struct kunit *test)
++{
++	uint64_t left_offsets[] = { 0, 40 };
++	uint64_t right_offsets[] = { 19, 79 };
++	uint64_t offset[5], length[5];
++	uint64_t offset_fail;
++	uint64_t fill_chunk_left[] = { 0 };
++	uint64_t fill_chunk_right[] = { 99 };
++	uint8_t i = 0;
++
++	fill_rbtree(fill_chunk_left, fill_chunk_right, 1);
++
++	for (; i < 5; ++i) {
++		KUNIT_EXPECT_EQ(test, acquire_mem_chunk(&tree, 20, &offset[i]),
++				0);
++		length[i] = 20;
++	}
++
++	KUNIT_EXPECT_EQ(test, acquire_mem_chunk(&tree, 20, &offset_fail),
++			-ENOMEM);
++
++	release_mem_chunk(&tree, offset[0], length[0]);
++	release_mem_chunk(&tree, offset[2], length[2]);
++	release_mem_chunk(&tree, offset[3], length[3]);
++
++	check_rbtree(test, left_offsets, right_offsets);
++	clear_memory_storage(&tree, 1);
++}
++
++static struct kunit_case rank_mem_tree_test_cases[] = {
++	/* Base tree cases consist of left, right and double
++	 * merge cases each.
++	 */
++	/* 1 case */
++	KUNIT_CASE(rbtree_one_left_merge_test1),
++	KUNIT_CASE(rbtree_one_right_merge_test1),
++	KUNIT_CASE(rbtree_double_merge_test1),
++	/* 2 case */
++	KUNIT_CASE(rbtree_one_left_merge_test2),
++	KUNIT_CASE(rbtree_one_right_merge_test2),
++	KUNIT_CASE(rbtree_double_merge_test2),
++	/* 3 case */
++	KUNIT_CASE(rbtree_one_left_merge_test3),
++	KUNIT_CASE(rbtree_one_right_merge_test3),
++	KUNIT_CASE(rbtree_double_merge_test3),
++	/* 4 case */
++	KUNIT_CASE(rbtree_one_left_merge_test4),
++	KUNIT_CASE(rbtree_one_right_merge_test4),
++	KUNIT_CASE(rbtree_double_merge_test4),
++	/* 5 case */
++	KUNIT_CASE(rbtree_one_left_merge_test5),
++	KUNIT_CASE(rbtree_one_right_merge_test5),
++	KUNIT_CASE(rbtree_double_merge_test5),
++	/* 6 case */
++	KUNIT_CASE(rbtree_one_left_merge_test6),
++	KUNIT_CASE(rbtree_one_right_merge_test6),
++	KUNIT_CASE(rbtree_double_merge_test6),
++	/* 7 case */
++	KUNIT_CASE(rbtree_one_left_merge_test7),
++	KUNIT_CASE(rbtree_one_right_merge_test7),
++	KUNIT_CASE(rbtree_double_merge_test7),
++	/* One node cases, no double merge */
++	KUNIT_CASE(rbtree_one_node_merge_left),
++	KUNIT_CASE(rbtree_one_node_merge_right),
++	/* Two nodes cases */
++	KUNIT_CASE(rbtree_two_node_merge_left),
++	KUNIT_CASE(rbtree_two_node_merge_right),
++	KUNIT_CASE(rbtree_two_node_merge_double),
++	/* Some random acquire-resoter ops */
++	KUNIT_CASE(rbtree_acquire_restore),
++	{}
++};
++
++static struct kunit_suite rank_mem_tree_test_suite = {
++	.name = "rank-memory-tree",
++	.test_cases = rank_mem_tree_test_cases,
++};
++kunit_test_suite(rank_mem_tree_test_suite);
+-- 
+2.34.1
+

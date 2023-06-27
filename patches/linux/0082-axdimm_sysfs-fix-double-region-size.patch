@@ -1,0 +1,29 @@
+From b24ba18965ac3e9e1ece0c655cb28807586358d2 Mon Sep 17 00:00:00 2001
+From: "s.koval" <s.koval@samsung.com>
+Date: Thu, 22 Dec 2022 18:34:22 +0300
+Subject: [PATCH 082/161] [axdimm_sysfs] fix double region size
+
+Region sizes returned per chip select, but we need per rank
+size.
+
+Signed-off-by: Semyon Koval <s.koval@samsung.com>
+---
+ drivers/dax/axdimm_sysfs.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index 53f0daf93..c9f2cdbb8 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -230,7 +230,7 @@ static ssize_t region_show(struct region_attribute *attr, char *buf)
+ 		return sprintf(
+ 			buf, "%llu\n",
+ 			axdimm_device->mem_info.mem_size[attr->rank % NUM_OF_CS]
+-							[attr->region]);
++							[attr->region] / NUM_RANKS_PER_CS);
+ 
+ 	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+ 		return sprintf(buf, "%llu\n",
+-- 
+2.34.1
+

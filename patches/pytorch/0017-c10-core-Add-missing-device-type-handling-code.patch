@@ -1,0 +1,70 @@
+From 2c2439c1d5bab2b23ceffd7dd4d00577e4ada6aa Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 3 Nov 2021 12:39:38 +0900
+Subject: [PATCH 017/128] [c10/core] Add missing device type handling code
+
+* add 'AXDIMM' type to 'computeDispatchKey'.
+* add 'IsAXDIMMDeviceType' similarly to CPU/GPU.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ c10/core/TensorOptions.h    | 4 ++++
+ caffe2/utils/proto_utils.cc | 7 +++++++
+ caffe2/utils/proto_utils.h  | 1 +
+ 3 files changed, 12 insertions(+)
+
+diff --git a/c10/core/TensorOptions.h b/c10/core/TensorOptions.h
+index ee21ca72..1fe85665 100644
+--- a/c10/core/TensorOptions.h
++++ b/c10/core/TensorOptions.h
+@@ -657,6 +657,8 @@ inline DispatchKey computeDispatchKey(
+               "This is a grandfathered Caffe2 device type ",
+               device_.type(),
+               ", it shouldn't ever convert to a DispatchKey.  File a bug describing what you were doing if you think this is in error.");
++        case DeviceType::AXDIMM:
++          return DispatchKey::AXDIMM;
+         default:
+           TORCH_CHECK_NOT_IMPLEMENTED(
+               false,
+@@ -672,6 +674,8 @@ inline DispatchKey computeDispatchKey(
+   }
+         C10_FORALL_BACKEND_DEVICE_TYPES(DO_CASE, unused)
+ #undef DO_CASE
++        case DeviceType::AXDIMM:
++          return DispatchKey::AXDIMM;
+         default:
+           TORCH_CHECK_NOT_IMPLEMENTED(
+               false,
+diff --git a/caffe2/utils/proto_utils.cc b/caffe2/utils/proto_utils.cc
+index 8fc81586..8dc36700 100644
+--- a/caffe2/utils/proto_utils.cc
++++ b/caffe2/utils/proto_utils.cc
+@@ -80,6 +80,13 @@ C10_EXPORT bool IsGPUDeviceType(int device_type) {
+   return gpu_types.count(device_type);
+ }
+ 
++C10_EXPORT bool IsAXDIMMDeviceType(int device_type) {
++  static const std::unordered_set<int> axdimm_types{
++      PROTO_AXDIMM,
++  };
++  return axdimm_types.count(device_type);
++}
++
+ C10_EXPORT bool ReadStringFromFile(const char* filename, string* str) {
+   std::ifstream ifs(filename, std::ios::in);
+   if (!ifs) {
+diff --git a/caffe2/utils/proto_utils.h b/caffe2/utils/proto_utils.h
+index a6903425..6f5c44ae 100644
+--- a/caffe2/utils/proto_utils.h
++++ b/caffe2/utils/proto_utils.h
+@@ -42,6 +42,7 @@ TORCH_API bool IsSameDevice(const DeviceOption& lhs, const DeviceOption& rhs);
+ 
+ TORCH_API bool IsCPUDeviceType(int device_type);
+ TORCH_API bool IsGPUDeviceType(int device_type);
++TORCH_API bool IsAXDIMMDeviceType(int device_type);
+ 
+ // Common interfaces that reads file contents into a string.
+ TORCH_API bool ReadStringFromFile(const char* filename, string* str);
+-- 
+2.34.1
+

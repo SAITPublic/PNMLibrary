@@ -1,0 +1,48 @@
+From 987c81ba03ae36e9fe9b20a5d8ecabcc8a24ae76 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Fri, 30 Sep 2022 14:41:42 +0300
+Subject: [PATCH 074/128] [driver] Remove device resets.
+
+Remove all calls to axdimm_reset_device from code, because device resets
+will be later made a privileged operation, and because the CI has now been
+set up to perform a device reset as part of the pipeline.
+
+References: AXDIMM-323
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ caffe2/python/pybind_state_axdimm.cc | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index f17bb677..555c3a9b 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -74,8 +74,6 @@ void addAXDIMMGlobalMethods(py::module& m) {
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+         base_device = axdimm_create_base_device();
+-        // reset for testing purposes
+-        axdimm_reset_device(base_device);
+ 
+         if (use_shared_tables) {
+           LOG(INFO) << "Allocated shared tables with memory preference id: "
+@@ -124,15 +122,12 @@ void addSecureAXDIMMGlobalMethods(py::module& m) {
+         // Insert awesome init stuff here
+         LOG(INFO) << "Work in Secure mode" << std::endl;
+         base_device = axdimm_create_base_device();
+-        // reset for testing purposes
+-        axdimm_reset_device(base_device);
+         CAFFE_ENFORCE_NE(nullptr, base_device, "AXDIMM device creation failed");
+         return "axdimm secure";
+       });
+   m.def("secure_axdimm_closer", []() {
+     // Insert awesome close stuff here
+     std::cout << "End of work in Secure mode" << std::endl;
+-    axdimm_reset_device(base_device); // Reset device to free acquired ranks
+     axdimm_destroy_base_device(base_device);
+     base_device = nullptr;
+     return 0;
+-- 
+2.34.1
+

@@ -1,0 +1,292 @@
+From 8053552b8276676f638ef731ff0bf356e710f1cc Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Mon, 12 Sep 2022 16:17:46 +0300
+Subject: [PATCH 06/27] [axdimm][ioctl] Forward axdimm ioctl request to
+ untrusted device
+
+Forward ioctl calls to untrusted AXDIMM device. Here we perform in-code serialization of
+AXDIMM ioctl's structures because current generic approach can't handle complex axdimm
+requests.
+
+Maybe in future we should use generic approach to specify serialization
+process in manifest file.
+
+Resolve: AXDIMM-377
+---
+ pal/src/host/linux-sgx/meson.build   |   1 +
+ pal/src/host/linux-sgx/pal_axdimm.c  | 192 +++++++++++++++++++++++++++
+ pal/src/host/linux-sgx/pal_axdimm.h  |  26 ++++
+ pal/src/host/linux-sgx/pal_devices.c |   5 +
+ 4 files changed, 224 insertions(+)
+ create mode 100644 pal/src/host/linux-sgx/pal_axdimm.c
+ create mode 100644 pal/src/host/linux-sgx/pal_axdimm.h
+
+diff --git a/pal/src/host/linux-sgx/meson.build b/pal/src/host/linux-sgx/meson.build
+index 8ce3eef9..a7f04aa3 100644
+--- a/pal/src/host/linux-sgx/meson.build
++++ b/pal/src/host/linux-sgx/meson.build
+@@ -73,6 +73,7 @@ libpal_sgx = shared_library('pal',
+     'pal_devices.c',
+     'pal_eventfd.c',
+     'pal_events.c',
++    'pal_axdimm.c',
+     'pal_exception.c',
+     'pal_files.c',
+     'pal_main.c',
+diff --git a/pal/src/host/linux-sgx/pal_axdimm.c b/pal/src/host/linux-sgx/pal_axdimm.c
+new file mode 100644
+index 00000000..061742c0
+--- /dev/null
++++ b/pal/src/host/linux-sgx/pal_axdimm.c
+@@ -0,0 +1,192 @@
++/*
++ * Copyright (C) 2022 Samsung Electronics Co. LTD
++ *
++ * This software is proprietary of Samsung Electronics.
++ * No part of this software, either material or conceptual may be copied or
++ * distributed, transmitted, transcribed, stored in a retrieval system or
++ * translated into any human or computer language in any form by any means,
++ * electronic, mechanical, manual or otherwise, or disclosed to third parties
++ * without the express written permission of Samsung Electronics.
++ *
++ */
++
++#include "pal_axdimm.h"
++
++#include "enclave_ocalls.h"
++#include "pal_internal.h"
++#include "pal_linux_error.h"
++
++#define REQ_AS(S, A)           ((S*)(A))
++#define AXD_ALLOC_MEM_REQ(A)   REQ_AS(struct axd_memory_alloc_request, A)
++#define AXD_GET_MEM_NUM_REQ(A) REQ_AS(struct axd_num_objects_request, A)
++#define AXD_GET_MEM_ALLOC(A)   REQ_AS(struct axd_memory_alloc, A)
++
++static uint32_t axdimm_commands[] = {
++    DEVICE_IOCRESET,        SET_FIRST_BUFFER,     SET_SECOND_BUFFER,
++    WHICH_BUFFER,           SET_SC_LOCK,          SET_SC_UNLOCK,
++    DEALLOCATE_MEMORY,      GET_RANK_FOR_WRITE,   GET_RANK_FOR_READ,
++    RELEASE_WRITE_RANK,     RELEASE_READ_RANK,    ALLOCATE_MEMORY,
++    GET_MEMORY_OBJECTS_NUM, GET_MEMORY_ALLOCATION};
++
++bool _IsAxdimmIoControl(uint32_t cmd) {
++    unsigned long i;
++    for (i = 0; i < ARRAY_SIZE(axdimm_commands); ++i)
++        if (cmd == axdimm_commands[i])
++            return true;
++    return false;
++}
++
++static uint64_t axdimm_request_size(uint32_t cmd, uint64_t args) {
++    switch (cmd) {
++        case ALLOCATE_MEMORY:
++            return sizeof(struct axd_memory_alloc_request) +
++                   AXD_ALLOC_MEM_REQ(args)->num_user_objects *
++                       sizeof(AXD_ALLOC_MEM_REQ(args)->user_objects_sizes[0]);
++        case GET_MEMORY_OBJECTS_NUM:
++            return sizeof(struct axd_num_objects_request);
++        case GET_MEMORY_ALLOCATION:
++            return sizeof(struct axd_memory_alloc) +
++                   AXD_GET_MEM_ALLOC(args)->num_objects *
++                       sizeof(AXD_GET_MEM_ALLOC(args)->objects[0]);
++        default:
++            pal_log(LOG_LEVEL_ERROR, "Fail to get size of request. Unknown command cmd = %d", cmd);
++            return 0;
++    }
++}
++
++static void* deep_axd_memory_alloc_copy(struct axd_memory_alloc_request* req, void* dst) {
++    struct axd_memory_alloc_request* untrusted_req = dst;
++
++    // Extra data will place next to main request structure
++    uint64_t* extra_data = (uint64_t*)(untrusted_req + 1);
++
++    *untrusted_req = *req;
++
++    untrusted_req->user_objects_sizes = extra_data;
++    memcpy(untrusted_req->user_objects_sizes, req->user_objects_sizes,
++           req->num_user_objects * sizeof(req->user_objects_sizes[0]));
++
++    return dst;
++}
++
++static void* deep_axd_get_memory_alloc_copy(struct axd_memory_alloc* req, void* dst) {
++    struct axd_memory_alloc* untrusted_req = dst;
++
++    // Extra data will place next to main request structure
++    struct axd_memory_object* extra_data = (struct axd_memory_object*)(untrusted_req + 1);
++
++    *untrusted_req = *req;
++
++    // Here we do not make deep copy of axd_memory_alloc because the object fiel is used only to
++    // store output from kernel
++    untrusted_req->objects = extra_data;
++
++    return dst;
++}
++
++static void* copy_to_untrusted(uint32_t cmd, uint64_t trusted_ptr, void* untrusted_ptr) {
++    switch (cmd) {
++        case ALLOCATE_MEMORY:
++            return deep_axd_memory_alloc_copy(AXD_ALLOC_MEM_REQ(trusted_ptr), untrusted_ptr);
++        case GET_MEMORY_OBJECTS_NUM:
++            *(struct axd_num_objects_request*)untrusted_ptr = *AXD_GET_MEM_NUM_REQ(trusted_ptr);
++            return untrusted_ptr;
++        case GET_MEMORY_ALLOCATION:
++            return deep_axd_get_memory_alloc_copy(AXD_GET_MEM_ALLOC(trusted_ptr), untrusted_ptr);
++        default:
++            return NULL;
++    }
++}
++
++static void copy_to_trusted(uint32_t cmd, void* untrusted_ptr, uint64_t trusted_ptr) {
++    switch (cmd) {
++        case ALLOCATE_MEMORY:
++            AXD_ALLOC_MEM_REQ(trusted_ptr)->descriptor =
++                AXD_ALLOC_MEM_REQ(untrusted_ptr)->descriptor;
++            break;
++        case GET_MEMORY_OBJECTS_NUM:
++            *AXD_GET_MEM_NUM_REQ(trusted_ptr) = *(struct axd_num_objects_request*)untrusted_ptr;
++            break;
++        case GET_MEMORY_ALLOCATION:
++            memcpy(AXD_GET_MEM_ALLOC(trusted_ptr)->objects,
++                   AXD_GET_MEM_ALLOC(untrusted_ptr)->objects,
++                   AXD_GET_MEM_ALLOC(untrusted_ptr)->num_objects *
++                       sizeof(AXD_GET_MEM_ALLOC(untrusted_ptr)->objects[0]));
++            break;
++        default:
++            break;
++    }
++}
++
++static int axdimm_ioctl(int fd, uint32_t cmd, uint64_t arg) {
++    int ret = ocall_ioctl(fd, cmd, arg);
++    if (ret < 0) {
++        pal_log(LOG_LEVEL_ERROR, "Fail to make ioctl (%x) to device [%d]. PAL error code: %d (%s)",
++                cmd, fd, unix_to_pal_error(ret), pal_strerror(unix_to_pal_error(ret)));
++    }
++    return ret;
++}
++
++int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret) {
++    pal_log(LOG_LEVEL_TRACE, "AXDIMM ioctl. cmd = %x, arg = %p.", cmd, (void*)arg);
++
++    int ret = 0;
++
++    switch (cmd) {
++        case DEVICE_IOCRESET:
++        case SET_FIRST_BUFFER:
++        case SET_SECOND_BUFFER:
++        case WHICH_BUFFER:
++        case SET_SC_LOCK:
++        case SET_SC_UNLOCK:
++        case DEALLOCATE_MEMORY:
++        case GET_RANK_FOR_WRITE:
++        case GET_RANK_FOR_READ:
++        case RELEASE_WRITE_RANK:
++        case RELEASE_READ_RANK:
++            ret = axdimm_ioctl((int)handle->dev.fd, cmd, arg);
++
++            *out_ret = ret;
++            // For *_RANK requests the result was returned as a result of `rank = ioctl(...)` call.
++            // Gramine expects that ioctl returns only 0 or error code, so here we should nullify
++            // `ret` variable (in case of successful call) to satisfy Gramine restriction
++            if (ret >= 0)
++                ret = 0;
++            break;
++
++        case ALLOCATE_MEMORY:
++        case GET_MEMORY_OBJECTS_NUM:
++        case GET_MEMORY_ALLOCATION: {
++            uint64_t req_size = axdimm_request_size(cmd, arg);
++            if (req_size == 0) {
++                pal_log(LOG_LEVEL_ERROR,
++                        "Fail to serialize request for cmd = %u. Unable to get request size.", cmd);
++                return -PAL_ERROR_INVAL;
++            }
++
++            void* untrusted_addr;
++            ret = ocall_mmap_untrusted(&untrusted_addr, ALLOC_ALIGN_UP(req_size),
++                                       PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,
++                                       /*fd=*/-1, /*offset=*/0);
++            if (ret < 0)
++                return unix_to_pal_error(ret);
++
++            untrusted_addr = copy_to_untrusted(cmd, arg, untrusted_addr);
++
++            ret = axdimm_ioctl((int)handle->dev.fd, cmd, (uint64_t)untrusted_addr);
++
++            if (ret >= 0)
++                copy_to_trusted(cmd, untrusted_addr, arg);
++
++            ocall_munmap_untrusted(untrusted_addr, ALLOC_ALIGN_UP(req_size));
++            *out_ret = ret;
++
++            break;
++        }
++        default:
++            pal_log(LOG_LEVEL_ERROR, "Unknown ioctl command: %x", cmd);
++            return -PAL_ERROR_INVAL;
++    }
++
++    return unix_to_pal_error(ret);
++}
+\ No newline at end of file
+diff --git a/pal/src/host/linux-sgx/pal_axdimm.h b/pal/src/host/linux-sgx/pal_axdimm.h
+new file mode 100644
+index 00000000..26f2f7d3
+--- /dev/null
++++ b/pal/src/host/linux-sgx/pal_axdimm.h
+@@ -0,0 +1,26 @@
++/*
++ * Copyright (C) 2022 Samsung Electronics Co. LTD
++ *
++ * This software is proprietary of Samsung Electronics.
++ * No part of this software, either material or conceptual may be copied or
++ * distributed, transmitted, transcribed, stored in a retrieval system or
++ * translated into any human or computer language in any form by any means,
++ * electronic, mechanical, manual or otherwise, or disclosed to third parties
++ * without the express written permission of Samsung Electronics.
++ *
++ */
++
++#ifndef AXDIMM_GRAMINE_PAL_AXDIMM_H
++#define AXDIMM_GRAMINE_PAL_AXDIMM_H
++
++#include <asm/ioctls.h>
++#include <linux/libaxdimm.h>
++
++#include "pal.h"
++#include "pal_host.h"
++
++int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret);
++
++bool _IsAxdimmIoControl(uint32_t cmd);
++
++#endif  // AXDIMM_GRAMINE_PAL_AXDIMM_H
+diff --git a/pal/src/host/linux-sgx/pal_devices.c b/pal/src/host/linux-sgx/pal_devices.c
+index c4555da9..9227fb32 100644
+--- a/pal/src/host/linux-sgx/pal_devices.c
++++ b/pal/src/host/linux-sgx/pal_devices.c
+@@ -12,6 +12,7 @@
+ 
+ #include "api.h"
+ #include "pal.h"
++#include "pal_axdimm.h"
+ #include "pal_error.h"
+ #include "pal_flags_conv.h"
+ #include "pal_internal.h"
+@@ -1081,6 +1082,10 @@ int _PalDeviceIoControl(PAL_HANDLE handle, uint32_t cmd, unsigned long arg, int*
+     if (handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_DENIED;
+ 
++    if (_IsAxdimmIoControl(cmd)) {
++        return _PalAxdimmIoControl(handle, cmd, arg, out_ret);
++    }
++
+     toml_array_t* toml_ioctl_struct = NULL;
+     ret = get_allowed_ioctl_struct(cmd, &toml_ioctl_struct);
+     if (ret < 0)
+-- 
+2.34.1
+

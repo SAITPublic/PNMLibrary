@@ -1,0 +1,1 @@
+message("Implement cmake build for numa_node")

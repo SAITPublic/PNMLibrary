@@ -1,0 +1,133 @@
+From c9f17fb6d03226150c7fdc3b3d25e20dc9d09d3c Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Fri, 1 Jul 2022 18:31:31 +0300
+Subject: [PATCH 10/33] Make DeepRecSys work with int type
+
+Make correct call of int version of secure SLS operator.
+Add extra argument (--sls_dtype) into run script to specify
+datatype that will be used in secure sls operator.
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ models/dlrm_s_caffe2.py  | 34 ++++++++++++++++++++++++++--------
+ run_DeepRecSys_axdimm.sh |  6 +++++-
+ utils/utils.py           |  5 +++++
+ 3 files changed, 36 insertions(+), 9 deletions(-)
+
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index 3b90636..d644ca2 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -306,7 +306,7 @@ class DLRM_Net(object):
+             # initialize the weights
+             # approach 1a: custom
+             if self.args.use_secndp_algo:
+-                W = np.asarray([[]], dtype=np.float32)
++                W = np.asarray([[]], dtype=np.int32 if self.args.sls_dtype == "int32" else np.float32)
+             else:
+                 W = np.random.uniform(low=-np.sqrt(1 / n),
+                                       high=np.sqrt(1 / n),
+@@ -355,15 +355,25 @@ class DLRM_Net(object):
+             else:
+                 raise ValueError("Wrong device type: {}".format(self.args.sls_device))
+ 
++            WITH_SGX = True
++            WITHOUT_SGX = False
++            secure_operators_map = {}
++
++            secure_operators_map[WITHOUT_SGX] = {"float32": model.net.SecureSparseLengthsSumVec,
++                                                 "int32": model.net.SecureSparseLengthsSumIntVec}
++            if self.args.use_sgx:
++                secure_operators_map[WITH_SGX] = {"float32": model.net.SgxSecureSparseLengthsSumVec,
++                                                  "int32": model.net.SgxSecureSparseLengthsSumIntVec}
++
+             with core.DeviceScope(core.DeviceOption(dev_type, 0)):
+                 if self.args.use_secndp_algo:
+                     rows = [int(v) for v in self.args.arch_embedding_size.split("-")]
+-                    op_constructor = model.net.SecureSparseLengthsSumVec if not self.args.use_sgx else model.net.SgxSecureSparseLengthsSumVec
+-                    EE = op_constructor([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+-                                        [sls_s_combined],
+-                                        from_file=True, path=self.args.table_weight_path,
+-                                        num_tables=len(rows), sparse_feature_size=m, rows=rows,
+-                                        with_tag=self.args.use_tags)
++                    op = secure_operators_map[self.args.use_sgx][self.args.sls_dtype]
++                    EE = op([*tbl_s_combined, *ind_s_combined, *len_s_combined],
++                            [sls_s_combined],
++                            from_file=True, path=self.args.table_weight_path,
++                            num_tables=len(rows), sparse_feature_size=m, rows=rows,
++                            with_tag=self.args.use_tags)
+                 else:
+                     EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+                                                        [sls_s_combined],
+@@ -399,8 +409,16 @@ class DLRM_Net(object):
+         elif self.arch_interaction_op == "cat":
+             # concatenation features (into a row vector)
+             tag_int_out_info = tag_int_out + "_info"
++            sls_ly = ly
++            if self.args.sls_dtype != "float32":
++                # The Concat operator requires float32 as an input data but SLS operator here
++                # provides int32 sum, that used as an input for Concat. To make Concat operator
++                # work we should add Cast operator and cast SLS output to proper datatype
++                model.net.Cast(ly, "ly_casted", to=1)
++                sls_ly = ["ly_casted"]
++
+             R, R_info = model.net.Concat(
+-                x + ly, [tag_int_out, tag_int_out_info], axis=1
++                x + sls_ly, [tag_int_out, tag_int_out_info], axis=1
+             )
+         else:
+             sys.exit("ERROR: --arch-interaction-op="
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index 5e2c711..5e8e85b 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -81,6 +81,7 @@ table_weight_path="./tables/embedded.bin"
+ 
+ USE_SECURE_ALGO=''
+ SLS_DEVICE="axdimm"
++SLS_DTYPE='float32'
+ while [ "$#" -ne 0 ]
+ do
+   case "$1" in
+@@ -101,6 +102,9 @@ do
+             shift
+             SLS_DEVICE=$1
+             ;;
++  "--sls_dtype")
++            shift
++            SLS_DTYPE=$1
+   esac
+   shift
+ done
+@@ -111,7 +115,7 @@ then
+   echo "Example: export SECNDP_ENCLAVE_PATH=/home/yalavrinenko/git/axdimm_lib/driver/build/secure/AxdimmSecureEnclave.signed.so"
+ fi
+ 
+-axdimm_args="--use_axdimm_caffe2_backend --table_weight_path $table_weight_path $USE_SECURE_ALGO $USE_SGX $TAG_VERIFICATION --sls_device $SLS_DEVICE"
++axdimm_args="--use_axdimm_caffe2_backend --table_weight_path $table_weight_path $USE_SECURE_ALGO $USE_SGX $TAG_VERIFICATION --sls_device $SLS_DEVICE --sls_dtype $SLS_DTYPE"
+ # axdimm_args=""
+ 
+ avg_arrival_rate=1
+diff --git a/utils/utils.py b/utils/utils.py
+index 78da75d..6e7d82d 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -132,10 +132,15 @@ def cli():
+     # =========================================================================================
+     parser.add_argument('--use_axdimm_caffe2_backend', action="store_true", default=False)
+     parser.add_argument("--table_weight_path", type=str, default="./pretrained/real_0.5M_120table")
++
++    # =========================================================================================
++    # AXDIMM SecNDP configuration
++    # =========================================================================================
+     parser.add_argument("--use_secndp_algo", action="store_true", default=False)
+     parser.add_argument("--use_sgx", action="store_true", default=False)
+     parser.add_argument("--use_tags", action="store_true", default=False)
+     parser.add_argument("--sls_device", type=str, default="axdimm")
++    parser.add_argument("--sls_dtype", type=str, choices=["float32", "int32"], default="float32")
+ 
+     args = parser.parse_args()
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,49 @@
+@startuml
+title axdimm::secure::SyncCPURunner
+box "Untrusted environment" #LightYellow
+    participant ":DLRM" as in <<E, #990000>>
+    participant "::SecureRunner" as SR <<C, #00AA00>>
+
+    participant "::OperationExecutor" as OE <<C, #00AA00>>
+    participant "Encryption/Decryption Core" as EDC <<I, #00AAFF>>
+
+    participant "::TrivialCPU" as TC <<C, #00AA00>>
+    participant "Tables Storage" as TS <<I, #00AAFF>>
+end box
+
+skinparam backgroundColor transparent
+group "Init stage"
+in -> SR **: Create
+SR -> OE **: Create
+OE -> TC **
+end group
+
+group "Load stage"
+in -> SR ++: load_tables(...)
+    SR -> OE ++: load_tables(...)
+        OE -> EDC ++: encrypt(...)
+        return encrypted data
+        OE -> TC ++: load(encrypted data)
+            TC ->o TS: store data
+        return
+    return
+return
+end group
+
+group "SLS run stage"
+in -> SR ++: run(indices)
+    SR -> OE ++: run(indices)
+        OE -> TC ++: run(indices) //SLS on NDP device
+            TC -> TS: load_data
+            TS -> TC:
+        return CPsum
+
+        OE -> EDC ++: offset_transform_reduce(indices)
+        return EPSum
+
+    return CPsum + EPsum
+return psum
+end group
+
+
+@enduml

@@ -1,0 +1,39 @@
+From a35c849c9d417700e93b3da18e5b3133cb3d7d90 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Wed, 5 Jul 2023 17:58:50 +0300
+Subject: [PATCH 25/27] [sls] Adapt to SAIT/PNMLibrary#566: ai -> sls.
+
+SAIT/PNMLibrary#566 changes the `ai` directory to `sls`.
+This commit follows this change and updates allowed paths and bind mounts accordingly.
+
+References: MCS23-907
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ application/sls_secndp_test/secndp.manifest.template | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/application/sls_secndp_test/secndp.manifest.template b/application/sls_secndp_test/secndp.manifest.template
+index d5386703..53e87c79 100644
+--- a/application/sls_secndp_test/secndp.manifest.template
++++ b/application/sls_secndp_test/secndp.manifest.template
+@@ -19,7 +19,7 @@ fs.mounts = [
+   { uri = "file:/usr", path = "/usr" },
+   { uri = "file:/etc", path = "/etc" },
+   { uri = "file:{{ pnm_driver }}/test", path = "{{ pnm_driver }}/test" },
+-  { uri = "file:{{ pnm_driver }}/ai", path = "{{ pnm_driver }}/ai" },
++  { uri = "file:{{ pnm_driver }}/sls", path = "{{ pnm_driver }}/sls" },
+   { uri = "file:{{ pnm_driver }}/secure", path = "{{ pnm_driver }}/secure" },
+   { uri = "file:/sys/class", path = "/sys/class", type="chroot" },
+   { uri = "file:/dev/pnm/", path = "/dev/pnm/" },
+@@ -45,6 +45,6 @@ sgx.trusted_files = [
+   "file:{{ gramine.runtimedir() }}/",
+   "file:{{ arch_libdir }}/",
+   "file:/usr/{{ arch_libdir }}/",
+-  "file:{{ pnm_driver }}/ai/",
++  "file:{{ pnm_driver }}/sls/",
+   "file:{{ pnm_driver }}/secure/",
+ ]
+-- 
+2.34.1
+

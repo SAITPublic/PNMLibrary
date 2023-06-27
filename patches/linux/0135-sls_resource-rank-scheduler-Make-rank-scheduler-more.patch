@@ -1,0 +1,650 @@
+From b4027227cc11fda9fa96809ccf30cae65c452769 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Mon, 10 Jul 2023 23:36:57 -0400
+Subject: [PATCH 135/161] [sls_resource][rank scheduler] Make rank scheduler
+ more independent
+
+Related-to: MCS23-1300
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c                |  16 +--
+ .../pnm/sls_resource/sls_process_manager.c    |  27 ++--
+ .../pnm/sls_resource/sls_process_manager.h    |   6 +-
+ drivers/pnm/sls_resource/sls_rank_scheduler.c | 125 ++++++++++++------
+ drivers/pnm/sls_resource/sls_rank_scheduler.h |  41 +++---
+ drivers/pnm/sls_resource/sls_sysfs.c          |  34 ++---
+ drivers/pnm/sls_resource/sls_sysfs.h          |   1 -
+ 7 files changed, 133 insertions(+), 117 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 505c7c2d1..eda895bd3 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -29,7 +29,6 @@ MODULE_VERSION(SLS_DRIVER_VERSION);
+ #define SLS_RESOURCE_ACCESS_MODE 0666
+ 
+ #define SLS_RESOURCE_DEVICE_NAME SLS_RESOURCE_PATH_INTERNAL
+-struct sls_rank_scheduler sls_rank_sched;
+ struct sls_process_manager sls_proc_mgr;
+ 
+ static struct sls_dev sls_device;
+@@ -40,8 +39,7 @@ static dev_t sls_resource_device_number;
+ 
+ int sls_release(struct inode *node, struct file *f)
+ {
+-	return release_sls_process(&sls_proc_mgr, sls_device.allocator,
+-				      &sls_rank_sched);
++	return release_sls_process(&sls_proc_mgr, sls_device.allocator);
+ }
+ 
+ int sls_open(struct inode *inode, struct file *filp)
+@@ -81,7 +79,7 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+-		reset_sls_rank_scheduler(&sls_rank_sched);
++		reset_sls_rank_scheduler();
+ 		retval = reset_sls_allocator(sls_device.allocator,
+ 						&sls_device.mem_info);
+ 		reset_sls_process_manager(&sls_proc_mgr);
+@@ -92,11 +90,11 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		break;
+ 	case GET_RANK_FOR_WRITE:
+ 	case GET_RANK_FOR_READ:
+-		retval = get_sls_rank(&sls_rank_sched, cmd, arg);
++		retval = get_sls_rank(cmd, arg);
+ 		break;
+ 	case RELEASE_READ_RANK:
+ 	case RELEASE_WRITE_RANK:
+-		retval = release_sls_rank(&sls_rank_sched, cmd, arg);
++		retval = release_sls_rank(cmd, arg);
+ 		break;
+ 	default:
+ 		SLS_ERR("Unknown ioctl command:\n");
+@@ -213,7 +211,7 @@ int init_sls_device(void)
+ 	init_sls_process_manager(&sls_proc_mgr);
+ 
+ 	/* Reset ranks status and synchronization primitives */
+-	init_sls_rank_scheduler(&sls_rank_sched);
++	init_sls_rank_scheduler();
+ 
+ 	/* Create sysfs subsystem for the device */
+ 	err = build_sls_sysfs(&sls_device, sls_resource_device);
+@@ -224,7 +222,7 @@ int init_sls_device(void)
+ 	return 0;
+ 
+ build_sysfs_fail:
+-	destroy_sls_rank_scheduler(&sls_rank_sched);
++	destroy_sls_rank_scheduler();
+ 	cleanup_sls_process_manager(&sls_proc_mgr);
+ allocator_fail:
+ 	destroy_sls_resource_dev();
+@@ -243,7 +241,7 @@ void cleanup_sls_device(void)
+ 	cleanup_sls_process_manager(&sls_proc_mgr);
+ 
+ 	/* Reset state */
+-	destroy_sls_rank_scheduler(&sls_rank_sched);
++	destroy_sls_rank_scheduler();
+ 
+ 	/* Remove test attribute */
+ 	destroy_sls_sysfs();
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/sls_process_manager.c
+index b568c8f33..27cd5a795 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/sls_process_manager.c
+@@ -132,8 +132,7 @@ static void track_leaked_resources(struct sls_process_manager *mgr,
+ }
+ 
+ static int release_process_resources(struct sls_proc_resources *proc_res,
+-				     struct sls_allocator *alloc,
+-				     struct sls_rank_scheduler *rank_sched)
++				     struct sls_allocator *alloc)
+ {
+ 	/* in base case scenario the resources above should be already
+ 	 * released, but we need to check in case we are on
+@@ -146,14 +145,14 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 	/* handle unreleased ranks */
+ 	for (i = 0; i < NUM_OF_RANK; i++) {
+ 		if (proc_res->rank_write_mask & (1 << i)) {
+-			failed |= (release_rank_write(rank_sched, i) != i);
++			failed |= (release_rank_write(i) != i);
+ 			proc_res->rank_write_mask &= ~(1 << i);
+ 			SLS_INF("Abnormal release rank_wr[%d], pid: %d, tid: %d\n",
+ 				i, get_current_process_id(), current->pid);
+ 		}
+ 
+ 		if (proc_res->rank_read_mask & (1 << i)) {
+-			failed |= (release_rank_read(rank_sched, i) != i);
++			failed |= (release_rank_read(i) != i);
+ 			proc_res->rank_read_mask &= ~(1 << i);
+ 			SLS_INF("Abnormal release rank_rd[%d], pid: %d, tid: %d\n",
+ 				i, get_current_process_id(), current->pid);
+@@ -176,10 +175,12 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 		{
+ 			ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-			failed |= deallocate_memory_unsafe(alloc, desc_node->request) != 0;
++			failed |= deallocate_memory_unsafe(
++					  alloc, desc_node->request) != 0;
+ 			SLS_INF(
+ 				"Abnormal release desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
+-				desc_node->request.rank, desc_node->request.rank_offset,
++				desc_node->request.rank,
++				desc_node->request.rank_offset,
+ 				get_current_process_id(), current->pid);
+ 			next = rb_first(&proc_res->alloc_desc_tree);
+ 			rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
+@@ -192,8 +193,7 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ }
+ 
+ int release_sls_process(struct sls_process_manager *mgr,
+-			struct sls_allocator *alloc,
+-			struct sls_rank_scheduler *rank_sched)
++			struct sls_allocator *alloc)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+@@ -226,8 +226,8 @@ int release_sls_process(struct sls_process_manager *mgr,
+ 				goto free_proc_res;
+ 
+ 			if (atomic64_read(&mgr->enable_cleanup)) {
+-				err_code = release_process_resources(
+-					proc_res, alloc, rank_sched);
++				err_code = release_process_resources(proc_res,
++								     alloc);
+ 			} else {
+ 				track_leaked_resources(mgr, proc_res);
+ 				goto release_process_unlock;
+@@ -446,8 +446,7 @@ int register_sls_process(struct sls_process_manager *mgr)
+ }
+ 
+ int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+-				struct sls_allocator *alloc,
+-				struct sls_rank_scheduler *rank_sched)
++				struct sls_allocator *alloc)
+ {
+ 	struct sls_proc_resources *proc_res_tmp;
+ 	struct sls_proc_resources *proc_res;
+@@ -465,8 +464,7 @@ int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+ 
+ 		list_for_each_entry_safe(proc_res, proc_res_tmp,
+ 					 &mgr->leaked_process_list, list) {
+-			err_code |= release_process_resources(proc_res, alloc,
+-							      rank_sched);
++			err_code |= release_process_resources(proc_res, alloc);
+ 			list_del(&proc_res->list);
+ 			kfree(proc_res);
+ 		}
+@@ -513,6 +511,7 @@ void cleanup_sls_process_manager(struct sls_process_manager *mgr)
+ 		list_for_each_entry_safe(proc_res, proc_res_tmp,
+ 					 &mgr->active_process_list, list) {
+ 			list_del(&proc_res->list);
++			list_del(&proc_res->list);
+ 			kfree(proc_res);
+ 		}
+ 	}
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.h b/drivers/pnm/sls_resource/sls_process_manager.h
+index 53b9671a3..b13a4027a 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.h
++++ b/drivers/pnm/sls_resource/sls_process_manager.h
+@@ -60,8 +60,7 @@ void reset_sls_process_manager(struct sls_process_manager *mgr);
+ int register_sls_process(struct sls_process_manager *mgr);
+ /* function for handling 'release' file operation */
+ int release_sls_process(struct sls_process_manager *mgr,
+-			struct sls_allocator *alloc,
+-			struct sls_rank_scheduler *rank_sched);
++			struct sls_allocator *alloc);
+ 
+ /* functions for adding allocation/ranks into process's resources data structure*/
+ int sls_proc_register_alloc(struct sls_process_manager *mgr,
+@@ -76,8 +75,7 @@ int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+ 			 unsigned int cmd);
+ 
+ int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+-				struct sls_allocator *alloc,
+-				struct sls_rank_scheduler *rank_sched);
++				struct sls_allocator *alloc);
+ void sls_proc_manager_cleanup_off(struct sls_process_manager *mgr);
+ 
+ #endif /* __SLS_PROCESS_MANAGER_H__ */
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.c b/drivers/pnm/sls_resource/sls_rank_scheduler.c
+index 4aefd8057..2f27bc49f 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.c
++++ b/drivers/pnm/sls_resource/sls_rank_scheduler.c
+@@ -18,16 +18,34 @@
+  */
+ #define RETRY_TIMEOUT_NS (100000)
+ 
++struct sls_rank_scheduler {
++	/* struct for managing rank read and write status */
++	struct sls_rank_stat_t {
++		uint8_t wr_stat;
++		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
++		uint8_t rd_stat;
++		uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(uint8_t)];
++		atomic64_t wr_acquisition_count;
++		uint8_t cacheline_padding_3[L1_CACHE_BYTES - sizeof(atomic64_t)];
++	} rank_stats[NUM_OF_RANK];
++	atomic64_t retry_timeout_ns;
++	uint8_t cacheline_padding_4[L1_CACHE_BYTES - sizeof(atomic64_t)];
++	struct mutex rank_stat_lock;
++};
++
++static struct sls_rank_scheduler sls_rank_sched;
++
+ static atomic_t wr_flag = ATOMIC_INIT(0);
+ static atomic_t rd_flag = ATOMIC_INIT(0);
+ static DECLARE_WAIT_QUEUE_HEAD(wr_wq);
+ static DECLARE_WAIT_QUEUE_HEAD(rd_wq);
+ 
+-static unsigned long acquire_free_rank_for_write(struct sls_rank_scheduler *rank_sched,
+-				       unsigned int rw_msk, unsigned int wo_msk)
++static unsigned long
++acquire_free_rank_for_write(struct sls_rank_scheduler *rank_sched,
++			    unsigned int rw_msk, unsigned int wo_msk)
+ {
+ 	unsigned long rank;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++	struct sls_rank_stat_t *axd_rs = rank_sched->rank_stats;
+ 
+ 	rank = __ffs(rw_msk ? rw_msk : wo_msk);
+ 
+@@ -41,7 +59,7 @@ static void find_free_ranks(struct sls_rank_scheduler *rank_sched,
+ 			    unsigned int *wo_msk)
+ {
+ 	size_t rank;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++	struct sls_rank_stat_t *axd_rs = rank_sched->rank_stats;
+ 
+ 	/* fill wo_msk and rw_msk according to actual read and write
+ 	 * rank statuses and user requested mask
+@@ -56,10 +74,10 @@ static void find_free_ranks(struct sls_rank_scheduler *rank_sched,
+ 	}
+ 
+ 	SLS_DBG("Find free ranks: rw = 0x%x, wo = 0x%x for mask = 0x%x",
+-		   *rw_msk, *wo_msk, msk);
++		*rw_msk, *wo_msk, msk);
+ }
+ 
+-void reset_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched)
++void reset_sls_rank_scheduler(void)
+ {
+ 	size_t rank;
+ 
+@@ -67,24 +85,26 @@ void reset_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched)
+ 
+ 	/* set all ranks as idle */
+ 	for (rank = 0; rank < NUM_OF_RANK; rank++) {
+-		rank_sched->axd_rank_stats[rank].wr_stat = IDLE_STATE;
+-		rank_sched->axd_rank_stats[rank].rd_stat = IDLE_STATE;
+-		atomic64_set(&rank_sched->axd_rank_stats[rank].wr_acquisition_count, 0);
++		sls_rank_sched.rank_stats[rank].wr_stat = IDLE_STATE;
++		sls_rank_sched.rank_stats[rank].rd_stat = IDLE_STATE;
++		atomic64_set(
++			&sls_rank_sched.rank_stats[rank].wr_acquisition_count,
++			0);
+ 	}
+ 
+-	atomic64_set(&rank_sched->retry_timeout_ns, RETRY_TIMEOUT_NS);
++	atomic64_set(&sls_rank_sched.retry_timeout_ns, RETRY_TIMEOUT_NS);
+ }
+ 
+-void init_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched)
++void init_sls_rank_scheduler(void)
+ {
+-	reset_sls_rank_scheduler(rank_sched);
+-	mutex_init(&rank_sched->rank_stat_lock);
++	reset_sls_rank_scheduler();
++	mutex_init(&sls_rank_sched.rank_stat_lock);
+ }
+ 
+-void destroy_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched)
++void destroy_sls_rank_scheduler(void)
+ {
+-	reset_sls_rank_scheduler(rank_sched);
+-	mutex_destroy(&rank_sched->rank_stat_lock);
++	reset_sls_rank_scheduler();
++	mutex_destroy(&sls_rank_sched.rank_stat_lock);
+ }
+ 
+ static int get_rank_write(struct sls_rank_scheduler *rank_sched,
+@@ -104,7 +124,7 @@ static int get_rank_write(struct sls_rank_scheduler *rank_sched,
+ 
+ 	mutex_lock(&rank_sched->rank_stat_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->rank_stats);
+ 		find_free_ranks(rank_sched, msk, &rw_mask, &wo_mask);
+ 
+ 		if (rw_mask || wo_mask) {
+@@ -126,7 +146,7 @@ static int get_rank_read(struct sls_rank_scheduler *rank_sched,
+ 			 unsigned int rank_id)
+ {
+ 	int ret = -1;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++	struct sls_rank_stat_t *axd_rs = rank_sched->rank_stats;
+ 
+ 	SLS_DBG("Acquiring rank %u for read\n", rank_id);
+ 
+@@ -137,7 +157,7 @@ static int get_rank_read(struct sls_rank_scheduler *rank_sched,
+ 
+ 	mutex_lock(&rank_sched->rank_stat_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->rank_stats);
+ 		if (axd_rs[rank_id].rd_stat == IDLE_STATE) {
+ 			ret = rank_id;
+ 			axd_rs[rank_id].rd_stat = BUSY_STATE;
+@@ -153,11 +173,10 @@ static int get_rank_read(struct sls_rank_scheduler *rank_sched,
+ 	return ret;
+ }
+ 
+-int release_rank_write(struct sls_rank_scheduler *rank_sched,
+-		       unsigned int rank_id)
++int release_rank_write(unsigned int rank_id)
+ {
+ 	int ret = rank_id;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++	struct sls_rank_stat_t *axd_rs = sls_rank_sched.rank_stats;
+ 
+ 	SLS_DBG("Releasing rank %u for write\n", rank_id);
+ 
+@@ -166,21 +185,20 @@ int release_rank_write(struct sls_rank_scheduler *rank_sched,
+ 		return -1;
+ 	}
+ 
+-	mutex_lock(&rank_sched->rank_stat_lock);
++	mutex_lock(&sls_rank_sched.rank_stat_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sls_rank_sched.rank_stats);
+ 		axd_rs[rank_id].wr_stat = IDLE_STATE;
+ 	}
+-	mutex_unlock(&rank_sched->rank_stat_lock);
++	mutex_unlock(&sls_rank_sched.rank_stat_lock);
+ 
+ 	return ret;
+ }
+ 
+-int release_rank_read(struct sls_rank_scheduler *rank_sched,
+-		      unsigned int rank_id)
++int release_rank_read(unsigned int rank_id)
+ {
+ 	int ret = rank_id;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++	struct sls_rank_stat_t *axd_rs = sls_rank_sched.rank_stats;
+ 
+ 	SLS_DBG("Releasing rank %u for read\n", rank_id);
+ 
+@@ -189,12 +207,12 @@ int release_rank_read(struct sls_rank_scheduler *rank_sched,
+ 		return -1;
+ 	}
+ 
+-	mutex_lock(&rank_sched->rank_stat_lock);
++	mutex_lock(&sls_rank_sched.rank_stat_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sls_rank_sched.rank_stats);
+ 		axd_rs[rank_id].rd_stat = IDLE_STATE;
+ 	}
+-	mutex_unlock(&rank_sched->rank_stat_lock);
++	mutex_unlock(&sls_rank_sched.rank_stat_lock);
+ 	return ret;
+ }
+ 
+@@ -202,7 +220,7 @@ int release_rank_read(struct sls_rank_scheduler *rank_sched,
+ // wait_event_interruptible_hrtimeout. We can't replace that function because the
+ // HW is hanging
+ static __no_kcsan int wait_for_rank(struct sls_rank_scheduler *rank_sched,
+-			 atomic_t *flag, struct wait_queue_head *wq)
++				    atomic_t *flag, struct wait_queue_head *wq)
+ {
+ 	atomic_set(flag, 0);
+ 	/* timeout in nanoseconds */
+@@ -250,13 +268,12 @@ static int get_rank(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
+ 	return -EINVAL;
+ }
+ 
+-int get_sls_rank(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
+-		    unsigned int arg)
++int get_sls_rank(unsigned int cmd, unsigned int arg)
+ {
+-	int ret = get_rank(rank_sched, cmd, arg);
++	int ret = get_rank(&sls_rank_sched, cmd, arg);
+ 
+ 	if (ret < 0) /* was not able to get rank for write, retry */
+-		ret = get_rank_retry(rank_sched, cmd, arg);
++		ret = get_rank_retry(&sls_rank_sched, cmd, arg);
+ 
+ 	if (ret >= 0) /* finally got rank, add to process resources */
+ 		sls_proc_register_rank(&sls_proc_mgr, ret, cmd);
+@@ -264,6 +281,33 @@ int get_sls_rank(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
+ 	return ret;
+ }
+ 
++bool sls_rank_scheduler_rank_state(uint8_t rank)
++{
++	bool state;
++
++	mutex_lock(&sls_rank_sched.rank_stat_lock);
++	state = sls_rank_sched.rank_stats[rank].wr_stat == BUSY_STATE;
++	mutex_unlock(&sls_rank_sched.rank_stat_lock);
++	return state;
++}
++
++uint64_t sls_rank_scheduler_acquisition_count(uint8_t rank)
++{
++	struct sls_rank_stat_t *axd_rs = sls_rank_sched.rank_stats;
++
++	return atomic64_read(&axd_rs[rank].wr_acquisition_count);
++}
++
++uint64_t sls_rank_scheduler_acquisition_timeout(void)
++{
++	return atomic64_read(&sls_rank_sched.retry_timeout_ns);
++}
++
++void sls_rank_scheduler_set_acquisition_timeout(uint64_t timeout)
++{
++	atomic64_set(&sls_rank_sched.retry_timeout_ns, timeout);
++}
++
+ static void wakeup_queue(struct sls_rank_scheduler *rank_sched, int rank,
+ 			 atomic_t *flag, struct wait_queue_head *wq)
+ {
+@@ -279,10 +323,10 @@ static int release_and_wakeup(struct sls_rank_scheduler *rank_sched,
+ 	int rank;
+ 
+ 	if (cmd == RELEASE_WRITE_RANK) {
+-		rank = release_rank_write(rank_sched, arg);
++		rank = release_rank_write(arg);
+ 		wakeup_queue(rank_sched, rank, &wr_flag, &wr_wq);
+ 	} else if (cmd == RELEASE_READ_RANK) {
+-		rank = release_rank_read(rank_sched, arg);
++		rank = release_rank_read(arg);
+ 		wakeup_queue(rank_sched, rank, &rd_flag, &rd_wq);
+ 	} else {
+ 		SLS_ERR("Unknown rank operation cmd [%d]\n", cmd);
+@@ -292,12 +336,11 @@ static int release_and_wakeup(struct sls_rank_scheduler *rank_sched,
+ 	return rank;
+ }
+ 
+-int release_sls_rank(struct sls_rank_scheduler *rank_sched,
+-			unsigned int cmd, unsigned int arg)
++int release_sls_rank(unsigned int cmd, unsigned int arg)
+ {
+ 	int rank;
+ 
+-	rank = release_and_wakeup(rank_sched, cmd, arg);
++	rank = release_and_wakeup(&sls_rank_sched, cmd, arg);
+ 
+ 	if (rank >= 0)
+ 		return sls_proc_remove_rank(&sls_proc_mgr, rank, cmd);
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.h b/drivers/pnm/sls_resource/sls_rank_scheduler.h
+index 41ec62c5f..e1a4e844f 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.h
++++ b/drivers/pnm/sls_resource/sls_rank_scheduler.h
+@@ -10,37 +10,26 @@
+ #include <linux/types.h>
+ #include <linux/mutex.h>
+ 
+-struct sls_rank_scheduler {
+-	/* struct for managing rank read and write status */
+-	struct sls_rank_stat_t {
+-		uint8_t wr_stat;
+-		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
+-		uint8_t rd_stat;
+-		uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(uint8_t)];
+-		atomic64_t wr_acquisition_count;
+-		uint8_t cacheline_padding_3[L1_CACHE_BYTES - sizeof(atomic64_t)];
+-	} axd_rank_stats[NUM_OF_RANK];
+-	atomic64_t retry_timeout_ns;
+-	uint8_t cacheline_padding_4[L1_CACHE_BYTES - sizeof(atomic64_t)];
+-	struct mutex rank_stat_lock;
+-};
+-
+ extern struct sls_process_manager sls_proc_mgr;
+ 
+-void reset_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched);
+-void init_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched);
+-void destroy_sls_rank_scheduler(struct sls_rank_scheduler *rank_sched);
+-int get_sls_rank(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
+-		    unsigned int arg);
+-int release_sls_rank(struct sls_rank_scheduler *rank_sched,
+-			unsigned int cmd, unsigned int arg);
++void reset_sls_rank_scheduler(void);
++void init_sls_rank_scheduler(void);
++void destroy_sls_rank_scheduler(void);
++int get_sls_rank(unsigned int cmd, unsigned int arg);
++int release_sls_rank(unsigned int cmd, unsigned int arg);
+ 
+ /* these functions are intended for direct rank status manipulation from
+  * resource manager, in order to free resources which were not freed by
+  * user space process itself
+  */
+-int release_rank_write(struct sls_rank_scheduler *rank_sched,
+-		       unsigned int rank_id);
+-int release_rank_read(struct sls_rank_scheduler *rank_sched,
+-		      unsigned int rank_id);
++int release_rank_write(unsigned int rank_id);
++int release_rank_read(unsigned int rank_id);
++
++bool sls_rank_scheduler_rank_state(uint8_t rank);
++uint64_t sls_rank_scheduler_acquisition_count(uint8_t rank);
++
++uint64_t sls_rank_scheduler_acquisition_timeout(void);
++void sls_rank_scheduler_set_acquisition_timeout(uint64_t timeout);
++
++
+ #endif
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.c b/drivers/pnm/sls_resource/sls_sysfs.c
+index 65d19618b..8fd3ca4e7 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.c
++++ b/drivers/pnm/sls_resource/sls_sysfs.c
+@@ -45,14 +45,12 @@ static ssize_t cleanup_store(struct device *device,
+ {
+ 	if (sysfs_streq(buf, "1")) {
+ 		if (sls_proc_manager_cleanup_on(&sls_proc_mgr,
+-						   sls_device->allocator,
+-						   &sls_rank_sched))
++						sls_device->allocator))
+ 			SLS_ERR("Failed to enable resource manager\n");
+ 	} else if (sysfs_streq(buf, "0")) {
+ 		sls_proc_manager_cleanup_off(&sls_proc_mgr);
+ 	} else {
+-		SLS_DBG(
+-			"Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
++		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
+ 			buf);
+ 	}
+ 
+@@ -63,8 +61,9 @@ static DEVICE_ATTR_RW(cleanup);
+ static ssize_t acq_timeout_show(struct device *device,
+ 				struct device_attribute *attr, char *buf)
+ {
+-	return sysfs_emit(buf, "%llu\n",
+-			  atomic64_read(&sls_rank_sched.retry_timeout_ns));
++	uint64_t acquisition_count = sls_rank_scheduler_acquisition_timeout();
++
++	return sysfs_emit(buf, "%llu\n", acquisition_count);
+ }
+ 
+ static ssize_t acq_timeout_store(struct device *device,
+@@ -74,13 +73,12 @@ static ssize_t acq_timeout_store(struct device *device,
+ 	uint64_t acq_timeout;
+ 
+ 	if (kstrtoull(buf, 10, &acq_timeout)) {
+-		SLS_ERR(
+-			"Failed to convert rank acquisition timeout string ('%s') to integer.\n",
++		SLS_ERR("Failed to convert rank acquisition timeout string ('%s') to integer.\n",
+ 			buf);
+ 		return -EINVAL;
+ 	}
+ 	SLS_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
+-	atomic64_set(&sls_rank_sched.retry_timeout_ns, acq_timeout);
++	sls_rank_scheduler_set_acquisition_timeout(acq_timeout);
+ 	return count;
+ }
+ static DEVICE_ATTR_RW(acq_timeout);
+@@ -95,8 +93,7 @@ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ 	} else {
+ 		// Usual behavior is to silently ignore this, so there is no reason
+ 		// to make it an SLS_WRN.
+-		SLS_DBG(
+-			"Ignoring invalid value ('%s') written into sysfs 'reset' file\n",
++		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'reset' file\n",
+ 			buf);
+ 	}
+ 
+@@ -137,8 +134,8 @@ struct region_attribute {
+ struct regions_sysfs {
+ 	struct region_attribute region_attrs[SLS_BLOCK_MAX]
+ 					    [REGION_SYSFS_ATTR_COUNT];
+-	struct attribute *attrs[SLS_BLOCK_MAX]
+-			       [WITH_NULL_TERM(REGION_SYSFS_ATTR_COUNT)];
++	struct attribute
++		*attrs[SLS_BLOCK_MAX][WITH_NULL_TERM(REGION_SYSFS_ATTR_COUNT)];
+ 	struct attribute_group group[SLS_BLOCK_MAX];
+ 	const struct attribute_group *groups[WITH_NULL_TERM(SLS_BLOCK_MAX)];
+ 	struct kobject regions_kobj;
+@@ -168,11 +165,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 	struct gen_pool *pool;
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[0]) == 0) {
+-		struct sls_rank_stat_t *axd_rs =
+-			sls_rank_sched.axd_rank_stats;
+-		mutex_lock(&sls_rank_sched.rank_stat_lock);
+-		state = axd_rs[attr->rank].wr_stat;
+-		mutex_unlock(&sls_rank_sched.rank_stat_lock);
++		state = sls_rank_scheduler_rank_state(attr->rank);
+ 		return sysfs_emit(buf, "%u\n", state);
+ 	}
+ 
+@@ -193,10 +186,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[3]) == 0) {
+-		struct sls_rank_stat_t *axd_rs =
+-			sls_rank_sched.axd_rank_stats;
+-		wr_acq_count =
+-			atomic64_read(&axd_rs[attr->rank].wr_acquisition_count);
++		wr_acq_count = sls_rank_scheduler_acquisition_count(attr->rank);
+ 		return sysfs_emit(buf, "%llu\n", wr_acq_count);
+ 	}
+ 
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.h b/drivers/pnm/sls_resource/sls_sysfs.h
+index 732032bc9..b21a036d4 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.h
++++ b/drivers/pnm/sls_resource/sls_sysfs.h
+@@ -7,7 +7,6 @@
+ struct device;
+ struct sls_dev;
+ 
+-extern struct sls_rank_scheduler sls_rank_sched;
+ extern struct sls_process_manager sls_proc_mgr;
+ 
+ int build_sls_sysfs(struct sls_dev *dev, struct device *resource_dev);
+-- 
+2.34.1
+

@@ -1,0 +1,33 @@
+From d0222060451f68ba38aa2bc9a17d733721f68447 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 27 Apr 2023 10:01:21 +0300
+Subject: [PATCH 103/161] [kcsan] Disable kcsan for wait_for_rank
+
+The kcsan was disabled for wait_for_rank function to suppress datarace
+message in 3rd-part function. We can't use the version without dataraces
+becaus HW is hanging in that case.
+
+Resolve: MCS23-904
+---
+ drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
+index cd5be5d4e..9dd9b62bf 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
++++ b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
+@@ -193,7 +193,10 @@ int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	return ret;
+ }
+ 
+-static int wait_for_rank(struct axdimm_rank_scheduler *rank_sched,
++// Here we disable kcsan checks due to unavoidable data race in
++// wait_event_interruptible_hrtimeout. We can't replace that function because the
++// HW is hanging
++static __no_kcsan int wait_for_rank(struct axdimm_rank_scheduler *rank_sched,
+ 			 atomic_t *flag, struct wait_queue_head *wq)
+ {
+ 	atomic_set(flag, 0);
+-- 
+2.34.1
+

@@ -1,0 +1,39 @@
+From 57fe7211f0ecd7cebb72139744f13ca853bd374c Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 26 Nov 2021 13:43:48 +0900
+Subject: [PATCH 008/161] [drivers/dax] Fix wrong 'pgoff' calculation for
+ AXDIMM ranges
+
+Move 'pgoff' updating code into the proper place (just after calculating)
+'range.start' and 'range.end'.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 59007a372..a8df6992d 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -143,9 +143,6 @@ static int setup_axdimm_ranges(struct dev_dax *dev_dax, ulong *offset,
+ 	ranges = krealloc(dev_dax->ranges, sizeof(*ranges) * dev_dax->nr_range,
+ 			  GFP_KERNEL);
+ 
+-	for (i = 0; i < dev_dax->nr_range; ++i)
+-		pgoff += PHYS_PFN(range_len(&ranges[i].range));
+-
+ 	dev_dax->ranges = ranges;
+ 	for (i = 0; i < dev_dax->nr_range; ++i) {
+ 		ranges[i] = (struct dev_dax_range) {
+@@ -159,6 +156,7 @@ static int setup_axdimm_ranges(struct dev_dax *dev_dax, ulong *offset,
+ 			.end = offset[i] + sys_mem_size[i],
+ 			},
+ 		};
++		pgoff += PHYS_PFN(range_len(&ranges[i].range));
+ 		printk(KERN_INFO
+ 		       "[DAX_AXDIMM_DD] Filling dev_dax range %d via addresses %llx - %llx\n",
+ 		       i, ranges[i].range.start, ranges[i].range.end);
+-- 
+2.34.1
+

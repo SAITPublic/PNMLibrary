@@ -1,0 +1,199 @@
+From 4f8bd82c4ecd9c041a0fd4d821c8e0718ad74531 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 21 Mar 2023 19:57:15 +0300
+Subject: [PATCH 111/128] [refactor][cmake] Use new API header paths and
+ exports
+
+* Update Axdimm headers according to new paths
+* Use new cmake exported targets
+
+Related to: AXDIMM-638
+---
+ aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp |  2 +-
+ aten/src/ATen/native/axdimm/AxdimmDeviceContext.h   |  2 +-
+ aten/src/ATen/native/axdimm/AxdimmSecureTensor.h    |  2 +-
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp        |  2 +-
+ aten/src/ATen/native/axdimm/AxdimmTensor.h          |  4 ++--
+ aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h     |  2 +-
+ aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp    |  6 +++---
+ caffe2/CMakeLists.txt                               |  2 +-
+ caffe2/operators/lengths_reducer_ops_axdimm.cc      | 12 ++++++------
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h   |  2 +-
+ caffe2/python/pybind_state_axdimm.cc                |  4 ++--
+ cmake/Dependencies.cmake                            |  8 +++-----
+ 12 files changed, 23 insertions(+), 25 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+index 0a2d9b62..b58f0dec 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+@@ -1,4 +1,4 @@
+-#include "ai/api/axdimm.h"
++#include <pnmlib/ai/axdimm.h>
+ 
+ #include <ATen/native/axdimm/AxdimmDeviceContext.h>
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+index 253e2978..78941b2c 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+@@ -1,7 +1,7 @@
+ #ifndef __AXDIMM_DEVICE_CONTEXT__
+ #define __AXDIMM_DEVICE_CONTEXT__
+ 
+-#include "core/api/axdimm_device.h"
++#include <pnmlib/core/axdimm_device.h>
+ 
+ #include <c10/util/Exception.h>
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+index e7a03a6d..e4e503fc 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+@@ -1,7 +1,7 @@
+ #ifndef __AXDIMM_SECURE_TENSOR__
+ #define __AXDIMM_SECURE_TENSOR__
+ 
+-#include "ai/api/axdimm.h"
++#include <pnmlib/ai/axdimm.h>
+ #include "secure/common/axdimm_secure_runners_factory.h"
+ 
+ #include <ATen/ATen.h>
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index ae1472bb..fda2a9fb 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -1,4 +1,4 @@
+-#include "common/api/pnm_error.h"
++#include <pnmlib/common/pnm_error.h>
+ 
+ #include <c10/util/Logging.h>
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index 944c046b..8ed1ef12 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -1,8 +1,8 @@
+ #ifndef __AXDIMM_TENSOR__
+ #define __AXDIMM_TENSOR__
+ 
+-#include "ai/api/axdimm.h"
+-#include "core/api/axdimm_device.h"
++#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/core/axdimm_device.h>
+ 
+ #include <ATen/ATen.h>
+ #include <ATen/native/axdimm/AxdimmBaseTensor.h>
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h b/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
+index df7e3e91..4bd6ef45 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
+@@ -1,7 +1,7 @@
+ #ifndef __AXDIMM_TYPE_HELPERS__
+ #define __AXDIMM_TYPE_HELPERS__
+ 
+-#include "common/api/pnm_views.h"
++#include <pnmlib/common/pnm_views.h>
+ 
+ #include <algorithm>
+ #include <cstdint>
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index 7daffdfc..f9c262df 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -1,6 +1,6 @@
+-#include "ai/api/axdimm.h"
+-#include "ai/api/sls_operation.h"
+-#include "ai/api/sls_runner.h"
++#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls_operation.h>
++#include <pnmlib/ai/sls_runner.h>
+ 
+ #include <ATen/native/axdimm/AxdimmTensorConvert.h>
+ 
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index f42e0cb6..152a9b1a 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1999,7 +1999,7 @@ if(BUILD_PYTHON)
+     target_include_directories(caffe2_pybind11_state_axdimm PRIVATE $<INSTALL_INTERFACE:include>)
+     target_include_directories(caffe2_pybind11_state_axdimm PRIVATE ${Caffe2_CPU_INCLUDE} ${Caffe2_AXDIMM_INCLUDE})
+     target_link_libraries(caffe2_pybind11_state_axdimm PRIVATE torch_library python::python pybind::pybind11)
+-    target_link_libraries(caffe2_pybind11_state_axdimm PRIVATE Axdimm::AxdimmAI)
++    target_link_libraries(caffe2_pybind11_state_axdimm PRIVATE PNM::AxdimmAI)
+ 
+     if(USE_MKLDNN)
+         target_link_libraries(caffe2_pybind11_state_axdimm PRIVATE caffe2::mkldnn)
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 26ed6d50..0825f4c5 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -5,12 +5,12 @@
+ #include "caffe2/operators/segment_reduction_op.h"
+ #include "caffe2/utils/math.h"
+ 
+-#include "ai/api/axdimm.h"
+-#include "ai/api/sls_operation.h"
+-#include "ai/api/sls_runner.h"
+-#include "common/api/pnm_error.h"
+-#include "common/api/pnm_views.h"
+-#include "core/api/axdimm_device.h"
++#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/sls_operation.h>
++#include <pnmlib/ai/sls_runner.h>
++#include <pnmlib/common/pnm_error.h>
++#include <pnmlib/common/pnm_views.h>
++#include <pnmlib/core/axdimm_device.h>
+ 
+ #include <algorithm>
+ #include <vector>
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index fe05a73c..2a4f47e8 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -7,7 +7,7 @@
+ #include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ 
+-#include "ai/api/axdimm.h"
++#include <pnmlib/ai/axdimm.h>
+ 
+ #include "secure/plain/devices/untrusted_axdimm_device.h"
+ 
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 1db14329..4aeea2b1 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -14,8 +14,8 @@
+ #include "caffe2/operators/operator_fallback_axdimm.h"
+ #include "caffe2/python/pybind_state_registry.h"
+ 
+-#include "ai/api/axdimm.h"
+-#include "core/api/axdimm_device.h"
++#include <pnmlib/ai/axdimm.h>
++#include <pnmlib/core/axdimm_device.h>
+ 
+ #include <fcntl.h>
+ #include <sys/mman.h>
+diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
+index 99b1023e..676f0d98 100644
+--- a/cmake/Dependencies.cmake
++++ b/cmake/Dependencies.cmake
+@@ -1828,11 +1828,9 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/fmt)
+ # to define one, to stop cmake complaining.
+ # Axdimm cmake files are required only to export axdimm library packages
+ if(USE_AXDIMM)
+-  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_AXDIMM_BUILD_DIR}/ai/cmake")
+-  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_AXDIMM_BUILD_DIR}/secure/cmake")
+-  find_package(AxdimmAI REQUIRED)
+-  find_package(AxdimmSecure REQUIRED)
+-  set(AXDIMM_LIBS Axdimm::AxdimmSecure Axdimm::AxdimmAI)
++  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_AXDIMM_BUILD_DIR}/cmake")
++  find_package(PNMLib REQUIRED)
++  set(AXDIMM_LIBS PNM::AxdimmSecure PNM::AxdimmAI)
+ 
+   list(APPEND Caffe2_DEPENDENCY_LIBS ${AXDIMM_LIBS})
+   list(APPEND Caffe2_AXDIMM_DEPENDENCY_LIBS ${AXDIMM_LIBS})
+-- 
+2.34.1
+

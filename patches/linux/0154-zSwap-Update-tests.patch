@@ -1,0 +1,515 @@
+From 7ba4f7973f104b314e459507e47c45897748dd55 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 26 Jul 2023 02:14:01 -0400
+Subject: [PATCH 154/161] [zSwap] Update tests
+
+- Copy new multithread memadvice from SRCX repo
+- Refactor tests and sort includes
+- Encapsulate mmadvice test logic
+- Add pseudo-random generator for filling and validation memory pages
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ scripts/pnm/zswap/qemu/demo/mmadvice.c        |  72 ------
+ scripts/pnm/zswap/tests/madvise/Makefile      |   5 +
+ .../pnm/zswap/tests/madvise/memory_madvise.c  | 230 ++++++++++++++++++
+ .../zswap/tests/madvise/multiple_instances.sh |   9 +
+ .../zswap/tests/madvise/multiple_threads.sh   |  13 +
+ scripts/pnm/zswap/tests/memset/Makefile       |   5 +
+ scripts/pnm/zswap/tests/memset/swapstress.c   | 108 ++++++++
+ 7 files changed, 370 insertions(+), 72 deletions(-)
+ delete mode 100644 scripts/pnm/zswap/qemu/demo/mmadvice.c
+ create mode 100644 scripts/pnm/zswap/tests/madvise/Makefile
+ create mode 100644 scripts/pnm/zswap/tests/madvise/memory_madvise.c
+ create mode 100755 scripts/pnm/zswap/tests/madvise/multiple_instances.sh
+ create mode 100755 scripts/pnm/zswap/tests/madvise/multiple_threads.sh
+ create mode 100644 scripts/pnm/zswap/tests/memset/Makefile
+ create mode 100644 scripts/pnm/zswap/tests/memset/swapstress.c
+
+diff --git a/scripts/pnm/zswap/qemu/demo/mmadvice.c b/scripts/pnm/zswap/qemu/demo/mmadvice.c
+deleted file mode 100644
+index 88a71daf7..000000000
+--- a/scripts/pnm/zswap/qemu/demo/mmadvice.c
++++ /dev/null
+@@ -1,72 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+-
+-#include <linux/mman.h>
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <sys/mman.h>
+-#include <unistd.h>
+-
+-#ifndef MADV_PAGEOUT
+-#define MADV_PAGEOUT 21 /* force pages out immediately */
+-#endif
+-
+-#define PG_SZ 4096
+-
+-int main(int argc, char **argv)
+-{
+-	int i, nr_pages = 1;
+-	int64_t *dump_ptr;
+-	char *addr, *a;
+-	int loop = 1;
+-
+-	if (argc > 1)
+-		nr_pages = atoi(argv[1]);
+-
+-	printf("Allocating %d pages to swap in/out\n", nr_pages);
+-
+-	/* allocate pages */
+-	addr = (char *)mmap(NULL, nr_pages * PG_SZ, PROT_READ | PROT_WRITE,
+-			    MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+-	*addr = 1;
+-
+-	/* initialize data in page to all '*' chars */
+-	memset(addr, '*', nr_pages * PG_SZ);
+-
+-	printf("Swapping out %d pages\n", nr_pages);
+-
+-	/* Tell kernel to swap it out */
+-	madvise(addr, nr_pages * PG_SZ, MADV_PAGEOUT);
+-
+-	while (loop > 0) {
+-		/* Wait for swap out to finish */
+-		sleep(5);
+-
+-		a = addr;
+-
+-		printf("Swapping in %d pages\n", nr_pages);
+-
+-		/* Access the page ... this will swap it back in again */
+-		for (i = 0; i < nr_pages; i++) {
+-			if (a[0] != '*') {
+-				printf("Bad data from decompress!!!!!\n");
+-
+-				dump_ptr = (int64_t *)a;
+-				for (int j = 0; j < 100; j++) {
+-					printf("  page %d data: %#lx\n", i,
+-					       *dump_ptr);
+-					dump_ptr++;
+-				}
+-			}
+-
+-			a += PG_SZ;
+-		}
+-
+-		loop--;
+-	}
+-
+-	printf("Swapped out and in %d pages\n", nr_pages);
+-
+-	return 0;
+-}
+diff --git a/scripts/pnm/zswap/tests/madvise/Makefile b/scripts/pnm/zswap/tests/madvise/Makefile
+new file mode 100644
+index 000000000..1a78c8671
+--- /dev/null
++++ b/scripts/pnm/zswap/tests/madvise/Makefile
+@@ -0,0 +1,5 @@
++memory_madvise:
++	gcc memory_madvise.c  -g -O0 -o memory_memadvise -lm -lpthread
++
++clean:
++	rm memory_memadvise
+diff --git a/scripts/pnm/zswap/tests/madvise/memory_madvise.c b/scripts/pnm/zswap/tests/madvise/memory_madvise.c
+new file mode 100644
+index 000000000..996e3f602
+--- /dev/null
++++ b/scripts/pnm/zswap/tests/madvise/memory_madvise.c
+@@ -0,0 +1,230 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#define _GNU_SOURCE //This macro needs for low level linux api, like CPU_SET
++
++#include <pthread.h>
++#include <sched.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <unistd.h>
++
++#define PAGE_SIZE (4096ULL)
++#define ZSWAP_ENGINES_COUNT 8
++
++struct page {
++	char data[PAGE_SIZE];
++};
++
++static const int FAILED = EXIT_FAILURE;
++static const int SUCCEED = EXIT_SUCCESS;
++
++struct thread_info {
++	uint64_t seed;
++	int core_id;
++	int nr_pages;
++};
++
++struct context {
++	pthread_t thread_id;
++	struct thread_info thread_info;
++};
++
++static void print_help(void)
++{
++	static const char *const msg =
++		"First argument is pages number, the seconds is threads count.\n"
++		"By default pages and threads are equal to 1";
++	printf("%s\n", msg);
++}
++
++static void bind_core(int core_id)
++{
++	long nprocessors = sysconf(_SC_NPROCESSORS_ONLN) - ZSWAP_ENGINES_COUNT;
++
++	printf("processors %ld\n", nprocessors);
++
++	cpu_set_t cpuset;
++
++	CPU_ZERO(&cpuset);
++	CPU_SET(core_id % nprocessors, &cpuset);
++
++	const int rc =
++		pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
++
++	if (rc == -1)
++		printf("Failed to set core affinity\n");
++}
++
++// Linear congruential generator
++static uint32_t next(uint32_t value)
++{
++	// [TODO: s-motov] increase bit shift, when software compression will be fixed
++	return (1103515245 * value + 12345) % (1ULL << 9);
++}
++
++static struct page *create_pages(size_t number, size_t seed)
++{
++	const size_t bytes = number * PAGE_SIZE;
++	/* allocate pages */
++	struct page *const pages =
++		(struct page *)mmap(NULL, bytes, PROT_READ | PROT_WRITE,
++				    MAP_SHARED | MAP_ANONYMOUS, 0, 0);
++
++	if (pages == MAP_FAILED)
++		return NULL;
++
++	uint32_t *const begin = (uint32_t *)&pages[0].data;
++	const uint32_t *const end = (uint32_t *)&pages[number].data;
++
++	uint32_t value = seed;
++
++	for (uint32_t *it = begin; it != end; ++it) {
++		*it = value;
++		value = next(value);
++	}
++
++	return pages;
++}
++
++static const uint32_t *validate_pages(const struct page *pages, size_t number,
++				      size_t seed)
++{
++	const uint32_t *const begin = (const uint32_t *)&pages[0].data;
++	const uint32_t *const end = (const uint32_t *)&pages[number].data;
++
++	uint32_t value = seed;
++
++	for (const uint32_t *it = begin; it != end; ++it) {
++		if (*it != value) {
++			printf("Mismatch found, expect: %du, real: %du, seed: %zu, position: %ld\n",
++			       value, *it, seed, it - begin);
++			return it;
++		}
++
++		value = next(value);
++	}
++
++	return NULL;
++}
++
++// Print 100 elements as uint32_t from position or until end happens
++static void dump_pages_data(const struct page *pages, size_t number,
++			    const uint32_t *pos, int core_id)
++{
++	const uint32_t *const begin = (const uint32_t *)&pages[0].data;
++	const uint32_t *const end = (const uint32_t *)&pages[number].data;
++
++	for (const uint32_t *it = pos; it != pos + 100 && it != end; ++it) {
++		printf("[CPU %d] Position: %ld, value: %x\n", core_id,
++		       it - begin, *it);
++	}
++}
++
++static void *touch_memory(void *data)
++{
++	const struct thread_info *t_info = (struct thread_info *)data;
++	const int nr_pages = t_info->nr_pages;
++	const int core_id = t_info->core_id;
++	const uint8_t seed = t_info->seed;
++
++	bind_core(core_id);
++
++	printf("[CPU %d] Allocating %d pages to swap in/out\n", core_id,
++	       nr_pages);
++
++	/* create pages */
++	struct page *const pages_begin = create_pages(nr_pages, seed);
++
++	if (!pages_begin)
++		pthread_exit((void *)&FAILED);
++
++	printf("[CPU %d] Swapping out %d pages\n", core_id, nr_pages);
++
++	/* Tell kernel to swap it out */
++	madvise(pages_begin, nr_pages * PAGE_SIZE, MADV_PAGEOUT);
++
++	/* Wait for swap out to finish */
++	sleep(1);
++
++	printf("[CPU %d] Swapping in %d pages\n", core_id, nr_pages);
++
++	/* Touch pages to swap it in */
++	const uint32_t *const pos = validate_pages(pages_begin, nr_pages, seed);
++
++	if (pos) {
++		dump_pages_data(pages_begin, nr_pages, pos, core_id);
++		pthread_exit((void *)&FAILED);
++	}
++
++	printf("[CPU %d] Swapped out and in %d pages\n", core_id, nr_pages);
++
++	pthread_exit((void *)&SUCCEED);
++}
++
++int main(int argc, char **argv)
++{
++	int num_threads = 1;
++	int nr_pages = 1;
++
++	if (argc > 1) {
++		if (strcmp("--help", argv[1]) == 0) {
++			print_help();
++			return SUCCEED;
++		}
++		nr_pages = atoi(argv[1]);
++	}
++	if (argc > 2)
++		num_threads = atoi(argv[2]);
++
++	struct context *threads =
++		(struct context *)calloc(num_threads, sizeof(struct context));
++
++	if (!threads) {
++		printf("Can't allocate memory for threads structure\n");
++		exit(FAILED);
++	}
++
++	for (int i = 0; i < num_threads; i++) {
++		struct thread_info *const info = &threads[i].thread_info;
++
++		info->seed = (uint64_t)i + 1;
++		info->core_id = time(NULL);
++		info->nr_pages = nr_pages;
++	}
++
++	for (int i = 0; i < num_threads; i++) {
++		const int err = pthread_create(&threads[i].thread_id, NULL,
++					       &touch_memory,
++					       &threads[i].thread_info);
++		if (err < 0)
++			perror("Failed to create pthread\n");
++	}
++
++	bool failed = false;
++
++	for (int i = 0; i < num_threads; i++) {
++		int *status;
++
++		const int rc =
++			pthread_join(threads[i].thread_id, (void **)&status);
++
++		if (rc) {
++			perror("Pthread join error\n");
++			exit(FAILED);
++		}
++
++		printf("Pthread %d joined, status %d\n", i, *status);
++		if (*status == FAILED)
++			failed = true;
++	}
++
++	free(threads);
++
++	return failed ? FAILED : SUCCEED;
++}
+diff --git a/scripts/pnm/zswap/tests/madvise/multiple_instances.sh b/scripts/pnm/zswap/tests/madvise/multiple_instances.sh
+new file mode 100755
+index 000000000..156ee8ae9
+--- /dev/null
++++ b/scripts/pnm/zswap/tests/madvise/multiple_instances.sh
+@@ -0,0 +1,9 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++for i in `seq 1 3`
++do
++  ./memory_memadvise 10 &
++done
++
++./memory_memadvise 10
+diff --git a/scripts/pnm/zswap/tests/madvise/multiple_threads.sh b/scripts/pnm/zswap/tests/madvise/multiple_threads.sh
+new file mode 100755
+index 000000000..5eab633d5
+--- /dev/null
++++ b/scripts/pnm/zswap/tests/madvise/multiple_threads.sh
+@@ -0,0 +1,13 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++## ./memory_memadvise <# pages> <# threads>
++
++for i in `seq 1 5`
++do
++
++echo "${i} thread test"
++./memory_memadvise 10  $i
++
++done
++
+diff --git a/scripts/pnm/zswap/tests/memset/Makefile b/scripts/pnm/zswap/tests/memset/Makefile
+new file mode 100644
+index 000000000..4316a8450
+--- /dev/null
++++ b/scripts/pnm/zswap/tests/memset/Makefile
+@@ -0,0 +1,5 @@
++swapstress: swapstress.c
++		gcc -g  swapstress.c -lpthread -o swapstress
++
++clean:
++		rm swapstress
+diff --git a/scripts/pnm/zswap/tests/memset/swapstress.c b/scripts/pnm/zswap/tests/memset/swapstress.c
+new file mode 100644
+index 000000000..c00937a91
+--- /dev/null
++++ b/scripts/pnm/zswap/tests/memset/swapstress.c
+@@ -0,0 +1,108 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include <pthread.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define THREAD_NUM 1
++static const size_t GB = 1ULL << 30;
++
++static const int FAILED = EXIT_FAILURE;
++static const int SUCCEED = EXIT_SUCCESS;
++
++struct context_data {
++	size_t size;
++	size_t iterations;
++};
++
++struct context {
++	pthread_t tid;
++	struct context_data data;
++};
++
++static void *thread_function(void *ptr)
++{
++	const struct context_data *data = (struct context_data *)ptr;
++	uint32_t *const begin = malloc(data->size);
++	uint32_t *const end = begin + data->size / sizeof(*begin);
++	const size_t iterations = data->iterations;
++
++	if (!begin)
++		pthread_exit((void *)&FAILED);
++
++	printf("Allocated %ld B\n", size);
++
++	/* We allocated a lot of memory, so some unused pages swapped in
++	 * and pages which we write will be swapped out
++	 */
++	for (size_t i = 0; i < iterations; ++i) {
++		for (uint32_t *it = begin; it != end; ++it)
++			/* Here we generate random int and write it to page
++			 * We must clear higher bytes because in case of
++			 * all random values deflate algorithm make page size more
++			 * instead of compressing
++			 */
++			*it = rand() % (1ULL << 9);
++	}
++
++	printf("success!\n");
++
++	free(begin);
++
++	pthread_exit((void *)&SUCCEED);
++}
++
++int main(int argc, char *argv[])
++{
++	struct context contexts[THREAD_NUM];
++
++	if (argc < 2) {
++		printf("Please input allocation size parameter (in GB)\n");
++		return FAILED;
++	}
++
++	size_t size = atoll(argv[1]) * GB;
++
++	printf("%ld\n", size);
++
++	for (int i = 0; i < THREAD_NUM; i++) {
++		struct context_data *data = &contexts[i].data;
++
++		data->size = size / THREAD_NUM;
++		data->iterations = 10;
++	}
++
++	srand(time(NULL));
++
++	for (int i = 0; i < THREAD_NUM; i++) {
++		const int rc = pthread_create(&contexts[i].tid, NULL,
++					      thread_function,
++					      &contexts[i].data);
++		if (rc) {
++			perror("Failed to create pthread\n");
++			return FAILED;
++		}
++	}
++
++	bool failed = false;
++
++	for (int i = 0; i < THREAD_NUM; i++) {
++		int *status;
++
++		const int rc = pthread_join(contexts[i].tid, (void **)&status);
++
++		if (rc) {
++			perror("Failed to join pthread\n");
++			return FAILED;
++		}
++
++		printf("Exit status %d", *status);
++		if (*status == FAILED)
++			failed = true;
++	}
++
++	return led ? FAILED : SUCCEED;
++}
+-- 
+2.34.1
+

@@ -1,0 +1,515 @@
+From 6e83f937e5cc86b5361094a5553b5f7b35d18f31 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Thu, 27 Jul 2023 02:54:57 -0400
+Subject: [PATCH 151/161] [pnm][zswap] Introduce functional simulator for zswap
+
+Here we introduce the initial version of functional simulator and made
+minor refactor of simulator code to brake dependencies from compression
+logic.
+
+The generic interface `compression_core` was introduced to generalize
+the compression logic for performance and functional simulators.
+
+The parameter `compressor` is used to parametrize the compression logic
+in terms of compression algorithm. In functional simulator we use
+`crypto` library as a compression backend, so the `compressor` parameter
+can be a value from set of supported `crypto`'s compressors that
+presented in system. The default value for parameter is `deflate`.
+The value `ps` is reserved to use performance simulator instead of
+functional simulator.
+
+Resolve: MCS23-1372
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ drivers/pnm/zswap/Makefile                    |   3 +-
+ drivers/pnm/zswap/compressor.h                |  17 ---
+ drivers/pnm/zswap/fs_compression.c            | 119 ++++++++++++++++++
+ drivers/pnm/zswap/fs_compression.h            |  22 ++++
+ .../zswap/{compressor.c => ps_compression.c}  |  53 +++++++-
+ drivers/pnm/zswap/ps_compression.h            |  20 +++
+ drivers/pnm/zswap/sim.c                       |  80 +++++++++++-
+ drivers/pnm/zswap/sim.h                       |  11 ++
+ 8 files changed, 299 insertions(+), 26 deletions(-)
+ delete mode 100644 drivers/pnm/zswap/compressor.h
+ create mode 100644 drivers/pnm/zswap/fs_compression.c
+ create mode 100644 drivers/pnm/zswap/fs_compression.h
+ rename drivers/pnm/zswap/{compressor.c => ps_compression.c} (88%)
+ create mode 100644 drivers/pnm/zswap/ps_compression.h
+
+diff --git a/drivers/pnm/zswap/Makefile b/drivers/pnm/zswap/Makefile
+index 6541f974f..a665a7241 100644
+--- a/drivers/pnm/zswap/Makefile
++++ b/drivers/pnm/zswap/Makefile
+@@ -4,5 +4,6 @@ obj-$(CONFIG_PNM_ZSWAP_SIM) += pnm_zswap_sim.o
+ 
+ pnm_zswap_sim-y := device.o
+ pnm_zswap_sim-y += sim.o
+-pnm_zswap_sim-y += compressor.o
++pnm_zswap_sim-y += ps_compression.o
++pnm_zswap_sim-y += fs_compression.o
+ pnm_zswap_sim-y += parameters.o
+diff --git a/drivers/pnm/zswap/compressor.h b/drivers/pnm/zswap/compressor.h
+deleted file mode 100644
+index 14a65c2ac..000000000
+--- a/drivers/pnm/zswap/compressor.h
++++ /dev/null
+@@ -1,17 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __ZSWAP_COMPRESSOR_H__
+-#define __ZSWAP_COMPRESSOR_H__
+-
+-#include "sim.h"
+-
+-#include <linux/pnm/cxl_zswap.h>
+-
+-// Functions to predict the performance improvement of
+-// PNM offloading
+-int pnm_compress_sim(struct unit_info *c_unit, void __iomem *hidden_pool);
+-
+-int pnm_decompress_sim(struct unit_info *d_unit, void __iomem *hidden_pool);
+-
+-#endif /* __ZSWAP_COMPRESSOR_H__ */
+diff --git a/drivers/pnm/zswap/fs_compression.c b/drivers/pnm/zswap/fs_compression.c
+new file mode 100644
+index 000000000..717a26ffd
+--- /dev/null
++++ b/drivers/pnm/zswap/fs_compression.c
+@@ -0,0 +1,119 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include "fs_compression.h"
++
++#include "sim.h"
++
++#include <linux/crypto.h>
++#include <linux/printk.h>
++#include <linux/slab.h>
++#include <linux/types.h>
++
++#define FS_LOG(fmt, arg...)                          \
++	do {                                         \
++		if (log_enabled)                     \
++			pr_info("[FS] " fmt, ##arg); \
++	} while (0)
++
++static int compress_page(struct compression_core *self, struct unit_info *unit)
++{
++	int ret;
++	uint32_t compressed_size = PAGE_SIZE;
++	struct fs_compression_core *base =
++		container_of(self, struct fs_compression_core, core);
++
++	ret = crypto_comp_compress(base->comp, unit->inst.src_addr,
++				   unit->inst.src_size, unit->inst.dst_addr,
++				   &compressed_size);
++
++	if (ret != 0) {
++		pr_err("Fail to compress page. Error code: %d\n", ret);
++		return ret;
++	}
++
++	unit->dst_size = compressed_size;
++	unit->inst.dst_size = unit->dst_size;
++
++	FS_LOG("Page compression done. Compression ratio: %lu / %u\n",
++	       PAGE_SIZE, unit->dst_size);
++
++	return ret;
++}
++
++static int decompress_page(struct compression_core *self,
++			   struct unit_info *unit)
++{
++	int ret;
++	uint32_t decompressed_size = PAGE_SIZE;
++	struct fs_compression_core *base =
++		container_of(self, struct fs_compression_core, core);
++
++	ret = crypto_comp_decompress(base->comp, unit->inst.src_addr,
++				     unit->inst.src_size, unit->inst.dst_addr,
++				     &decompressed_size);
++
++	if (ret != 0) {
++		pr_err("Fail to decompress %u bytes. Error code: %d\n",
++		       unit->inst.src_size, ret);
++		return ret;
++	}
++
++	FS_LOG("Decompression done. Original size (%u) bytes. Decompressed size (%u) bytes\n",
++	       unit->inst.src_size, decompressed_size);
++
++	unit->inst.dst_size = decompressed_size;
++	unit->dst_size = decompressed_size;
++
++	return ret;
++}
++
++static const struct compression_core fs_core_template = {
++	.compress_page = &compress_page,
++	.decompress_page = &decompress_page,
++};
++
++struct compression_core *create_fsim_core(const char *compressor)
++{
++	struct fs_compression_core *fs_core;
++
++	fs_core = kzalloc(sizeof(struct fs_compression_core), GFP_KERNEL);
++	if (fs_core == NULL)
++		return NULL;
++
++	fs_core->core = fs_core_template;
++	fs_core->comp = crypto_alloc_comp(compressor, 0, 0);
++
++	if (!fs_core->comp) {
++		pr_err("[FS] Failed to initialize compression core\n");
++		kfree(fs_core);
++		return NULL;
++	}
++
++	FS_LOG("Compression unit created. Compression algorithm is [%s]",
++	       compressor);
++
++	return &fs_core->core;
++}
++
++void destroy_fsim_core(struct compression_core *core)
++{
++	struct fs_compression_core *base;
++
++	if (core == NULL) {
++		pr_err("[FS] Release NULL copression core\n");
++		return;
++	}
++
++	base = container_of(core, struct fs_compression_core, core);
++
++	crypto_free_comp(base->comp);
++	FS_LOG("Compression unit was released\n");
++
++	kfree(base);
++}
++
++int check_compressor_support(const char *compressor)
++{
++	return crypto_has_comp(compressor, 0, 0);
++}
+diff --git a/drivers/pnm/zswap/fs_compression.h b/drivers/pnm/zswap/fs_compression.h
+new file mode 100644
+index 000000000..72dbdf301
+--- /dev/null
++++ b/drivers/pnm/zswap/fs_compression.h
+@@ -0,0 +1,22 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __FS_COMPRESSION_H__
++#define __FS_COMPRESSION_H__
++
++#include "sim.h"
++
++#include <linux/crypto.h>
++
++struct fs_compression_core {
++	struct compression_core core;
++	struct crypto_comp *comp;
++};
++
++int check_compressor_support(const char *compressor);
++
++struct compression_core *create_fsim_core(const char *compressor);
++
++void destroy_fsim_core(struct compression_core *core);
++
++#endif //__FS_COMPRESSION_H__
+diff --git a/drivers/pnm/zswap/compressor.c b/drivers/pnm/zswap/ps_compression.c
+similarity index 88%
+rename from drivers/pnm/zswap/compressor.c
+rename to drivers/pnm/zswap/ps_compression.c
+index cbac005aa..acab36a4a 100644
+--- a/drivers/pnm/zswap/compressor.c
++++ b/drivers/pnm/zswap/ps_compression.c
+@@ -3,7 +3,7 @@
+ 
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+-#include "compressor.h"
++#include "ps_compression.h"
+ #include "sim.h"
+ 
+ #include <asm/unaligned.h>
+@@ -299,12 +299,16 @@ static void delay_cycles(int cycles)
+ }
+ 
+ /* functions to predict the performance improvement of pnm offloading */
+-int pnm_compress_sim(struct unit_info *unit, void __iomem *hidden_pool)
++static int pnm_compress_sim(struct compression_core *self,
++			    struct unit_info *unit)
+ {
+ 	struct instruction *fetched_inst = &unit->inst;
+ 	unsigned char *in = fetched_inst->src_addr;
+ 	/* this is for backup of original page in hidden pool */
+ 	pgoff_t offset = fetched_inst->offset;
++	struct ps_compression_core *base =
++		container_of(self, struct ps_compression_core, core);
++	void __iomem *hidden_pool = base->hidden_pool;
+ 
+ 	u64 memcpy_start, memcpy_end;
+ 	u64 started, internal_time, finished;
+@@ -346,11 +350,15 @@ int pnm_compress_sim(struct unit_info *unit, void __iomem *hidden_pool)
+ 	return 0;
+ }
+ 
+-int pnm_decompress_sim(struct unit_info *unit, void __iomem *hidden_pool)
++static int pnm_decompress_sim(struct compression_core *self,
++			      struct unit_info *unit)
+ {
+ 	struct instruction *fetched_inst = &unit->inst;
+ 	unsigned char *out = fetched_inst->dst_addr;
+ 	pgoff_t offset = fetched_inst->offset;
++	struct ps_compression_core *base =
++		container_of(self, struct ps_compression_core, core);
++	void __iomem *hidden_pool = base->hidden_pool;
+ 
+ 	u64 memcpy_start, memcpy_end;
+ 	u64 started, finished;
+@@ -390,3 +398,42 @@ int pnm_decompress_sim(struct unit_info *unit, void __iomem *hidden_pool)
+ 
+ 	return 0;
+ }
++
++static const struct compression_core ps_core_template = {
++	.compress_page = &pnm_compress_sim,
++	.decompress_page = &pnm_decompress_sim,
++};
++
++struct compression_core *create_psim_core(void __iomem *hidden_pool)
++{
++	struct ps_compression_core *ps_core;
++
++	ps_core = kzalloc(sizeof(struct ps_compression_core), GFP_KERNEL);
++	if (ps_core == NULL)
++		return NULL;
++
++	ps_core->core = ps_core_template;
++	ps_core->hidden_pool = hidden_pool;
++
++	if (log_enabled)
++		pr_info("[PS] Initialize performance simulator");
++
++	return &ps_core->core;
++}
++
++void destroy_psim_core(struct compression_core *core)
++{
++	struct ps_compression_core *base;
++
++	if (core == NULL) {
++		pr_err("[PS] Release NULL copression core\n");
++		return;
++	}
++
++	base = container_of(core, struct ps_compression_core, core);
++
++	if (log_enabled)
++		pr_info("[PS] Finalize performance simulator");
++
++	kfree(base);
++}
+diff --git a/drivers/pnm/zswap/ps_compression.h b/drivers/pnm/zswap/ps_compression.h
+new file mode 100644
+index 000000000..e1888a0e4
+--- /dev/null
++++ b/drivers/pnm/zswap/ps_compression.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __PS_COMPRESSION_H__
++#define __PS_COMPRESSION_H__
++
++#include "sim.h"
++
++#include <linux/pnm/cxl_zswap.h>
++
++struct ps_compression_core {
++	struct compression_core core;
++	void __iomem *hidden_pool;
++};
++
++struct compression_core *create_psim_core(void __iomem *hidden_pool);
++
++void destroy_psim_core(struct compression_core *core);
++
++#endif /* __PS_COMPRESSION_H__ */
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 3d9abbef4..488228263 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -27,7 +27,8 @@
+ #include <linux/vmalloc.h>
+ #include <linux/workqueue.h>
+ 
+-#include "compressor.h"
++#include "fs_compression.h"
++#include "ps_compression.h"
+ #include "sim.h"
+ 
+ static struct pnm_info *pnm_ctrl;
+@@ -75,6 +76,19 @@ static const struct kernel_param_ops pnm_sim_param_ops = {
+ };
+ module_param_cb(enabled, &pnm_sim_param_ops, &pnm_sim_enabled, 0644);
+ 
++static bool pnm_functional_sim = 1;
++
++/* Crypto compressor to use */
++static char *page_compressor = "deflate";
++static int page_compressor_param_set(const char *, const struct kernel_param *);
++static const struct kernel_param_ops zswap_compressor_param_ops = {
++	.set = page_compressor_param_set,
++	.get = param_get_charp,
++	.free = param_free_charp,
++};
++module_param_cb(compressor, &zswap_compressor_param_ops, &page_compressor,
++		0644);
++
+ /* for compression */
+ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ {
+@@ -272,12 +286,59 @@ int cxl_pnm_offload(struct instruction *pnm_inst, size_t *out_len)
+ 	return status;
+ }
+ 
++static int page_compressor_param_set(const char *value,
++				     const struct kernel_param *kpar)
++{
++	char *svalue = strstrip((char *)value);
++
++	if (READ_ONCE(sim_is_active)) {
++		pr_err("[pnm_sim] Unable to change compressor when simulator is active");
++		return -EPERM;
++	}
++
++	if (!strcmp(svalue, page_compressor))
++		return 0;
++
++	if (!strcmp(svalue, "ps")) {
++		// ps --- performance simulator
++		pnm_functional_sim = false;
++	} else {
++		// here we have specified compression algorithm
++		if (!check_compressor_support(svalue)) {
++			pr_err("[FS] The compressor %s not available\n",
++			       svalue);
++			return -EINVAL;
++		}
++		pnm_functional_sim = true;
++	}
++
++	return param_set_charp(svalue, kpar);
++}
++
++static struct compression_core *construct_compression_core(void)
++{
++	return (pnm_functional_sim) ? create_fsim_core(page_compressor) :
++				      create_psim_core(pnm_ctrl->hidden_pool);
++}
++
++static void destroy_compression_core(struct compression_core *core)
++{
++	return (pnm_functional_sim) ? destroy_fsim_core(core) :
++				      destroy_psim_core(core);
++}
++
+ int pnm_compress_unit(void *p)
+ {
+ 	int status;
+ 	struct unit_info *unit = (struct unit_info *)p;
+ 	struct commit *commit_out = &unit->commit;
+ 	ktime_t started, finished;
++	struct compression_core *ccore;
++
++	ccore = construct_compression_core();
++
++	if (ccore == NULL)
++		return -EINVAL;
+ 
+ 	while (!kthread_should_stop() && READ_ONCE(sim_is_active)) {
+ 		started = ktime_get();
+@@ -307,7 +368,7 @@ int pnm_compress_unit(void *p)
+ 			}
+ 
+ 			/* execute compression unit */
+-			status = pnm_compress_sim(unit, pnm_ctrl->hidden_pool);
++			status = ccore->compress_page(ccore, unit);
+ 
+ 			/* init for next execution */
+ 			unit->started = 0;
+@@ -389,6 +450,8 @@ int pnm_compress_unit(void *p)
+ 		}
+ 	}
+ 
++	destroy_compression_core(ccore);
++
+ 	return 0;
+ }
+ 
+@@ -398,6 +461,12 @@ int pnm_decompress_unit(void *p)
+ 	struct unit_info *unit = (struct unit_info *)p;
+ 	struct commit *commit_out = &unit->commit;
+ 	ktime_t started, finished;
++	struct compression_core *ccore;
++
++	ccore = construct_compression_core();
++
++	if (ccore == NULL)
++		return -EINVAL;
+ 
+ 	while (!kthread_should_stop() && READ_ONCE(sim_is_active)) {
+ 		started = ktime_get();
+@@ -426,9 +495,8 @@ int pnm_decompress_unit(void *p)
+ 						unit->inst.tid);
+ 			}
+ 
+-			/* execute decompression unit */
+-			status =
+-				pnm_decompress_sim(unit, pnm_ctrl->hidden_pool);
++			/* execute compression unit */
++			status = ccore->decompress_page(ccore, unit);
+ 
+ 			/* init for next execution */
+ 			unit->started = 0;
+@@ -509,6 +577,8 @@ int pnm_decompress_unit(void *p)
+ 		}
+ 	}
+ 
++	destroy_compression_core(ccore);
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/pnm/zswap/sim.h b/drivers/pnm/zswap/sim.h
+index 2f9f07752..f2a026f14 100644
+--- a/drivers/pnm/zswap/sim.h
++++ b/drivers/pnm/zswap/sim.h
+@@ -118,4 +118,15 @@ struct pnm_info {
+ 	void __iomem *hidden_pool;
+ };
+ 
++/* Set of callback to interact with compression logic */
++struct compression_core {
++	/* Make page compression */
++	int (*compress_page)(struct compression_core *self,
++			     struct unit_info *unit);
++
++	/* Make page decompression */
++	int (*decompress_page)(struct compression_core *self,
++			       struct unit_info *unit);
++};
++
+ #endif //__ZSWAP_SIM_H__
+-- 
+2.34.1
+

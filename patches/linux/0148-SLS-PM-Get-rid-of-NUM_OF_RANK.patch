@@ -1,0 +1,124 @@
+From 65bec94fab1b6f889095047646f8198bc696f6df Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Tue, 25 Jul 2023 16:16:03 +0300
+Subject: [PATCH 148/161] [SLS][PM] Get rid of NUM_OF_RANK
+
+Related: MCS-1373
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ .../pnm/sls_resource/sls_process_manager.c    | 54 ++++++++++---------
+ 1 file changed, 29 insertions(+), 25 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/sls_process_manager.c
+index 019095488..de73b1040 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/sls_process_manager.c
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+ #include "sls_process_manager.h"
+ #include "sls_rank_scheduler.h"
+@@ -22,8 +22,8 @@ struct sls_proc_desc {
+ struct sls_proc_resources {
+ 	int pid;
+ 	struct rb_root alloc_desc_tree;
+-	int rank_write_mask;
+-	int rank_read_mask;
++	unsigned long rank_write_mask;
++	unsigned long rank_read_mask;
+ 	/* this counter needed because release f_op is called on each close
+ 	 * syscall, sometimes userspace process can just open/close device
+ 	 * for reset ioctl purpose. take in mind this counter should be accessed
+@@ -166,7 +166,7 @@ static void track_leaked_resources(struct sls_process_manager *mgr,
+ 	atomic64_inc(&mgr->leaked);
+ 	list_move(&proc_res->list, &mgr->leaked_process_list);
+ 
+-	SLS_DBG("Tracked leakage by pid: %d, tid: %d; rank_rw_mask: %d, rank_rd_mask: %d\n",
++	SLS_DBG("Tracked leakage by pid: %d, tid: %d; rank_rw_mask: %lu, rank_rd_mask: %lu\n",
+ 		get_current_process_id(), current->pid,
+ 		proc_res->rank_write_mask, proc_res->rank_read_mask);
+ 
+@@ -178,32 +178,39 @@ static void track_leaked_resources(struct sls_process_manager *mgr,
+ 	}
+ }
+ 
++static bool release_rank_mask(unsigned long *rank_mask,
++			      enum rank_access_type type)
++{
++	bool failed = false;
++	unsigned long bit_index;
++
++	while (*rank_mask) {
++		bit_index = ffs(*rank_mask) - 1;
++		if (type == RANK_ACCESS_WR)
++			failed |= (release_rank_write(bit_index) != bit_index);
++		else
++			failed |= (release_rank_read(bit_index) != bit_index);
++		clear_bit(bit_index, rank_mask);
++		SLS_INF("Abnormal release rank_%s[%lu], pid: %d, tid: %d\n",
++			rank_access_type_to_str(type), bit_index,
++			get_current_process_id(), current->pid);
++	}
++
++	return failed;
++}
++
+ static int release_process_resources(struct sls_proc_resources *proc_res)
+ {
+ 	/* in base case scenario the resources above should be already
+ 	 * released, but we need to check in case we are on
+ 	 * 'killed process' path
+ 	 */
+-	int i;
+ 	struct rb_node *next;
+ 	bool failed = false;
+ 
+ 	/* handle unreleased ranks */
+-	for (i = 0; i < NUM_OF_RANK; i++) {
+-		if (proc_res->rank_write_mask & (1 << i)) {
+-			failed |= (release_rank_write(i) != i);
+-			proc_res->rank_write_mask &= ~(1 << i);
+-			SLS_INF("Abnormal release rank_wr[%d], pid: %d, tid: %d\n",
+-				i, get_current_process_id(), current->pid);
+-		}
+-
+-		if (proc_res->rank_read_mask & (1 << i)) {
+-			failed |= (release_rank_read(i) != i);
+-			proc_res->rank_read_mask &= ~(1 << i);
+-			SLS_INF("Abnormal release rank_rd[%d], pid: %d, tid: %d\n",
+-				i, get_current_process_id(), current->pid);
+-		}
+-	}
++	failed |= release_rank_mask(&proc_res->rank_write_mask, RANK_ACCESS_WR);
++	failed |= release_rank_mask(&proc_res->rank_read_mask, RANK_ACCESS_RD);
+ 
+ 	/* handle unreleased allocation descriptors */
+ 	while ((next = rb_first(&proc_res->alloc_desc_tree))) {
+@@ -291,8 +298,7 @@ int release_sls_process(void)
+ static int set_rank_status(struct sls_process_manager *mgr,
+ 			   enum rank_access_type type, int rank, bool set)
+ {
+-	int *rank_mask;
+-	int mask_tmp;
++	unsigned long *rank_mask;
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+ 
+@@ -311,10 +317,8 @@ static int set_rank_status(struct sls_process_manager *mgr,
+ 		/* get read or write mask according to request */
+ 		rank_mask = type == RANK_ACCESS_RD ? &proc_res->rank_read_mask :
+ 						     &proc_res->rank_write_mask;
+-		mask_tmp = *rank_mask;
+ 		/* set or unset rank's bit according to request */
+-		*rank_mask = set ? mask_tmp | (1 << rank) :
+-				   mask_tmp & ~(1 << rank);
++		assign_bit(rank, rank_mask, set);
+ 	}
+ out:
+ 	mutex_unlock(&mgr->proc_list_lock);
+-- 
+2.34.1
+

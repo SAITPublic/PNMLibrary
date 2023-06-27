@@ -1,0 +1,156 @@
+From a940a0338500f5db5de7521c94f597926d5ba47e Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 11 May 2022 10:22:01 +0900
+Subject: [PATCH 041/128] [caffe2] Reflect another changes in AXDIMM control
+ lib API
+
+* remove user_context, use device_context, model_context and exec_context
+  instead.
+* remove 'axdimm_starter' and 'axdimm_closer' calls, they were removed from
+  AXDIMM control lib.
+* remove 'axd_status_e' references, AXDIMM library doesn't export it anymore.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ .../operators/lengths_reducer_ops_axdimm.cc   | 36 ++++++++++++++-----
+ caffe2/python/pybind_state_axdimm.cc          | 15 +++-----
+ 2 files changed, 33 insertions(+), 18 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 71539071..4bb984c5 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -143,7 +143,13 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     free(lengths_blocked_);
+     indices_blocked_ = nullptr;
+     lengths_blocked_ = nullptr;
+-    axdimm::destroy_user_context(user_context_);
++
++    axdimm::destroy_execution_context(exec_context_);
++    axdimm::destroy_model_context(model_context_);
++    axdimm::destroy_device_context(device_context_);
++    exec_context_ = nullptr;
++    model_context_ = nullptr;
++    device_context_ = nullptr;
+   }
+ 
+   // Currently, we support float and at::Half inputs for input data type, and
+@@ -202,7 +208,12 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     }
+ 
+     // 2) Call axd_init if needed.
+-    if (!user_context_) {
++    if (!device_context_) {
++      CAFFE_ENFORCE_EQ(nullptr, model_context_, "model_context_ must be nullptr");
++      CAFFE_ENFORCE_EQ(nullptr, exec_context_, "exec_context_ must be nullptr");
++
++      device_context_ = axdimm::create_device_context();
++
+       // Minibatch size.
+       const int64_t M = Input(lengths_vec_start_idx_).size(0);
+       // Sparse feature size.
+@@ -212,12 +223,15 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       for (int i = 0; i < block_size_; ++i) {
+         table_entry_list[i] = Input(tables_vec_start_idx_ + i).size(0);
+       }
+-      user_context_ = axdimm::create_user_context(
++      model_context_ = axdimm::create_model_context(
+           M,
+           D,
+           block_size_,
+           table_entry_list.data(),
+           num_indices_per_lookup_.data());
++
++      exec_context_ =
++          axdimm::create_execution_context(model_context_, device_context_);
+     }
+ 
+     // 3.1) If new operator invocation consumes more memory for indices,
+@@ -274,14 +288,16 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     T* output_buf = output->template data<T>();
+ 
+     // 6) And finally run the operator.
+-    axd_status_e status = axdimm::axdimm_run(
+-        user_context_,
++    int status = axdimm::axdimm_run(
++        model_context_,
++        device_context_,
++        exec_context_,
+         (uint32_t*)lengths_blocked_,
+         (uint32_t*)indices_blocked_,
+         output_buf /* psum buffer */
+     );
+ 
+-    return status == AXDIMM_SUCCESS;
++    return status == 0;
+   }
+ 
+   enum {
+@@ -310,8 +326,12 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked indices buffer
+   uint64_t lengths_total_size_in_bytes_ =
+       0; // Size of currently allocated blocked lengths buffer
+-  axdimm::UserContext* user_context_ =
+-      nullptr; // An AXDIMM user context. TODO: move into AXDIMMContext
++  axdimm::DeviceContext* device_context_ =
++      nullptr; // AXDIMM device context. TODO: move into AXDIMMContext
++  axdimm::ModelContext* model_context_ =
++      nullptr; // AXDIMM model context. TODO: move into AXDIMMContext
++  axdimm::ExecutionContext* exec_context_ =
++      nullptr; // AXDIMM exec context. TODO: move into AXDIMMContext
+ };
+ 
+ using SparseLengthsSumOp =
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 43e18e52..bc027ef1 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -23,14 +23,14 @@
+ namespace {
+ static axdimm::DeviceContext* device_context = nullptr;
+ 
+-axd_status_e load_tables(
++int load_tables(
+     axdimm::DeviceContext& device_context,
+     const std::string& weight_file) {
+   int fd = ::open(weight_file.c_str(), O_RDONLY);
+ 
+   if (fd < 0) {
+     std::cerr << "Error opening " << weight_file << std::endl;
+-    return AXDIMM_FAILURE;
++    return -1;
+   }
+ 
+   auto file_size = lseek(fd, 0, SEEK_END);
+@@ -38,8 +38,7 @@ axd_status_e load_tables(
+       mmap(nullptr, file_size, PROT_READ, MAP_FILE | MAP_SHARED, fd, 0);
+ 
+   axdimm::axdimm_write_rank_data(device_context, addr, file_size, 0xf);
+-  munmap(addr, file_size);
+-  return AXDIMM_SUCCESS;
++  return munmap(addr, file_size);
+ }
+ } // namespace
+ 
+@@ -65,16 +64,12 @@ void addAXDIMMGlobalMethods(py::module& m) {
+         device_context,
+         "Multiple AXDIMM device contexts are not supported.");
+     device_context = axdimm::create_device_context();
+-    axd_status_e status = axdimm::axdimm_starter(device_context);
+-    if (status != AXDIMM_SUCCESS) {
+-      return static_cast<int>(status);
+-    }
+     return static_cast<int>(load_tables(*device_context, weight_file));
+   });
+   m.def("axdimm_closer", []() {
+-    int status = static_cast<int>(axdimm::axdimm_closer(device_context));
++    axdimm::destroy_device_context(device_context);
+     device_context = nullptr;
+-    return status;
++    return 0;
+   });
+ }
+ 
+-- 
+2.34.1
+

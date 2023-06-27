@@ -1,0 +1,79 @@
+From 135236dbe9cde69c59e54db0f50ed2366796b0ed Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 10 Apr 2023 17:31:47 +0300
+Subject: [PATCH 16/27] [axdimm] Update allowed/mount paths.
+
+Update Gramine mounts and allowed paths for AXDIMM, as they were changed
+when separating DAX device and AXDIMM resource manager in
+SAIT/axdimm_linux#81.
+
+References: MCS23-693
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ .../axdimm_secndp_test/secndp.manifest.template        |  8 +++++---
+ application/pytorch/conf.pytorch.manifest.template     | 10 ++++++----
+ 2 files changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/axdimm_secndp_test/secndp.manifest.template
+index 4671e21b..b4494a67 100644
+--- a/application/axdimm_secndp_test/secndp.manifest.template
++++ b/application/axdimm_secndp_test/secndp.manifest.template
+@@ -18,11 +18,12 @@ fs.mounts = [
+   { uri = "file:{{ arch_libdir }}", path = "{{ arch_libdir }}" },
+   { uri = "file:/usr", path = "/usr" },
+   { uri = "file:/etc", path = "/etc" },
+-  { uri = "dev:/dev/axdimm_device0", path = "/dev/axdimm_device0" },
++  { uri = "dev:/dev/axdimm_device", path = "/dev/axdimm_device" },
+   { uri = "file:{{ axdimm_driver }}/build/test", path = "{{ axdimm_driver }}/build/test" },
+   { uri = "file:{{ axdimm_driver }}/build/ai", path = "{{ axdimm_driver }}/build/ai" },
+   { uri = "file:{{ axdimm_driver }}/build/secure", path = "{{ axdimm_driver }}/build/secure" },
+-  { uri = "file:/sys/bus/", path = "/sys/bus/", type="chroot" }, #unsafe but we can't mount single file from sysfs
++  { uri = "file:/sys/class", path = "/sys/class", type="chroot" },
++  { uri = "file:/dev/pnm/", path = "/dev/pnm/" },
+   { type = "tmpfs", path = "/tmp" }
+   { type = "shm" },
+ ]
+@@ -34,7 +35,8 @@ sgx.debug = true
+ sgx.insecure__enable_shared_range = "true"
+ 
+ sgx.allowed_files = [
+-  "file:/sys/bus/dax/drivers/device_dax/dax0.0/ranks/",
++  "file:/sys/class/axdimm_resource/pnm!axdimm_resource/ranks/",
++  "file:/dev/pnm/axdimm_resource",
+   "file:/dev/shm/" # We need to allow axdimm device to enable write access to it
+ ]
+ 
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index edc87f83..efe324c6 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -25,8 +25,9 @@ fs.mounts = [
+   { uri = "file:{{ dlrm_data_path }}", path = "/input" },
+   { type = "tmpfs", path = "/tmp" },
+   { type = "shm" },
+-  { uri = "dev:/dev/axdimm_device0", path = "/dev/axdimm_device0" },
+-  { uri = "file:/sys/bus/", path = "/sys/bus/", type="chroot" }, #unsafe but we can't mount single file from sysfs
++  { uri = "dev:/dev/axdimm_device", path = "/dev/axdimm_device" },
++  { uri = "file:/dev/pnm/", path = "/dev/pnm/" },
++  { uri = "file:/sys/class", path = "/sys/class", type="chroot" },
+ ]
+ 
+ sgx.nonpie_binary = true
+@@ -53,9 +54,10 @@ sgx.trusted_files = [
+ sgx.allowed_files = [
+   "file:/dev/shm/", # We need to allow axdimm device to enable write access to it
+   "file:./run_kaggle_pt/",
+-  "file:/sys/bus/dax/drivers/device_dax/dax0.0/ranks/",
++  "file:/sys/class/axdimm_resource/pnm!axdimm_resource/ranks/",
++  "file:/dev/pnm/axdimm_resource",
+   "file:{{ dlrm_data_path }}",
+   # In production we should place pillow path into sgx.trusted_files
+   # but to reduce the preparation time we place it here. Will be changed in production
+   #  *** PILLOW SGX PLACEHOLDER *** #Will be replaced by config_pillow.py during the make process
+-]
+\ No newline at end of file
++]
+-- 
+2.34.1
+

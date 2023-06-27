@@ -1,0 +1,30 @@
+From 8051067d87f45dc688439dfef9091f4b8f5ee61d Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 10 Jan 2023 16:09:39 +0300
+Subject: [PATCH 075/161] [install_debs.sh] Install only the packages just
+ built
+
+Previously it was possible that after building a kernel with a bigger
+major version its deb packages were not deleted and then would overwrite
+any builds with smaller major versions.
+
+We fix this by only installing the packages of latest built version.
+
+Resolves: AXDIMM-544
+---
+ install_debs.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/install_debs.sh b/install_debs.sh
+index c2493d499..3f664102e 100755
+--- a/install_debs.sh
++++ b/install_debs.sh
+@@ -1,4 +1,4 @@
+ cd $(dirname $0)
+ 
+ ./clean_linux_debs.py . -y
+-sudo dpkg -i ../*.deb
++sudo dpkg -i ../*$(make kernelrelease)*.deb
+-- 
+2.34.1
+

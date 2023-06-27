@@ -1,0 +1,37 @@
+From 44b7f30452dc9191ada3d53200782de0f282bd03 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 20 Sep 2022 19:02:12 +0300
+Subject: [PATCH 072/128] [application] Better logging in starter/closer
+
+Related to: AXDIMM-319
+---
+ caffe2/python/pybind_state_axdimm.cc | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index f00d49d3..f17bb677 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -78,7 +78,7 @@ void addAXDIMMGlobalMethods(py::module& m) {
+         axdimm_reset_device(base_device);
+ 
+         if (use_shared_tables) {
+-          LOG(INFO) << "Allocated tables with memory preference id: "
++          LOG(INFO) << "Allocated shared tables with memory preference id: "
+                     << mem_preference;
+ 
+           descriptor = axdimm_allocate_tables(
+@@ -100,8 +100,9 @@ void addAXDIMMGlobalMethods(py::module& m) {
+         return descriptor;
+       });
+   m.def("axdimm_closer", []() {
+-    if (descriptor) {
++    if (descriptor != 0) {
+       axdimm_deallocate_tables(base_device, descriptor);
++      LOG(INFO) << "Deallocated shared tables";
+     }
+     // otherwise we are not using shared tables
+ 
+-- 
+2.34.1
+

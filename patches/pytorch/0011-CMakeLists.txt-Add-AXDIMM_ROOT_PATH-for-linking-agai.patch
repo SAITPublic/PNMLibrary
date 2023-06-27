@@ -1,0 +1,60 @@
+From b7703947d799408d68c51660ab067b5164f2cc9b Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 18:41:10 +0900
+Subject: [PATCH 011/128] [CMakeLists.txt] Add AXDIMM_ROOT_PATH for linking
+ against libAxdimm.so
+
+So far we don't install libAxdimm.so into system, make user specify
+AXDIMM_ROOT_PATH directly.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ CMakeLists.txt        |  1 +
+ caffe2/CMakeLists.txt | 12 ++++++++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d36aaa65..3dff6efd 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -192,6 +192,7 @@ option(USE_COLORIZE_OUTPUT "Colorize output during compilation" ON)
+ option(USE_ASAN "Use Address+Undefined Sanitizers" OFF)
+ option(USE_TSAN "Use Thread Sanitizer" OFF)
+ option(USE_AXDIMM "Use AXDIMM" ON)
++option(AXDIMM_ROOT_PATH "A path to AXDIMM library root directory" "")
+ option(USE_CUDA "Use CUDA" ON)
+ cmake_dependent_option(
+      BUILD_LAZY_CUDA_LINALG "Build cuda linalg ops as separate library" ON "USE_CUDA AND LINUX AND BUILD_PYTHON" OFF)
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 184cee5b..0163a1da 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -105,6 +105,13 @@ if(INTERN_BUILD_ATEN_OPS)
+   list(APPEND Caffe2_DEPENDENCY_INCLUDE ${ATen_THIRD_PARTY_INCLUDE})
+ endif()
+ 
++if(USE_AXDIMM)
++  if(NOT AXDIMM_ROOT_PATH)
++    message(FATAL_ERROR "AXDIMM_ROOT_PATH is not specified, can't find AXDIMM artifacts!")
++  endif()
++  list(APPEND Caffe2_AXDIMM_INCLUDE "${AXDIMM_ROOT_PATH}")
++endif()
++
+ # ---[ Caffe2 build
+ # Note: the folders that are being commented out have not been properly
+ # addressed yet.
+@@ -1356,6 +1363,11 @@ target_include_directories(torch_cpu INTERFACE $<INSTALL_INTERFACE:include>)
+ target_include_directories(torch_cpu PRIVATE ${Caffe2_CPU_INCLUDE})
+ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE}")
+ 
++if(USE_AXDIMM)
++  target_link_libraries(torch_axdimm PUBLIC "${AXDIMM_ROOT_PATH}/build/drivers/libAxdimm.so")
++  target_include_directories(torch_axdimm PRIVATE ${Caffe2_AXDIMM_INCLUDE})
++endif()
++
+ target_compile_options(torch_cpu PRIVATE "-DCAFFE2_BUILD_MAIN_LIB")
+ if(USE_CUDA)
+   target_compile_options(torch_cuda PRIVATE "-DTORCH_CUDA_BUILD_MAIN_LIB")
+-- 
+2.34.1
+

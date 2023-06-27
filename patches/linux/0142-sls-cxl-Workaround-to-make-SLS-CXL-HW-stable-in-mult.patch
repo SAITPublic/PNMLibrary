@@ -1,0 +1,53 @@
+From 63ea413d77bd3861ed4e95c5ccbec4a3a77a5ca1 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Thu, 20 Jul 2023 01:50:05 -0400
+Subject: [PATCH 142/161] [sls-cxl] Workaround to make SLS-CXL HW stable in
+ multiple runs
+
+Introduce NOP ioctl that used to switch CPU context and flush some
+internal states from userspace. This allows to execute multiple
+operation in a row on SLS-CXL hardware.
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c     | 3 +++
+ include/uapi/linux/sls_resources.h | 9 +++++++--
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 9fdbcd0a1..fe573227e 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -111,6 +111,9 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	case RELEASE_WRITE_RANK:
+ 		retval = release_sls_rank(cmd, arg);
+ 		break;
++	case NOP:
++		// Do nothing. We need it only for context switch
++		break;
+ 	default:
+ 		SLS_ERR("Unknown ioctl command:\n");
+ 		dump_ioctl_err(cmd);
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index f1fdf049a..5ac6bc0ea 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -198,8 +198,13 @@ struct sls_memory_alloc_request {
+ #define RELEASE_WRITE_RANK _IOW(SLS_IOC_MAGIC, 6, unsigned int)
+ #define RELEASE_READ_RANK _IOW(SLS_IOC_MAGIC, 7, unsigned int)
+ #define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 8, struct sls_memory_alloc_request)
+-#define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 9, struct sls_memory_alloc_request)
++#define DEALLOCATE_MEMORY \
++	_IOW(SLS_IOC_MAGIC, 9, struct sls_memory_alloc_request)
+ 
+-#define SLS_IOC_MAXNR (9)
++// Required to switch CPU context to avoid hangs in SLS-CXL hardware
++// [TODO: @y-lavrinenko] Get rid when firmware be more stable
++#define NOP _IO(SLS_IOC_MAGIC, 10)
++
++#define SLS_IOC_MAXNR (10)
+ 
+ #endif /* __SLS_RESOURCES_H__ */
+-- 
+2.34.1
+

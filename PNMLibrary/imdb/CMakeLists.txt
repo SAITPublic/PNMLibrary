@@ -1,0 +1,2 @@
+add_subdirectory(software_scan)
+add_subdirectory(operation)

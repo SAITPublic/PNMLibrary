@@ -1,0 +1,27 @@
+From a3550245f55cb2c448f66603880bc7674dc99e6c Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Fri, 17 Feb 2023 15:32:16 +0300
+Subject: [PATCH 103/128] [cmake] Remove USE_AXDIMM_SGX from cmake
+
+SGX was removed long ago, but this flag was forgotten, remove it.
+---
+ cmake/Dependencies.cmake | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
+index 7fcf7572..0409d468 100644
+--- a/cmake/Dependencies.cmake
++++ b/cmake/Dependencies.cmake
+@@ -1835,9 +1835,6 @@ if(USE_AXDIMM)
+   find_package(AxdimmSecure REQUIRED)
+   set(AXDIMM_LIBS Axdimm::AxdimmSecure Axdimm::AxdimmAI)
+ 
+-  if (USE_AXDIMM_SGX)
+-    list(APPEND AXDIMM_LIBS Axdimm::AxdimmSecureSgx)
+-  endif ()
+   list(APPEND Caffe2_DEPENDENCY_LIBS ${AXDIMM_LIBS})
+   list(APPEND Caffe2_AXDIMM_DEPENDENCY_LIBS ${AXDIMM_LIBS})
+ endif()
+-- 
+2.34.1
+

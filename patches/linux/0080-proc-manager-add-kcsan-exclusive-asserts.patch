@@ -1,0 +1,318 @@
+From 6622a879c5dadf414111c2a4d007cff1d3af850b Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 26 Jan 2023 15:01:35 +0300
+Subject: [PATCH 080/161] [proc manager] add kcsan exclusive asserts
+
+add exclusive access asserts to process manager's active and leaked lists
+
+Related: AXDIMM-525
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/dax/axdimm_process_manager.c | 208 +++++++++++++++------------
+ 1 file changed, 120 insertions(+), 88 deletions(-)
+
+diff --git a/drivers/dax/axdimm_process_manager.c b/drivers/dax/axdimm_process_manager.c
+index ea7a1f000..74c1745fd 100644
+--- a/drivers/dax/axdimm_process_manager.c
++++ b/drivers/dax/axdimm_process_manager.c
+@@ -43,7 +43,7 @@ find_current_proc_res(struct axdimm_process_manager *mgr)
+ 	struct axdimm_proc_resources *proc_res;
+ 	pid_t pid = get_current_process_id();
+ 
+-	list_for_each_entry (proc_res, &mgr->active_process_list, list) {
++	list_for_each_entry(proc_res, &mgr->active_process_list, list) {
+ 		if (proc_res->pid == pid) {
+ 			return proc_res;
+ 		}
+@@ -71,7 +71,7 @@ static void track_leaked_resources(struct axdimm_process_manager *mgr,
+ 		   get_current_process_id(), current->pid,
+ 		   proc_res->rank_write_mask, proc_res->rank_read_mask);
+ 
+-	list_for_each_entry (proc_desc, &proc_res->alloc_desc_list, list) {
++	list_for_each_entry(proc_desc, &proc_res->alloc_desc_list, list) {
+ 		AXDIMM_DBG("Leaked memory under desc[%lld]\n",
+ 			   proc_desc->alloc_desc);
+ 	}
+@@ -109,8 +109,8 @@ static int release_process_resources(struct axdimm_proc_resources *proc_res,
+ 	}
+ 
+ 	/* handle unreleased allocation descriptors */
+-	list_for_each_entry_safe (proc_desc, proc_desc_tmp,
+-				  &proc_res->alloc_desc_list, list) {
++	list_for_each_entry_safe(proc_desc, proc_desc_tmp,
++				 &proc_res->alloc_desc_list, list) {
+ 		failed |=
+ 			(deallocate_memory(alloc, proc_desc->alloc_desc) != 0);
+ 		AXDIMM_INF("Abnormal release desc[%lld], pid: %d, tid: %d\n",
+@@ -132,41 +132,45 @@ int release_axdimm_process(struct axdimm_process_manager *mgr,
+ 	bool res_leaked;
+ 
+ 	mutex_lock(&mgr->proc_list_lock);
+-	proc_res = find_current_proc_res(mgr);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
+ 
+-	if (!proc_res) {
+-		AXDIMM_ERR("Tried to release already released process by"
+-			   " pid: %d, tid: %d \n",
+-			   get_current_process_id(), current->pid);
+-		goto release_process_unlock;
+-	}
+-
+-	proc_res->ref_cnt--;
+-	/* release resources and remove process from list if:
+-	 *   - we are in last close syscall from userspace
+-	 *   - process got finished abnormally
+-	 */
+-	if (proc_res->ref_cnt == 0) {
+-		AXDIMM_DBG("Releasing process pid: %d, tid: %d\n",
+-			   get_current_process_id(), current->pid);
++		proc_res = find_current_proc_res(mgr);
+ 
+-		res_leaked = has_resources_leaked(proc_res);
+-		if (!res_leaked)
+-			goto free_proc_res;
+-
+-		if (atomic64_read(&mgr->enable_cleanup)) {
+-			err_code = release_process_resources(proc_res, alloc,
+-							     rank_sched);
+-		} else {
+-			track_leaked_resources(mgr, proc_res);
++		if (!proc_res) {
++			AXDIMM_ERR(
++				"Tried to release already released process by pid: %d, tid: %d\n",
++				get_current_process_id(), current->pid);
+ 			goto release_process_unlock;
+ 		}
+ 
++		proc_res->ref_cnt--;
++		/* release resources and remove process from list if:
++		 *   - we are in last close syscall from userspace
++		 *   - process got finished abnormally
++		 */
++		if (proc_res->ref_cnt == 0) {
++			AXDIMM_DBG("Releasing process pid: %d, tid: %d\n",
++				   get_current_process_id(), current->pid);
++
++			res_leaked = has_resources_leaked(proc_res);
++			if (!res_leaked)
++				goto free_proc_res;
++
++			if (atomic64_read(&mgr->enable_cleanup)) {
++				err_code = release_process_resources(
++					proc_res, alloc, rank_sched);
++			} else {
++				track_leaked_resources(mgr, proc_res);
++				goto release_process_unlock;
++			}
++
+ free_proc_res:
+-		list_del(&proc_res->list);
+-		kfree(proc_res);
++			list_del(&proc_res->list);
++			kfree(proc_res);
++		}
+ 	}
+-
+ release_process_unlock:
+ 	mutex_unlock(&mgr->proc_list_lock);
+ 
+@@ -182,20 +186,25 @@ static int set_rank_status(struct axdimm_process_manager *mgr,
+ 	struct axdimm_proc_resources *proc_res = NULL;
+ 
+ 	mutex_lock(&mgr->proc_list_lock);
+-	proc_res = find_current_proc_res(mgr);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
+ 
+-	if (proc_res == NULL) {
+-		err_code = -1;
+-		goto out;
+-	}
++		proc_res = find_current_proc_res(mgr);
+ 
+-	/* get read or write mask according to request */
+-	rank_mask = type == RANK_ACCESS_RD ? &proc_res->rank_read_mask :
+-					     &proc_res->rank_write_mask;
+-	mask_tmp = *rank_mask;
+-	/* set or unset rank's bit according to request */
+-	*rank_mask = set ? mask_tmp | (1 << rank) : mask_tmp & ~(1 << rank);
++		if (proc_res == NULL) {
++			err_code = -1;
++			goto out;
++		}
+ 
++		/* get read or write mask according to request */
++		rank_mask = type == RANK_ACCESS_RD ? &proc_res->rank_read_mask :
++						     &proc_res->rank_write_mask;
++		mask_tmp = *rank_mask;
++		/* set or unset rank's bit according to request */
++		*rank_mask = set ? mask_tmp | (1 << rank) :
++				   mask_tmp & ~(1 << rank);
++	}
+ out:
+ 	mutex_unlock(&mgr->proc_list_lock);
+ 	return err_code;
+@@ -254,34 +263,39 @@ static int update_descriptor_status(struct axdimm_process_manager *mgr,
+ 	struct axdimm_proc_desc *proc_desc = NULL;
+ 
+ 	mutex_lock(&mgr->proc_list_lock);
+-	proc_res = find_current_proc_res(mgr);
+-
+-	if (proc_res == NULL) {
+-		err_code = -1;
+-		goto out;
+-	}
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
+ 
+-	if (is_registration) { /* allocate and add descritor to descriptors list */
+-		proc_desc =
+-			kzalloc(sizeof(struct axdimm_proc_desc), GFP_KERNEL);
++		proc_res = find_current_proc_res(mgr);
+ 
+-		if (proc_desc == NULL) {
++		if (proc_res == NULL) {
+ 			err_code = -1;
+ 			goto out;
+ 		}
+ 
+-		proc_desc->alloc_desc = desc;
+-		list_add(&proc_desc->list, &proc_res->alloc_desc_list);
+-	} else { /* remove requested descriptor from descriptors list */
+-		list_for_each_entry_safe (proc_desc, proc_desc_tmp,
+-					  &proc_res->alloc_desc_list, list) {
+-			if (proc_desc->alloc_desc == desc) {
+-				list_del(&proc_desc->list);
+-				kfree(proc_desc);
++		if (is_registration) { /* allocate and add descritor to descriptors list */
++			proc_desc = kzalloc(sizeof(struct axdimm_proc_desc),
++					    GFP_KERNEL);
++
++			if (proc_desc == NULL) {
++				err_code = -1;
++				goto out;
++			}
++
++			proc_desc->alloc_desc = desc;
++			list_add(&proc_desc->list, &proc_res->alloc_desc_list);
++		} else { /* remove requested descriptor from descriptors list */
++			list_for_each_entry_safe(proc_desc, proc_desc_tmp,
++						 &proc_res->alloc_desc_list,
++						 list) {
++				if (proc_desc->alloc_desc == desc) {
++					list_del(&proc_desc->list);
++					kfree(proc_desc);
++				}
+ 			}
+ 		}
+ 	}
+-
+ out:
+ 	mutex_unlock(&mgr->proc_list_lock);
+ 	return err_code;
+@@ -331,27 +345,35 @@ int register_axdimm_process(struct axdimm_process_manager *mgr)
+ 	pid_t pid = get_current_process_id();
+ 
+ 	mutex_lock(&mgr->proc_list_lock);
+-	proc_res = find_current_proc_res(mgr);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
+ 
+-	if (proc_res)
+-		goto inc_ref_count;
++		proc_res = find_current_proc_res(mgr);
+ 
+-	proc_res = kzalloc(sizeof(struct axdimm_proc_resources), GFP_KERNEL);
++		if (proc_res)
++			goto inc_ref_count;
+ 
+-	if (!proc_res) {
+-		AXDIMM_ERR("Failed to register process, pid: %d, tid: %d\n",
+-			   pid, current->pid);
+-		err_code = -1;
+-		goto out;
+-	}
++		proc_res = kzalloc(sizeof(struct axdimm_proc_resources),
++				   GFP_KERNEL);
++
++		if (!proc_res) {
++			AXDIMM_ERR(
++				"Failed to register process, pid: %d, tid: %d\n",
++				pid, current->pid);
++			err_code = -1;
++			goto out;
++		}
+ 
+-	proc_res->pid = pid;
+-	INIT_LIST_HEAD(&proc_res->alloc_desc_list);
+-	list_add(&proc_res->list, &mgr->active_process_list);
+-	AXDIMM_DBG("Registered process, pid: %d, tid: %d\n", pid, current->pid);
++		proc_res->pid = pid;
++		INIT_LIST_HEAD(&proc_res->alloc_desc_list);
++		list_add(&proc_res->list, &mgr->active_process_list);
++		AXDIMM_DBG("Registered process, pid: %d, tid: %d\n", pid,
++			   current->pid);
+ 
+ inc_ref_count:
+-	proc_res->ref_cnt++;
++		proc_res->ref_cnt++;
++	}
+ out:
+ 	mutex_unlock(&mgr->proc_list_lock);
+ 	return err_code;
+@@ -371,14 +393,19 @@ int axdimm_proc_manager_cleanup_on(struct axdimm_process_manager *mgr,
+ 
+ 	/* cleanup leaked_process_list */
+ 	mutex_lock(&mgr->proc_list_lock);
+-	list_for_each_entry_safe (proc_res, proc_res_tmp,
+-				  &mgr->leaked_process_list, list) {
+-		err_code |=
+-			release_process_resources(proc_res, alloc, rank_sched);
+-		list_del(&proc_res->list);
+-		kfree(proc_res);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
++
++		list_for_each_entry_safe(proc_res, proc_res_tmp,
++					 &mgr->leaked_process_list, list) {
++			err_code |= release_process_resources(proc_res, alloc,
++							      rank_sched);
++			list_del(&proc_res->list);
++			kfree(proc_res);
++		}
++		atomic64_set(&mgr->leaked, 0);
+ 	}
+-	atomic64_set(&mgr->leaked, 0);
+ 	mutex_unlock(&mgr->proc_list_lock);
+ 
+ 	return err_code ? -1 : 0;
+@@ -413,10 +440,15 @@ void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr)
+ 	struct axdimm_proc_resources *proc_res;
+ 
+ 	mutex_lock(&mgr->proc_list_lock);
+-	list_for_each_entry_safe (proc_res, proc_res_tmp,
+-				  &mgr->active_process_list, list) {
+-		list_del(&proc_res->list);
+-		kfree(proc_res);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
++
++		list_for_each_entry_safe(proc_res, proc_res_tmp,
++					 &mgr->active_process_list, list) {
++			list_del(&proc_res->list);
++			kfree(proc_res);
++		}
+ 	}
+ 	mutex_unlock(&mgr->proc_list_lock);
+ }
+-- 
+2.34.1
+

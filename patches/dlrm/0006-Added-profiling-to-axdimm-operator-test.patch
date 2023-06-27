@@ -1,0 +1,71 @@
+From 1c2726587b8844c976ab2184b5fddd33523b1990 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 22 Oct 2022 15:30:31 +0300
+Subject: [PATCH 06/23] Added profiling to axdimm operator test
+
+Resolves: AXDIMM-452
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ test_axdimm_op.py | 24 ++++++++++++++++--------
+ 1 file changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/test_axdimm_op.py b/test_axdimm_op.py
+index 8959b01..7488518 100644
+--- a/test_axdimm_op.py
++++ b/test_axdimm_op.py
+@@ -2,6 +2,7 @@ import argparse
+ import numpy as np
+ import torch
+ import sys
++import torch.autograd.profiler as profiler
+ 
+ from torch.nn import EmbeddingBag, EmbeddingBagAxdimm
+ from random import randint
+@@ -62,6 +63,7 @@ class AxdimmEmbeddingsTest:
+         self.offsets = self.gen_offsets()
+ 
+     def check_results(self, cpu_res, axdimm_res):
++        print("Validating results...")
+         for table_idx in range(0, self.tables_num):
+             for batch_idx in range(0, self.minibatch_size):
+                 # Tensor with comparison results of each element i.e. [ True, True, False, True ]
+@@ -77,13 +79,12 @@ class AxdimmEmbeddingsTest:
+ 
+     def run_test(self):
+         print("Running EmbeddingBag calculations")
+-        cpu_res = []
+-        for i in range(0, self.tables_num):
+-            op = EmbeddingBag.from_pretrained(torch.tensor(self.tables[i], dtype=torch.float32), mode='sum')
+-            # CPU version doesn't require last offset, since it knows size of index bag
+-            # AXDIMM requires it because indices must be flat 2D list of all indices bags
+-            # So size of each bag can't be determined from indices bags list
+-            cpu_res.append(op(torch.tensor(self.indices[i], dtype=torch.int32), torch.tensor(self.offsets[i][:-1], dtype=torch.int32)))
++        cpu_ops = [EmbeddingBag.from_pretrained(torch.tensor(self.tables[i], dtype=torch.float32), mode='sum') for i in range(0, self.tables_num)]
++        # CPU version doesn't require last offset, since it knows size of index bag
++        # AXDIMM requires it because indices must be flat 2D list of all indices bags
++        # So size of each bag can't be determined from indices bags list
++        with profiler.profile(with_stack=True, profile_memory=True) as cpu_prof:
++            cpu_res = [cpu_ops[i](torch.tensor(self.indices[i], dtype=torch.int32), torch.tensor(self.offsets[i][:-1], dtype=torch.int32)) for i in range(0, self.tables_num)]
+         print("Running EmbeddingBagAxdimm calculations")
+         print("Preparing data...")
+         op = EmbeddingBagAxdimm(torch.tensor(self.tables, dtype=torch.float32, device="axdimm"))
+@@ -91,7 +92,14 @@ class AxdimmEmbeddingsTest:
+         for i_bag in self.indices:
+             axdimm_indices.extend(i_bag)
+         print("Running AXDIMM...")
+-        axdimm_res = op(torch.tensor(axdimm_indices, dtype=torch.int32), torch.tensor(self.offsets, dtype=torch.int32))
++        with profiler.profile(with_stack=True, profile_memory=True) as axdimm_prof:
++            axdimm_res = op(torch.tensor(axdimm_indices, dtype=torch.int32), torch.tensor(self.offsets, dtype=torch.int32))
++
++        print("CPU profling results:")
++        print(cpu_prof.key_averages(group_by_stack_n=10).table(sort_by='self_cpu_time_total', row_limit=10))
++        print("AXDIMM  profling results:")
++        print(axdimm_prof.key_averages(group_by_stack_n=10).table(sort_by='self_cpu_time_total', row_limit=10))
++
+         if self.check_results(cpu_res, axdimm_res):
+             print("Test completed successfully")
+             return True
+-- 
+2.34.1
+

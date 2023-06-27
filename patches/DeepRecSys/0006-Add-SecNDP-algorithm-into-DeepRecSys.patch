@@ -1,0 +1,153 @@
+From 84251852cb58da0922e939f076692061f286f811 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 16 Jun 2022 17:28:11 +0300
+Subject: [PATCH 06/33] Add SecNDP algorithm into DeepRecSys
+
+ * Make possible to use SecNDP in DeepRecSys app.
+ * Forward embedded tables path to caffe2 operator to avoid extra copy.
+
+Related to: AXDIMM-8, AXDIMM-22, AXDIMM-248
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ DeepRecSys.py            | 11 +++++++----
+ models/dlrm_s_caffe2.py  | 23 +++++++++++++++++------
+ run_DeepRecSys_axdimm.sh | 24 ++++++++++++++++++++++--
+ utils/utils.py           |  1 +
+ 4 files changed, 47 insertions(+), 12 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index b1524a2..e43c159 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -1,4 +1,3 @@
+-
+ from __future__ import absolute_import, division, print_function, unicode_literals
+ 
+ from utils.utils     import cli
+@@ -46,9 +45,10 @@ def DeepRecSys():
+     status = 0
+     shared_tables_uuid = "None"
+     if args.use_axdimm_caffe2_backend:
+-        ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+-        shared_tables_uuid = workspace.AxdimmStarter(args.table_weight_path, ln_emb,
+-                                                     args.arch_sparse_feature_size)
++      ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
++      op = workspace.SecureAxdimmStarter if args.use_secndp_algo else workspace.AxdimmStarter
++      shared_tables_uuid = op(args.table_weight_path, ln_emb,
++                              args.arch_sparse_feature_size)
+ 
+     if (status != 0):
+         print("(axdimm) axd_starter didn't operate properly.")
+@@ -195,6 +195,9 @@ def DeepRecSys():
+     status = 0
+     # [AXDIMM caffe2 backend] Destroy AXDIMM for parent process.
+     if args.use_axdimm_caffe2_backend:
++      if args.use_secndp_algo:
++        status = workspace.SecureAxdimmCloser()
++      else:
+         status = workspace.AxdimmCloser()
+ 
+     if (status != 0):
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index 541b4ec..2c61451 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -305,9 +305,12 @@ class DLRM_Net(object):
+ 
+             # initialize the weights
+             # approach 1a: custom
+-            W = np.random.uniform(low=-np.sqrt(1 / n),
+-                                  high=np.sqrt(1 / n),
+-                                  size=(n, m)).astype(np.float32)
++            if self.args.use_secndp_algo:
++                W = np.asarray([[]], dtype=np.float32)
++            else:
++                W = np.random.uniform(low=-np.sqrt(1 / n),
++                                      high=np.sqrt(1 / n),
++                                      size=(n, m)).astype(np.float32)
+             # approach 1b: numpy rand
+             # W = ra.rand(n, m).astype(np.float32)
+             # with core.DeviceScope(core.DeviceOption(caffe2_pb2.CUDA, 0)):
+@@ -346,9 +349,17 @@ class DLRM_Net(object):
+ 
+         if self.use_axdimm_caffe2_backend:
+             with core.DeviceScope(core.DeviceOption(caffe2_pb2.AXDIMM, 0)):
+-                EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+-                                                   [sls_s_combined], shared_tables_uuid=self.shared_tables_uuid)
+-            emb_l.append(EE)
++                if self.args.use_secndp_algo:
++                    rows = [int(v) for v in self.args.arch_embedding_size.split("-")]
++                    EE = model.net.SecureSparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
++                                                             [sls_s_combined],
++                                                             from_file=True, path=self.args.table_weight_path,
++                                                             num_tables=len(rows), sparse_feature_size=m, rows=rows)
++                else:
++                    EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
++                                                       [sls_s_combined],
++                                                       shared_tables_uuid=self.shared_tables_uuid)
++                emb_l.append(EE)
+ 
+         return emb_l, weights_l
+ 
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index 15cb165..8f71bf3 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -5,6 +5,10 @@
+ # along with the recommendation load generator and query scheduler to measure
+ # latency-bounded throughput (inference QPS).
+ 
++# Possible arguments
++#     --tables value  --- path to embedded tables
++#     --secure        --- use SecNDP algorithm for SLS calculation
++
+ ###############################################################################
+ 
+ ########## Epoch args ##############
+@@ -73,7 +77,23 @@ accel_configs="96-128-192-256-384-512"
+ # accel_args="--accel_configs $accel_configs --model_accel"
+ accel_args=""
+ 
+-axdimm_args="--use_axdimm_caffe2_backend --table_weight_path /home/maxim.o/tables/table_emb_cs.0.weight.pt"
++table_weight_path="./tables/embedded.bin"
++
++USE_SECURE_ALGO=''
++while [ "$#" -ne 0 ]
++do
++  case "$1" in
++  "--secure")
++            USE_SECURE_ALGO="--use_secndp_algo"
++            ;;
++  "--tables")
++            shift
++            table_weight_path=$1
++  esac
++  shift
++done
++
++axdimm_args="--use_axdimm_caffe2_backend --table_weight_path $table_weight_path $USE_SECURE_ALGO"
+ # axdimm_args=""
+ 
+ avg_arrival_rate=1
+@@ -83,4 +103,4 @@ avg_arrival_args="--avg_arrival_rate $avg_arrival_rate"
+ profiling_args=""
+ 
+ # python DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/wide_and_deep.json" --tune_batch_qps --tune_accel_qps
+-python3.8 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_axdimm.json" $axdimm_args $avg_arrival_args $profiling_args
++python3 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_axdimm.json" $axdimm_args $avg_arrival_args $profiling_args
+diff --git a/utils/utils.py b/utils/utils.py
+index d7a2e63..0ab8dc2 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -132,6 +132,7 @@ def cli():
+     # =========================================================================================
+     parser.add_argument('--use_axdimm_caffe2_backend', action="store_true", default=False)
+     parser.add_argument("--table_weight_path", type=str, default="./pretrained/real_0.5M_120table")
++    parser.add_argument("--use_secndp_algo", action="store_true", default=False)
+ 
+     args = parser.parse_args()
+ 
+-- 
+2.34.1
+

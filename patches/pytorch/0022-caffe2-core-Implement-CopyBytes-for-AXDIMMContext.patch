@@ -1,0 +1,37 @@
+From e24133a1275f2035fe8f7649de3caec892399585 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 3 Nov 2021 18:11:02 +0900
+Subject: [PATCH 022/128] [caffe2/core] Implement CopyBytes for AXDIMMContext
+
+If not copy data, AXDIMM library will see garbage data.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/context_axdimm.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/core/context_axdimm.h b/caffe2/core/context_axdimm.h
+index b0704ab1..a7838fbb 100644
+--- a/caffe2/core/context_axdimm.h
++++ b/caffe2/core/context_axdimm.h
+@@ -12,6 +12,8 @@
+ #include <c10/core/Device.h>
+ #include <c10/core/Stream.h>
+ 
++#include <cstring>
++
+ namespace caffe2 {
+ 
+ class C10_EXPORT AXDIMMContext final : public BaseContext {
+@@ -53,7 +55,7 @@ class C10_EXPORT AXDIMMContext final : public BaseContext {
+ 
+   template <class SrcContext, class DstContext>
+   inline void CopyBytes(size_t nbytes, const void* src, void* dst) {
+-    // Empty now.
++    memcpy(dst, src, nbytes);
+   }
+ 
+   void CopyBytesSameDevice(size_t nbytes, const void* src, void* dst) override {
+-- 
+2.34.1
+

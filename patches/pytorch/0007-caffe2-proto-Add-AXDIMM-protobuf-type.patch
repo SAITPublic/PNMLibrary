@@ -1,0 +1,77 @@
+From 4c2bbf32906c4682014c6466c1fc817a6cf76d9a Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 16:55:43 +0900
+Subject: [PATCH 007/128] [caffe2/proto] Add AXDIMM protobuf type
+
+Handle AXDIMM in protobuf as a separate device type.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/proto/caffe2.proto | 3 ++-
+ caffe2/proto/caffe2_pb.h  | 7 +++++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/proto/caffe2.proto b/caffe2/proto/caffe2.proto
+index 861a6c5d..c1d56457 100644
+--- a/caffe2/proto/caffe2.proto
++++ b/caffe2/proto/caffe2.proto
+@@ -221,8 +221,9 @@ enum DeviceTypeProto {
+   PROTO_ORT = 8; // ONNX Runtime
+   PROTO_XLA = 9; // XLA / TPU
+   PROTO_MPS = 10; // MPS
++  PROTO_AXDIMM = 11; // AXDIMM
+   // Change the following number if you add more devices in the code.
+-  PROTO_COMPILE_TIME_MAX_DEVICE_TYPES = 11;
++  PROTO_COMPILE_TIME_MAX_DEVICE_TYPES = 12;
+ }
+ 
+ // Device-specific options. We do not distinguish DeviceOption protos for
+diff --git a/caffe2/proto/caffe2_pb.h b/caffe2/proto/caffe2_pb.h
+index fc82659d..74afd726 100644
+--- a/caffe2/proto/caffe2_pb.h
++++ b/caffe2/proto/caffe2_pb.h
+@@ -13,6 +13,7 @@ constexpr DeviceType OPENCL = DeviceType::OPENCL;
+ constexpr DeviceType MKLDNN = DeviceType::MKLDNN;
+ constexpr DeviceType IDEEP = DeviceType::IDEEP;
+ constexpr DeviceType HIP = DeviceType::HIP;
++constexpr DeviceType AXDIMM = DeviceType::AXDIMM;
+ constexpr DeviceType COMPILE_TIME_MAX_DEVICE_TYPES =
+     DeviceType::COMPILE_TIME_MAX_DEVICE_TYPES;
+ 
+@@ -32,6 +33,8 @@ inline TORCH_API DeviceType ProtoToType(const caffe2::DeviceTypeProto p) {
+       return DeviceType::IDEEP;
+     case caffe2::PROTO_HIP:
+       return DeviceType::HIP;
++    case caffe2::PROTO_AXDIMM:
++      return DeviceType::AXDIMM;
+     case caffe2::PROTO_COMPILE_TIME_MAX_DEVICE_TYPES:
+       return DeviceType::COMPILE_TIME_MAX_DEVICE_TYPES;
+     default:
+@@ -64,6 +67,8 @@ inline TORCH_API DeviceTypeProto TypeToProto(const DeviceType& t) {
+       return caffe2::PROTO_IDEEP;
+     case DeviceType::HIP:
+       return caffe2::PROTO_HIP;
++    case DeviceType::AXDIMM:
++      return caffe2::PROTO_AXDIMM;
+     case DeviceType::COMPILE_TIME_MAX_DEVICE_TYPES:
+       return caffe2::PROTO_COMPILE_TIME_MAX_DEVICE_TYPES;
+     default:
+@@ -95,6 +100,7 @@ inline TORCH_API caffe2::DeviceOption DeviceToOption(const at::Device& device) {
+     case DeviceType::OPENCL:
+     case DeviceType::MKLDNN:
+     case DeviceType::IDEEP:
++    case DeviceType::AXDIMM:
+     case DeviceType::COMPILE_TIME_MAX_DEVICE_TYPES:
+       break;
+     default:
+@@ -119,6 +125,7 @@ inline TORCH_API at::Device OptionToDevice(const caffe2::DeviceOption& option) {
+       break;
+     case caffe2::PROTO_CUDA:
+     case caffe2::PROTO_HIP:
++    case caffe2::PROTO_AXDIMM:
+       id = static_cast<c10::DeviceIndex>(option.device_id());
+       break;
+   }
+-- 
+2.34.1
+

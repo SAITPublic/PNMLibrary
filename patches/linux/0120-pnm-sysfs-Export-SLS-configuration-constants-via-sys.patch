@@ -1,0 +1,370 @@
+From f24ea004e9bee9ca1d1ec3136e18e00f155c1587 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Wed, 14 Jun 2023 18:43:25 +0300
+Subject: [PATCH 120/161] [pnm][sysfs] Export SLS configuration constants via
+ sysfs
+
+The main SLS constants that define the execution environment (memory
+interleaving, rank numbers, buffer sizes, etc) were exported to
+userspace via sysfs. We create `topology` object in SLS sysfs that
+contains multiple attributes with information about constants.
+
+Resolve: MCS23-1164
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ drivers/pnm/sls_resource/Makefile             |   1 +
+ drivers/pnm/sls_resource/sls_sysfs.c          |  48 ++++---
+ .../pnm/sls_resource/sls_topology_export.c    | 117 ++++++++++++++++++
+ .../pnm/sls_resource/sls_topology_export.h    |  12 ++
+ include/uapi/linux/sls_resources.h            |  42 +++++++
+ 5 files changed, 203 insertions(+), 17 deletions(-)
+ create mode 100644 drivers/pnm/sls_resource/sls_topology_export.c
+ create mode 100644 drivers/pnm/sls_resource/sls_topology_export.h
+
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index 7feefca8f..cd48fa57a 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -7,3 +7,4 @@ sls_resource-y += sls_allocator.o
+ sls_resource-y += sls_process_manager.o
+ sls_resource-y += sls_rank_scheduler.o
+ sls_resource-y += sls_sysfs.o
++sls_resource-y += sls_topology_export.o
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.c b/drivers/pnm/sls_resource/sls_sysfs.c
+index 97756c994..65d19618b 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.c
++++ b/drivers/pnm/sls_resource/sls_sysfs.c
+@@ -7,6 +7,7 @@
+ #include "sls_rank_scheduler.h"
+ #include "sls_process_manager.h"
+ #include "sls_private.h"
++#include "sls_topology_export.h"
+ 
+ #include <linux/device.h>
+ #include <linux/genalloc.h>
+@@ -27,15 +28,15 @@ static struct kobject *ranks_kobj;
+ static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+ 			   char *buf)
+ {
+-	return sprintf(buf, "%llu\n", atomic64_read(&sls_proc_mgr.leaked));
++	return sysfs_emit(buf, "%llu\n", atomic64_read(&sls_proc_mgr.leaked));
+ }
+ static DEVICE_ATTR_RO(leaked);
+ 
+ static ssize_t cleanup_show(struct device *device,
+ 			    struct device_attribute *attr, char *buf)
+ {
+-	return sprintf(buf, "%llu\n",
+-		       atomic64_read(&sls_proc_mgr.enable_cleanup));
++	return sysfs_emit(buf, "%llu\n",
++			  atomic64_read(&sls_proc_mgr.enable_cleanup));
+ }
+ 
+ static ssize_t cleanup_store(struct device *device,
+@@ -62,8 +63,8 @@ static DEVICE_ATTR_RW(cleanup);
+ static ssize_t acq_timeout_show(struct device *device,
+ 				struct device_attribute *attr, char *buf)
+ {
+-	return sprintf(buf, "%llu\n",
+-		       atomic64_read(&sls_rank_sched.retry_timeout_ns));
++	return sysfs_emit(buf, "%llu\n",
++			  atomic64_read(&sls_rank_sched.retry_timeout_ns));
+ }
+ 
+ static ssize_t acq_timeout_store(struct device *device,
+@@ -172,7 +173,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 		mutex_lock(&sls_rank_sched.rank_stat_lock);
+ 		state = axd_rs[attr->rank].wr_stat;
+ 		mutex_unlock(&sls_rank_sched.rank_stat_lock);
+-		return sprintf(buf, "%u\n", state);
++		return sysfs_emit(buf, "%u\n", state);
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[1]) == 0) {
+@@ -180,7 +181,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 		pool = sls_device->allocator->mem_pools[attr->rank];
+ 		size = pool ? gen_pool_size(pool) : 0;
+ 		unlock_allocator(sls_device->allocator);
+-		return sprintf(buf, "%llu\n", size);
++		return sysfs_emit(buf, "%llu\n", size);
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[2]) == 0) {
+@@ -188,7 +189,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 		pool = sls_device->allocator->mem_pools[attr->rank];
+ 		free_size = pool ? gen_pool_avail(pool) : 0;
+ 		unlock_allocator(sls_device->allocator);
+-		return sprintf(buf, "%llu\n", free_size);
++		return sysfs_emit(buf, "%llu\n", free_size);
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[3]) == 0) {
+@@ -196,7 +197,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 			sls_rank_sched.axd_rank_stats;
+ 		wr_acq_count =
+ 			atomic64_read(&axd_rs[attr->rank].wr_acquisition_count);
+-		return sprintf(buf, "%llu\n", wr_acq_count);
++		return sysfs_emit(buf, "%llu\n", wr_acq_count);
+ 	}
+ 
+ 	return 0;
+@@ -226,17 +227,17 @@ static const char *const region_attr_name[] = {
+ static ssize_t region_show(struct region_attribute *attr, char *buf)
+ {
+ 	if (strcmp(attr->attr.name, region_attr_name[0]) == 0)
+-		return sprintf(
++		return sysfs_emit(
+ 			buf, "%llu\n",
+ 			sls_device->mem_info.mem_size[attr->rank % NUM_OF_CS]
+-							[attr->region] /
++						     [attr->region] /
+ 				NUM_RANKS_PER_CS);
+ 
+ 	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+-		return sprintf(buf, "%llu\n",
+-			       sls_device->mem_info
+-				       .mem_offset[attr->rank % NUM_OF_CS]
+-						  [attr->region]);
++		return sysfs_emit(
++			buf, "%llu\n",
++			sls_device->mem_info.mem_offset[attr->rank % NUM_OF_CS]
++						       [attr->region]);
+ 
+ 	return 0;
+ }
+@@ -398,16 +399,28 @@ int build_sls_sysfs(struct sls_dev *dev, struct device *resource_dev)
+ 
+ 	SLS_DBG("Building SLS sysfs\n");
+ 	ranks_kobj = kobject_create_and_add("ranks", &resource_dev->kobj);
++
++	if (!ranks_kobj) {
++		err = -ENOMEM;
++		SLS_ERR("Failed to create ranks kobject\n");
++		goto sls_sysfs_out;
++	}
++
+ 	if (sysfs_create_groups(ranks_kobj, dev_attr_groups)) {
+ 		err = -ENOMEM;
+ 		goto sls_sysfs_out;
+ 	}
+ 
++	err = sls_export_topology_constants(&resource_dev->kobj);
++	if (err) {
++		SLS_ERR("Failed to build memory topology sysfs");
++		goto sls_sysfs_out;
++	}
++
+ 	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
+ 		err = build_rank_sysfs(ranks_kobj, rank);
+ 		if (err) {
+-			SLS_ERR("Failed to build sysfs for rank [%d]\n",
+-				   rank);
++			SLS_ERR("Failed to build sysfs for rank [%d]\n", rank);
+ 			goto sls_sysfs_out;
+ 		}
+ 	}
+@@ -432,6 +445,7 @@ void destroy_sls_sysfs(void)
+ 		kobject_del(&ranks_fs[rank].rank_idx_kobj);
+ 	}
+ 
++	sls_destroy_topology_constants();
+ 	sysfs_remove_groups(ranks_kobj, dev_attr_groups);
+ 	kobject_del(ranks_kobj);
+ 
+diff --git a/drivers/pnm/sls_resource/sls_topology_export.c b/drivers/pnm/sls_resource/sls_topology_export.c
+new file mode 100644
+index 000000000..11795f80b
+--- /dev/null
++++ b/drivers/pnm/sls_resource/sls_topology_export.c
+@@ -0,0 +1,117 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#include "sls_topology_export.h"
++#include "sls_log.h"
++
++#include <linux/sls_resources.h>
++#include <linux/pnm_sls_mem_topology.h>
++
++#include <linux/device.h>
++#include <linux/kernel.h>
++
++#define SINGLE_VALUE_ATTR(name, value)                                       \
++	static ssize_t name##_show(struct device *device,                    \
++				   struct device_attribute *attr, char *buf) \
++	{                                                                    \
++		return sysfs_emit(buf, "%d\n", value);                       \
++	}                                                                    \
++	static DEVICE_ATTR_RO(name)
++
++#define DOUBLE_VALUE_ATTR(name, value1, value2)                              \
++	static ssize_t name##_show(struct device *device,                    \
++				   struct device_attribute *attr, char *buf) \
++	{                                                                    \
++		return sysfs_emit(buf, "%d %d\n", value1, value2);           \
++	}                                                                    \
++	static DEVICE_ATTR_RO(name)
++
++SINGLE_VALUE_ATTR(num_of_ranks, NUM_OF_RANK);
++SINGLE_VALUE_ATTR(num_of_cs, NUM_OF_CS);
++SINGLE_VALUE_ATTR(num_of_channel, NUM_OF_CH);
++
++SINGLE_VALUE_ATTR(instruction_size, INSTRUCTION_SIZE);
++SINGLE_VALUE_ATTR(data_size, DATA_SIZE);
++SINGLE_VALUE_ATTR(aligned_tag_size, ALIGNED_TAG_SIZE);
++
++SINGLE_VALUE_ATTR(rank_interleaving_size, RANK_INTERLEAVING_SIZE);
++SINGLE_VALUE_ATTR(channel_interleaving_size, CHANNEL_INTERLEAVING_SIZE);
++SINGLE_VALUE_ATTR(interleaving_stride, INTERLEAVING_STRIDE_LENGTH);
++
++SINGLE_VALUE_ATTR(polling_reg_offset, REG_POLLING);
++SINGLE_VALUE_ATTR(sls_exec_value, REG_SLS_EXEC);
++SINGLE_VALUE_ATTR(enable_sls_reg_offset, REG_SLS_EN);
++
++DOUBLE_VALUE_ATTR(psum_buffer, NUM_OF_PSUM_BUF, PSUM_BUF_SIZE);
++DOUBLE_VALUE_ATTR(tags_buffer, NUM_OF_TAGS_BUF, TAGS_BUF_SIZE);
++DOUBLE_VALUE_ATTR(inst_buffer, NUM_OF_INST_BUF, INST_BUF_SIZE);
++
++static struct kobject *mem_topo_kobj;
++
++static struct attribute *mem_topo_attrs[] = {
++	&dev_attr_num_of_ranks.attr,
++	&dev_attr_num_of_cs.attr,
++	&dev_attr_num_of_channel.attr,
++
++	&dev_attr_instruction_size.attr,
++	&dev_attr_data_size.attr,
++	&dev_attr_aligned_tag_size.attr,
++
++	&dev_attr_rank_interleaving_size.attr,
++	&dev_attr_channel_interleaving_size.attr,
++	&dev_attr_interleaving_stride.attr,
++
++	&dev_attr_polling_reg_offset.attr,
++	&dev_attr_sls_exec_value.attr,
++	&dev_attr_enable_sls_reg_offset.attr,
++
++	&dev_attr_psum_buffer.attr,
++	&dev_attr_tags_buffer.attr,
++	&dev_attr_inst_buffer.attr,
++	NULL,
++};
++
++static struct attribute_group mem_topo_attr_group = {
++	.attrs = mem_topo_attrs,
++};
++
++static const struct attribute_group *mem_topo_attr_groups[] = {
++	&mem_topo_attr_group,
++	NULL,
++};
++
++int sls_export_topology_constants(struct kobject *resource_kobj)
++{
++	SLS_DBG("Building SLS memory topology sysfs\n");
++
++	mem_topo_kobj =
++		kobject_create_and_add(DEVICE_TOPOLOGY_PATH, resource_kobj);
++
++	if (!mem_topo_kobj) {
++		SLS_ERR("Unable to create topology sysfs kobject.");
++		return -ENOMEM;
++	}
++
++	if (sysfs_create_groups(mem_topo_kobj, mem_topo_attr_groups))
++		return -ENOMEM;
++
++	SLS_DBG("Built SLS memory topology sysfs\n");
++
++	return 0;
++}
++
++void sls_destroy_topology_constants(void)
++{
++	SLS_DBG("Destroying SLS memory topology sysfs\n");
++
++	if (!mem_topo_kobj) {
++		SLS_ERR("Unexpected state of topology sysfs kobject (%p).\n",
++			mem_topo_kobj);
++		return;
++	}
++
++	sysfs_remove_groups(mem_topo_kobj, mem_topo_attr_groups);
++	kobject_del(mem_topo_kobj);
++
++	SLS_DBG("Destroyed SLS memory topology sysfs\n");
++}
+diff --git a/drivers/pnm/sls_resource/sls_topology_export.h b/drivers/pnm/sls_resource/sls_topology_export.h
+new file mode 100644
+index 000000000..e47ddafad
+--- /dev/null
++++ b/drivers/pnm/sls_resource/sls_topology_export.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __SLS_TOPOLOGY_EXPORT__
++#define __SLS_TOPOLOGY_EXPORT__
++
++struct kobject;
++
++int sls_export_topology_constants(struct kobject *resource_kobj);
++void sls_destroy_topology_constants(void);
++
++#endif /* __SLS_TOPOLOGY_EXPORT__ */
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index ca7d14fea..61d1b6ff7 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -80,6 +80,48 @@
+  */
+ #define DEVICE_LEAKED_PATH "leaked"
+ 
++#define DEVICE_TOPOLOGY_PATH "topology"
++
++// Block of sysfs paths for topology info, all O_RDONLY
++/* Number of ranks */
++#define ATTR_NUM_OF_RANKS_PATH DEVICE_TOPOLOGY_PATH "/num_of_ranks"
++/* Number of chip selects */
++#define ATTR_NUM_OF_CS_PATH DEVICE_TOPOLOGY_PATH "/num_of_cs"
++/* Number of channels */
++#define ATTR_NUM_OF_CHANNEL_PATH DEVICE_TOPOLOGY_PATH "/num_of_channel"
++
++/* Size of single instruction in bytes*/
++#define ATTR_INSTRUCTION_SIZE_PATH DEVICE_TOPOLOGY_PATH "/instruction_size"
++/* Size of single element in sparse vector in bytes */
++#define ATTR_DATA_SIZE_PATH DEVICE_TOPOLOGY_PATH "/data_size"
++/* Size of TAG for sparse vector in bytes */
++#define ATTR_ALIGNED_TAG_SIZE_PATH DEVICE_TOPOLOGY_PATH "/aligned_tag_size"
++
++/* Rank interleaving size in bytes */
++#define ATTR_RANK_INTERLEAVING_SIZE_PATH \
++	DEVICE_TOPOLOGY_PATH "/rank_interleaving_size"
++/* Channel interleaving size in bytes */
++#define ATTR_CHANNEL_INTERLEAVING_SIZE_PATH \
++	DEVICE_TOPOLOGY_PATH "/channel_interleaving_size"
++/* Interleaving stride in bytes */
++#define ATTR_INTERLEAVING_STRIDE_PATH \
++	DEVICE_TOPOLOGY_PATH "/interleaving_stride"
++
++/* Offset for polling register */
++#define ATTR_POLLING_REGISTER_OFFSET_PATH \
++	DEVICE_TOPOLOGY_PATH "/polling_reg_offset"
++/* Value to execute SLS operation */
++#define ATTR_SLS_EXEC_VALUE_PATH DEVICE_TOPOLOGY_PATH "/sls_exec_value"
++/* Offset for SLS-enable register */
++#define ATTR_REG_SLS_EN_PATH DEVICE_TOPOLOGY_PATH "/enable_sls_reg_offset"
++
++/* The number and the size (in bytes) of psum buffers in order (number size) */
++#define ATTR_PSUM_BUFFER_PATH DEVICE_TOPOLOGY_PATH "/psum_buffer"
++/* The number and the size (in bytes) of tags buffers in order (number size) */
++#define ATTR_TAGS_BUFFER_PATH DEVICE_TOPOLOGY_PATH "/tags_buffer"
++/* The number and the size (in bytes) of instruction buffers in order (number size) */
++#define ATTR_INST_BUFFER_PATH DEVICE_TOPOLOGY_PATH "/inst_buffer"
++
+ // Block of sysfs paths for ranks info, all O_RDONLY
+ // DAX_SYSFS_ROOT"/dax%d.%d/ranks/%d
+ 
+-- 
+2.34.1
+

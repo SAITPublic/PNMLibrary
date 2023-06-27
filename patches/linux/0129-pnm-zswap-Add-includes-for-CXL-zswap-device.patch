@@ -1,0 +1,584 @@
+From a3e54820afea2f6f0409bbfa5c9fb55497b9dd2f Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Mon, 10 Jul 2023 21:14:01 -0400
+Subject: [PATCH 129/161] [pnm][zswap] Add includes for CXL zswap device
+
+The includes that are required by cxl-zswap driver and simulation were
+added.
+
+Related to: MCS23-1322
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ include/linux/pnm/cxl_zswap.h        | 326 +++++++++++++++++++++++++++
+ include/linux/pnm/cxl_zswap_driver.h | 104 +++++++++
+ include/linux/pnm/cxl_zswap_sim.h    | 113 ++++++++++
+ 3 files changed, 543 insertions(+)
+ create mode 100644 include/linux/pnm/cxl_zswap.h
+ create mode 100644 include/linux/pnm/cxl_zswap_driver.h
+ create mode 100644 include/linux/pnm/cxl_zswap_sim.h
+
+diff --git a/include/linux/pnm/cxl_zswap.h b/include/linux/pnm/cxl_zswap.h
+new file mode 100644
+index 000000000..9f1ebfb2c
+--- /dev/null
++++ b/include/linux/pnm/cxl_zswap.h
+@@ -0,0 +1,326 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __CXL_ZSWAP_H__
++#define __CXL_ZSWAP_H__
++
++#include <asm/page.h> /* PAGE_SIZE */
++#include <linux/cdev.h> /* cdev definition */
++#include <linux/errno.h>
++#include <linux/io.h>
++#include <linux/list.h>
++#include <linux/math.h> /* DIV_ROUND_UP() */
++#include <linux/mm.h>
++#include <linux/types.h> /* needed for size_t, gfp_t type */
++
++// #define IOAT_DMA
++
++#define DEVICE_MAX_SIZE (20)
++
++#define EVAL_PHASE_ONE 1
++
++/*********************************
++ * CXL config
++ *********************************/
++/* memory node of CXL Memory */
++// #define CXL_MEM_NODE 1
++
++/* number of Channel at CXL Memory */
++// #define NUM_OF_CH 1
++
++/* Size of allocating chunk memory at once */
++// #define CXL_PNM_CHUNKSIZE (0x8000000)  // 128M
++
++/*********************************
++ * CXL-PNM HW config
++ *********************************/
++#define add(num1, num2) (num1 + num2)
++
++/* Total memory size for CXL_PNM */
++#define CXL_PNM_MEMORY_SIZE (0x80000000) // 2*1024*1024*1024 = 2GB
++
++/* Start address of CXL_PNM */
++// #define CXL_PNM_BASE_ADDR (0x00400000000)   //for 44 server
++// #define CXL_PNM_BASE_ADDR (0x100010000)  // for 93 server
++
++// #define CXL_PNM_BASE_ADDR (0x100010000)  // for qemu vm
++#define CXL_PNM_BASE_ADDR (0x4080000000) // for icelake2
++// #define CXL_PNM_BASE_ADDR (0x140000000)  // for qemu
++#define UNCACHE_MEM_OFFSET (0x0)
++#define UNCACHE_MEM_SIZE (0x6000)
++#define CACHE_MEM_OFFSET (0x6000)
++#define CACHE_MEM_SIZE (0x86000)
++
++/* Offset at config reg */
++#define REG_PNM_EN (0x0) // 4KB-0x0~0xfff, page0
++// #define REG_PNM_EXEC (0x1000)    // 4KB-0x1000~0x1fff, page1
++// #define REG_PNM_RESET (0x2000)   // 4KB-0x2000~0x2fff, page2
++// #define REG_PNM_STATUS (0x3000)  // 4KB-0x3000~0x3fff, page3
++#define REG_PNM_EXEC (0x8) // 4KB-0x1000~0x1fff, page1
++#define REG_PNM_RESET (0x10) // 4KB-0x2000~0x2fff, page2
++#define REG_PNM_STATUS (0x18) // 4KB-0x3000~0x3fff, page3
++
++#define REG_PNM_MEM_BASE_ADDR (0x28)
++#define REG_PNM_TREE_ROOT_ADDR 0x0
++#define REG_PNM_CUR_ZPOOL_ADDR 0x0
++#define REG_PNM_CUR_ZPOOL_SIZE 0x0
++#define REG_PNM_NXT_ZPOOL_ADDR 0x0
++#define REG_PNM_NXT_ZPOOL_SIZE 0x0
++#define REG_PNM_PC 0x0
++
++/* Offset for address */
++// #define CXL_PNM_OFFSET_INST_BUF (0x6000)   // page4 ~ 67
++// #define CXL_PNM_OFFSET_RSLT_BUF (0x46000)  // page 68 ~ 131
++#define CXL_PNM_OFFSET_INST_BUF (0x100) // page4 ~ 67
++#define CXL_PNM_OFFSET_RSLT_BUF (0x200) // page 68 ~ 131
++
++/* Reg size (Bytes) */
++#define CONF_REG_SIZE 8
++
++/* number of Instruction & Psum buffers */
++#define NUM_OF_INST_BUF 1
++#define NUM_OF_RSLT_BUF 1
++
++/* Instruction & Psum Buffer Size (Bytes) */
++#define INST_BUF_SIZE (256 * 1024)
++#define RSLT_BUF_SIZE (256 * 1024)
++
++/* Data size (Bytes) */
++#define DATA_SIZE 4
++
++/* Max pool size */
++#define MAX_POOL_SIZE 0x100000000 // 1GB is just example number (Need to FIX!)
++
++struct cxl_pnm_hw_info {
++	phys_addr_t base_addr;
++	unsigned long size;
++};
++
++// /* The enumeration of CXL-PNM blocks addresses */
++// typedef enum _cxl_pnm_mem_blocks_e {
++//     CXL_PNM_BLOCK_BASE = 0,
++//     CXL_PNM_BLOCK_INST = 1,
++//     CXL_PNM_BLOCK_CFGR = 2,
++//     CXL_PNM_BLOCK_RSLT = 3,
++//     CXL_PNM_BLOCK_MAX = 4
++// } cxl_pnm_mem_blocks_e;
++
++/*********************************
++ * CXL-PNM common
++ *********************************/
++
++// /* Helper Macros. */
++// #define IN
++// #define OUT
++
++// /* zero value for pointer */
++// #ifndef CXL_PNM_NULL
++// #define CXL_PNM_NULL 0
++// #endif
++
++// #define INVALID_VAL -1
++
++// A Boolean value.
++// This allows 0 to be FALSE, as it is in C, and any non-zero to be TRUE.
++enum cxl_pnm_bool_e {
++	cxl_pnm_false_e = 0,
++	cxl_pnm_true_e,
++};
++
++/* The enumeration of all status codes */
++enum cxl_pnm_status_e {
++	CXL_PNM_ERROR_ALL_PNM_BUSY = -9, /* Indicates all pnm is busy */
++	CXL_PNM_ERROR_ALLOCATE_MEMORY =
++		-8, /* Indicates the failure memory allocation */
++	CXL_PNM_ERROR_OUT_OF_MEMORY =
++		-7, /* Indicates driver is running out of memory of system */
++	CXL_PNM_ERROR_ACCESS_MEMORY = -6, /* Indicates wrong access of memory */
++	CXL_PNM_ERROR_INVALID_ARGUMENTS =
++		-5, /* Indicates some arguments are not valid */
++	CXL_PNM_ERROR_PROCESS =
++		-4, /* Indicates there are some process related error */
++	CXL_PNM_ERROR_INIT =
++		-3, /* Indicates there are some initialization related error */
++	CXL_PNM_ERROR_NOT_SUPPORTED =
++		-2, /* Indicates it's supported by driver implementation */
++	CXL_PNM_FAILURE =
++		-1, /* Indicates the 'failure' return of job submission */
++	CXL_PNM_SUCCESS = 0, /* Indicates the execution is successfully */
++	CXL_PNM_APPROVAL =
++		1, /* Indicates the 'Approval' return of job submission */
++};
++
++/* The enumeration of operation codes */
++enum cxl_pnm_op_e {
++	CXL_PNM_OP_COMP_STORE = 0, /* Compress & Store operation */
++	CXL_PNM_OP_DECOMP_LOAD = 1, /* De-compression & Load operation */
++};
++
++enum CONF_REG_VAL {
++	OFF,
++	ON,
++};
++
++enum STATUS_REG_VAL {
++	IDLE = 0x1,
++	RUNNING = 0x2,
++	FAILED = 0x4,
++	DONE = 0x8,
++};
++
++struct pnm_run_zswap_data {
++	enum cxl_pnm_op_e op;
++	unsigned int type;
++	pgoff_t offset;
++	struct page *page;
++};
++
++enum RUN_ZSWAP_RES {
++	SUCCESS,
++	FAILURE,
++};
++
++/* struct for cxl pnm zswap */
++struct cxl_pnm;
++
++struct addrInfo {
++	uint64_t base_addr;
++	uint64_t inst_addr;
++	uint64_t psum_addr;
++	uint64_t reg_pnm_en;
++	uint64_t reg_pnm_exec;
++	uint64_t reg_pnm_reset;
++	uint64_t reg_pnm_status;
++	uint64_t reg_pnm_cache_full;
++	// [TODO:] Need to add more?
++};
++
++struct deviceContext {
++	int node;
++	uint32_t num_channel;
++	uint32_t inst_size_in_byte;
++	uint32_t inst_buf_size_in_byte;
++	uint32_t rslt_buf_size_in_byte;
++	uint32_t num_inst_buffers;
++	uint32_t num_rslt_buffers;
++	struct addrInfo addr_info;
++};
++
++struct zswap_config {
++	uint32_t zswap_max_pool_percent;
++	uint32_t zswap_accept_thr_percent; /* of max pool size */
++	uint64_t cur_zswap_pool_size;
++};
++
++/* Kernel Context */
++struct cxl_pnm_kcontext {
++	enum cxl_pnm_bool_e initialized;
++	enum cxl_pnm_op_e operation;
++	uint64_t *cxl_chunk_zpool;
++	uint32_t cxl_chunk_size;
++	struct zswap_config zswap_conf;
++	struct deviceContext device;
++};
++
++/* Instruction format: 32 bytes */
++struct instruction {
++	uint8_t opcode; /* Opcode: 1 byte */
++	uint8_t op_flags; /* Opcode Flags: 1 byte */
++	uint8_t rsvd[2]; /* Reserved: 2 bytes */
++	uint32_t tid; /* ThreadID: 4 bytes */
++	uint8_t *src_addr; /* Src.address: 8 bytes */
++	uint8_t *dst_addr; /* Dst.address: 8 bytes */
++	uint32_t src_size; /* Src.size: 4 bytes */
++	uint32_t dst_size; /* Max.dst.size: 4 bytes */
++
++	pgoff_t offset; /* offset of page swapped out */
++};
++
++/* Commit format: 32 bytes */
++struct commit {
++	uint8_t opcode; /* Opcode: 1 byte */
++	uint32_t tid; /* ThreadID: 4 bytes */
++	uint32_t dst_size; /* Max.dst.size: 4 bytes */
++	uint32_t status; /* To check if op is succeeded */
++
++	pgoff_t offset; /* offset of page swapped out */
++};
++
++/* Exposed APIs */
++int pnm_run(const char *type, enum cxl_pnm_op_e opcode, const unsigned char *in,
++	    size_t in_len, unsigned char *out, size_t *out_len,
++	    struct instruction *instbuf, pgoff_t offset);
++
++/**
++ * struct pnm_driver - driver implementation for cxl_zswap
++ * @type: name of the driver.
++ * @list: entry in the list of zxcl drivers.
++ * @init:
++ * @alloc:
++ * @run:
++ * @reset:
++ * @full:
++ *
++ * This is created by a cxl pnm zswap implementation and
++ * registered with cxl_zswap
++ */
++struct pnm_driver {
++	char *type;
++	struct module *owner;
++	atomic_t refcount;
++	struct list_head list;
++
++	void (*set_buf_inst)(unsigned long args, unsigned int size);
++	void (*get_buf_inst)(unsigned long args, unsigned int size);
++	void (*set_reg_enable)(unsigned long args, unsigned int size);
++	void (*get_reg_enable)(unsigned long args, unsigned int size);
++	void (*set_reg_exec)(unsigned long args, unsigned int size);
++	void (*get_reg_exec)(unsigned long args, unsigned int size);
++	void (*set_reg_reset)(unsigned long args, unsigned int size);
++	void (*get_reg_reset)(unsigned long args, unsigned int size);
++	void (*set_reg_status)(unsigned long args, unsigned int size);
++	void (*get_reg_status)(unsigned long args, unsigned int size);
++	void (*set_buf_res)(unsigned long args, unsigned int size);
++	void (*get_buf_res)(unsigned long args, unsigned int size);
++	void (*set_reg_tmp_addr)(unsigned long args, unsigned int size);
++	void (*get_reg_tmp_addr)(unsigned long args, unsigned int size);
++	int (*pnm_driver_run)(struct instruction *inst, size_t *out_len);
++};
++
++void pnm_register_driver(struct pnm_driver *driver);
++int pnm_unregister_driver(struct pnm_driver *driver);
++
++/* Other definitions for debugging */
++#ifdef NDEBUG
++#define DEBUG_PRINT 0 /* Print out debugging information */
++#else
++#define DEBUG_PRINT 1 /* Print out debugging information */
++#endif
++
++/* Debug Print Macros */
++#undef PDEBUG /* undef it, just in case */
++#ifdef SAIT_DEBUG
++#ifdef __KERNEL__
++/* This one if debugging is on, and kernel space */
++#define PDEBUG(fmt, args...) pr_debug("[CXL_PNM] " fmt, ##args)
++#else
++#define PDEBUG(fmt, args...) /* not debugging: nothing */
++#endif /* SAIT_DEBUG */
++
++#undef PDEBUGG
++#define PDEBUGG(fmt, args...) /* nothing: it's a placeholder */
++
++#endif
++
++/* for cxl sim perf API */
++int cxl_pnm_offload(struct instruction *fetched_inst, size_t *out_len);
++
++#ifdef IOAT_DMA
++int dma_request_chann(void);
++
++int dma_release_chann(void);
++
++int dma_copy_page(struct page *src_page, struct page *dst_page);
++#endif
++
++#endif /* __CXL_ZSWAP_H__ */
+diff --git a/include/linux/pnm/cxl_zswap_driver.h b/include/linux/pnm/cxl_zswap_driver.h
+new file mode 100644
+index 000000000..ae2231916
+--- /dev/null
++++ b/include/linux/pnm/cxl_zswap_driver.h
+@@ -0,0 +1,104 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __CXL_ZSWAP_DRIVER_H__
++#define __CXL_ZSWAP_DRIVER_H__
++
++#include <asm/ioctl.h>
++#include <linux/miscdevice.h>
++#include <linux/pnm/cxl_zswap.h>
++#include <linux/types.h>
++
++struct pnm_device {
++	struct miscdevice mdev; // define misc device
++	struct cxl_pnm_hw_info hw_info;
++	void __iomem *base_addr;
++	void __iomem *uncache_mem_base_addr;
++	void __iomem *cache_mem_base_addr;
++	struct dentry *debug_fs;
++	// spinlock_t lock;
++	// struct idr idr;
++	// size_t retain_size;
++};
++
++/* Documentation/ioctl/ioctl-number.txt */
++#define PNM_IOC_MAGIC (0xF1)
++
++#define PNM_IOC_MIN_NR (0xF)
++
++// lib ioctl API: submit instructions to CXL_PNM
++#define PNM_IOC_RUN_ZSWAP _IOWR(PNM_IOC_MAGIC, 0x10, struct pnm_run_zswap_data)
++
++// lib ioctl API: set enable register
++#define PNM_IOC_SET_ENABLE_REG _IOW(PNM_IOC_MAGIC, 0x11, enum CONF_REG_VAL)
++
++// // lib ioctl API: get enable register
++#define PNM_IOC_GET_ENABLE_REG _IOR(PNM_IOC_MAGIC, 0x12, enum CONF_REG_VAL)
++
++// lib ioctl API: set exec register
++#define PNM_IOC_SET_EXEC_REG _IOW(PNM_IOC_MAGIC, 0x13, enum CONF_REG_VAL)
++
++// // lib ioctl API: get exec register
++// #define PNM_IOC_GET_EXEC_REG _IOR(PNM_IOC_MAGIC, 0x14, enum CONF_REG_VAL)
++
++// lib ioctl API: set reset register
++#define PNM_IOC_SET_RESET_REG _IOW(PNM_IOC_MAGIC, 0x15, enum CONF_REG_VAL)
++
++// // lib ioctl API: get reset register
++// #define PNM_IOC_GET_RESET_REG _IOR(PNM_IOC_MAGIC, 0x16, enum CONF_REG_VAL)
++
++// lib ioctl API: set status register
++#define PNM_IOC_SET_STATUS_REG _IOW(PNM_IOC_MAGIC, 0x17, enum STATUS_REG_VAL)
++
++// lib ioctl API: get status register
++#define PNM_IOC_GET_STATUS_REG _IOR(PNM_IOC_MAGIC, 0x18, enum STATUS_REG_VAL)
++
++// lib ioctl API: get psum buffer
++#define PNM_IOC_GET_RES_BUFF _IOR(PNM_IOC_MAGIC, 0x20, enum RUN_ZSWAP_RES)
++
++// lib ioctl API: set addr reg
++#define PNM_IOC_SET_TMP_ADDR_REG _IOW(PNM_IOC_MAGIC, 0x23, unsigned long)
++
++// lib ioctl API: get addr reg
++#define PNM_IOC_GET_TMP_ADDR_REG _IOR(PNM_IOC_MAGIC, 0x24, unsigned long)
++
++// lib ioctl API: zcxl_frontswap_store
++#define PNM_IOC_ZCXL_FRONTSWAP_STORE _IOW(PNM_IOC_MAGIC, 0x25, unsigned long)
++
++// lib ioctl API: zcxl_frontswap_load
++#define PNM_IOC_ZCXL_FRONTSWAP_LOAD _IOW(PNM_IOC_MAGIC, 0x26, unsigned long)
++
++#define PNM_IOC_MAX_NR 0x27
++
++// set/get instruction buffer
++void set_buf_inst(unsigned long args, unsigned int size);
++void get_buf_inst(unsigned long args, unsigned int size);
++
++// set/get enable register
++void set_reg_enable(unsigned long args, unsigned int size);
++void get_reg_enable(unsigned long args, unsigned int size);
++
++// set/get exec register
++void set_reg_exec(unsigned long args, unsigned int size);
++void get_reg_exec(unsigned long args, unsigned int size);
++
++// set/get reset register
++void set_reg_reset(unsigned long args, unsigned int size);
++void get_reg_reset(unsigned long args, unsigned int size);
++
++// set/get status register
++void set_reg_status(unsigned long args, unsigned int size);
++void get_reg_status(unsigned long args, unsigned int size);
++
++// set/get result buffer
++void set_buf_res(unsigned long args, unsigned int size);
++void get_buf_res(unsigned long args, unsigned int size);
++
++// set/get addr buff
++void set_reg_tmp_addr(unsigned long args, unsigned int size);
++void get_reg_tmp_addr(unsigned long args, unsigned int size);
++
++// execute operation using cxl_pnm performance simulator
++int pnm_driver_run(struct instruction *instbuf, size_t *out_len);
++
++#endif /*__CXL_ZSWAP_DRIVER_H__*/
+diff --git a/include/linux/pnm/cxl_zswap_sim.h b/include/linux/pnm/cxl_zswap_sim.h
+new file mode 100644
+index 000000000..a4ebc1dda
+--- /dev/null
++++ b/include/linux/pnm/cxl_zswap_sim.h
+@@ -0,0 +1,113 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __CXL_ZSWAP_SIM_H__
++#define __CXL_ZSWAP_SIM_H__
++
++#include <linux/pnm/cxl_zswap.h>
++#include <linux/pnm/cxl_zswap_driver.h>
++#include <linux/spinlock.h>
++
++#define MAX_UNIT 8
++
++/* TODO: These parameters are set for qemu.
++ *   so, for real hardware, we need to update these parameteres
++ */
++#define HIDDEN_POOL_BASE_ADDR (0x200000000) // 8G
++#define HIDDEN_POOL_SIZE (0x200000000) // 8G same as swap size
++
++// #define HIDDEN_POOL_SIZE         (1UL << 33)     /* same as swap size */
++// #define HIDDEN_POOL_BASE_ADDR    (0x4100000000)  // 260G
++// #define HIDDEN_POOL_SIZE         (0xc80000000)   // 50G same as swap size
++
++#define C_QUEUE_BASE_ADDR (0x400000000)
++#define C_QUEUE_SIZE (0x1000)
++#define D_QUEUE_BASE_ADDR (0x400001000)
++#define D_QUEUE_SIZE (0x1000)
++#define F_QUEUE_BASE_ADDR (0x400002000)
++#define F_QUEUE_SIZE (0x1000)
++
++#define PNM_INFO_BASE_ADDR (0X400003000)
++#define PNM_INFO_SIZE (0x1000)
++
++/* Registers in PNM */
++struct pnm_reg {
++	bool enable; /* enable a PNM (RW): 1 bit */
++	bool execute; /* run a PNM (RW): 1 bit */
++	bool reset; /* reset a PNM (RW): 1 bit */
++	uint8_t status; /* status of a PNM (RO): 2 bits */
++	uint8_t c_q_occupancy; /* occupancy of queue in comp units: 4 bits */
++	uint8_t d_q_occupancy; /* occupancy of queue in decomp units: 4 bits */
++	uint8_t f_q_occupancy; /* occupancy of completion queue: 5 bits */
++	int compressed_size; /* read only */
++};
++
++/* Descriptor for (de)compress unit in PNM */
++struct unit_info {
++	uint32_t core_id; /* ID of core allocated */
++	uint32_t unit_id; /* ID of unit */
++
++	/* statistics */
++	uint64_t num_used; /* the number of instructions processed */
++	uint64_t num_succ; /* the number of instructions succeeded */
++	uint64_t num_failed; /* the number of instructions failed */
++
++	int state; /* to check the state of unit: STATUS_REG_VAL */
++	bool done;
++	bool is_idle; /* use this variable for fast scheduling */
++
++	struct task_struct *task_unit; /* descriptor of kthreads for units */
++	struct instruction inst;
++	struct commit commit;
++
++	/* variables for breakdown latency of (de)compression in PNM */
++	uint64_t started;
++	uint64_t finished;
++
++	unsigned long consumed_cycles; /* cycles consumed in PNM */
++
++	/* cycles compensated with the clock freq of HOST CPU. */
++	unsigned long delay_cycles;
++
++	uint32_t dst_size;
++};
++
++/* Information for queues in PNM */
++struct queue_info {
++	void __iomem *addr; /* address of instruction queue (circular queue) */
++	unsigned long head; /* head index of queue */
++	unsigned long tail; /* tail index of queue */
++	uint32_t size;
++};
++
++/* Descriptor for PNM Simulator*/
++struct pnm_info {
++	bool is_active;
++
++	struct task_struct
++		*scheduler[2]; /* descriptor of kthread for schedulers */
++
++	/* info of (de)compression unit */
++	uint32_t num_compress;
++	atomic_t num_idle_comp_unit;
++	spinlock_t compress_lock;
++	struct unit_info compress[MAX_UNIT];
++
++	uint32_t num_decompress;
++	atomic_t num_idle_decomp_unit;
++	spinlock_t decompress_lock;
++	struct unit_info decompress[MAX_UNIT];
++
++	/* info of registers in PNM */
++	struct pnm_reg registers;
++
++	/* for instruction queue */
++	struct queue_info c_q; /* queue for compress unit */
++	struct queue_info d_q; /* queue for decompress unit */
++	struct queue_info f_q; /* completion queue */
++
++	/* hidden memory pool for storing the data of page swapped out */
++	void __iomem *hidden_pool;
++};
++
++#endif /* __CXL_ZSWAP_SIM_H__ */
+-- 
+2.34.1
+

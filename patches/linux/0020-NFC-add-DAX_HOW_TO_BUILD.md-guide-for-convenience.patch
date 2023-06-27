@@ -1,0 +1,33 @@
+From dcfacbe9d7a1ea95b81f4aa7655f60b112ed58bd Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 20 Apr 2022 12:57:37 +0900
+Subject: [PATCH 020/161] NFC: add DAX_HOW_TO_BUILD.md guide for convenience
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ DAX_HOW_TO_BUILD.md | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+ create mode 100644 DAX_HOW_TO_BUILD.md
+
+diff --git a/DAX_HOW_TO_BUILD.md b/DAX_HOW_TO_BUILD.md
+new file mode 100644
+index 000000000..c09850987
+--- /dev/null
++++ b/DAX_HOW_TO_BUILD.md
+@@ -0,0 +1,13 @@
++# Deb packages
++
++```bash
++$ cp -v config-axdimm .config
++$ rm -fr debian/ vmlinux-gdb.py # cleanup from previous build
++$ make -j `getconf _NPROCESSORS_ONLN` deb-pkg # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
++```
++
++# DAX driver only
++
++```bash
++$ make M=drivers/dax/ -j32
++```
+-- 
+2.34.1
+

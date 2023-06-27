@@ -1,0 +1,51 @@
+From 45c0911345aec4f57e11f1f0de53fc9beefe3754 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Sun, 17 Apr 2022 18:38:44 +0300
+Subject: [PATCH 023/161] [drivers/dax/axdimm] add device reset ioctl support
+
+Resolves: AXDIMM-136
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/dax/axdimm.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index a4529560d..87af95630 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -15,6 +15,7 @@
+ #include <linux/io.h>
+ #include "axdimm-private.h"
+ 
++#define AXDIMM_SEM_VALUE	1
+ typedef struct axdmem_info axdmem_info;
+ 
+ /* Helper structure containing auxiliary info for AXDIMM device */
+@@ -326,6 +327,14 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 		return -EFAULT;
+ 
+ 	switch (cmd) {
++	case DEVICE_IOCRESET:
++		while (unlikely(axdimm_device.sem_axdimm.count > AXDIMM_SEM_VALUE &&
++				!down_trylock(&axdimm_device.sem_axdimm))) {
++		}
++		while (unlikely(axdimm_device.sem_axdimm.count < AXDIMM_SEM_VALUE)) {
++			up(&axdimm_device.sem_axdimm);
++		}
++		break;
+ 	case SET_SC_LOCK:
+ 		if (down_interruptible(&axdimm_device.sem_axdimm)) {
+ 			printk(KERN_WARNING
+@@ -349,7 +358,7 @@ void init_axdimm_device(struct dev_dax *dev_dax)
+ 	dev_dax->is_axdimm_device = 1;
+ 
+ 	/* semaphore initialization */
+-	sema_init(&axdimm_device.sem_axdimm, 1);
++	sema_init(&axdimm_device.sem_axdimm, AXDIMM_SEM_VALUE);
+ 
+ 	/* Initialize device meminfo */
+ 	axdimm_setmeminfo(&axdimm_device.mem_info);
+-- 
+2.34.1
+

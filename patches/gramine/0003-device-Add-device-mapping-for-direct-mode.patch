@@ -1,0 +1,54 @@
+From 227566de28b387bc003a339aee5ce44c2c486c63 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 8 Sep 2022 11:01:57 +0300
+Subject: [PATCH 03/27] [device] Add device mapping for direct mode
+
+Add mmap callback for device memory mapping. As the first approach we do not split address by trusted and shared. This division should be implemented in PR:
+https://github.com/gramineproject/gramine/pull/827
+
+This version is only for the demonstration purpose to show the ability to work with AXDIMM device.
+
+Related to: AXDIMM-381
+---
+ application/axdimm_secndp_test/secndp.manifest.template | 2 +-
+ pal/src/host/skeleton/pal_devices.c                     | 6 ++++++
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/axdimm_secndp_test/secndp.manifest.template
+index 10d992e1..dcfefc9b 100644
+--- a/application/axdimm_secndp_test/secndp.manifest.template
++++ b/application/axdimm_secndp_test/secndp.manifest.template
+@@ -11,7 +11,7 @@ loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:{{ arch_libdir }}:/usr/{{ arch_libdi
+ loader.insecure__use_cmdline_argv = true
+ loader.insecure__use_host_env = true
+ 
+-loader.pal_internal_mem_size = "512M"
++loader.pal_internal_mem_size = "256M"
+ 
+ fs.mounts = [
+   { uri = "file:{{ gramine.runtimedir() }}", path = "/lib" },
+diff --git a/pal/src/host/skeleton/pal_devices.c b/pal/src/host/skeleton/pal_devices.c
+index c5249b8c..17188552 100644
+--- a/pal/src/host/skeleton/pal_devices.c
++++ b/pal/src/host/skeleton/pal_devices.c
+@@ -45,11 +45,17 @@ static int64_t dev_setlength(PAL_HANDLE handle, uint64_t length) {
+     return -PAL_ERROR_NOTIMPLEMENTED;
+ }
+ 
++static int dev_map(PAL_HANDLE handle, void** address, pal_prot_flags_t prot, uint64_t offset,
++                   uint64_t size) {
++    return -PAL_ERROR_NOTIMPLEMENTED;
++}
++
+ struct handle_ops g_dev_ops = {
+     .open           = &dev_open,
+     .read           = &dev_read,
+     .write          = &dev_write,
+     .close          = &dev_close,
++    .map            = &dev_map,
+     .setlength      = &dev_setlength,
+     .flush          = &dev_flush,
+     .attrquery      = &dev_attrquery,
+-- 
+2.34.1
+

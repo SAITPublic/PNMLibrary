@@ -1,0 +1,52 @@
+From 869a70d03ccdbf4ea9571bafdf6d6918de93ecca Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Mon, 4 Jul 2022 15:46:15 +0300
+Subject: [PATCH 055/128] [secure] Sync with AXDIMM control lib interface
+
+Sync with AXDIMM control library changes
+related to introduction of Tagged SLS
+
+Resolves: AXDIMM-33
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index c0f6380a..3fb419e7 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -156,8 +156,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+         axdimm::make_view(std::cref(lengths_blocked_).get()),
+         axdimm::make_view(std::cref(indices_blocked_).get()),
+         axdimm::view_cast<uint8_t>(psum_view),
+-        checks,
+-        with_tag_);
++        checks);
+ 
+     if (!SecureTypeTraits<T>::apply_scale && !with_tag_)
+       return status; // we already have result in output buffer
+@@ -204,7 +203,9 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       axdimm::common_view<const uint64_t> rows,
+       axdimm::common_view<const secure_core_value_type> data) {
+     axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
+-        .rows = rows, .sparse_feature_size = sparse_feature_size});
++        .rows = rows,
++        .sparse_feature_size = sparse_feature_size,
++        .with_tag = with_tag_});
+     runner_.init(&args);
+     runner_.load_tables(data.begin(), rows, sparse_feature_size, with_tag_);
+   }
+@@ -222,7 +223,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+                                // "block_size_" of them).
+ 
+   static constexpr auto tag_size =
+-      sizeof(axdimm::secure::uint128_t) / sizeof(secure_core_value_type);
++      sizeof(axdimm::uint128_t) / sizeof(secure_core_value_type);
+   int64_t sparse_feature_size_{};
+   std::vector<uint64_t> rows_;
+   bool with_tag_{false};
+-- 
+2.34.1
+

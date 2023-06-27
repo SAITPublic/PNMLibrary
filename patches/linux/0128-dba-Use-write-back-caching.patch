@@ -1,0 +1,74 @@
+From 18fe0f6368e06d1b18bdca922333985dd67e1f63 Mon Sep 17 00:00:00 2001
+From: Valentin Iliushin <v.iliushin@partner.samsung.com>
+Date: Fri, 16 Jun 2023 14:49:13 +0000
+Subject: [PATCH 128/161] [dba] Use write-back caching
+
+Remove special case for memory accelerator and use default
+write-back caching for DBA
+
+Resolves: MCS23-701
+
+Signed-off-by: Valentin Iliushin <v.iliushin@partner.samsung.com>
+---
+ drivers/dax/device.c     | 5 -----
+ include/linux/memremap.h | 6 ------
+ mm/memremap.c            | 3 ---
+ 3 files changed, 14 deletions(-)
+
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 08aa6ce46..beb7507eb 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -482,11 +482,6 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 
+ 	pgmap->type = MEMORY_DEVICE_GENERIC;
+ 
+-#if defined(CONFIG_DEV_SLS) || defined(CONFIG_DBA)
+-	if (is_sls_device || is_dba_range(range->start, range->end))
+-		pgmap->type = MEMORY_DEVICE_ACCELERATOR;
+-#endif
+-
+ 	if (dev_dax->align > PAGE_SIZE)
+ 		pgmap->vmemmap_shift =
+ 			order_base_2(dev_dax->align >> PAGE_SHIFT);
+diff --git a/include/linux/memremap.h b/include/linux/memremap.h
+index ffe3b0488..7fcaf3180 100644
+--- a/include/linux/memremap.h
++++ b/include/linux/memremap.h
+@@ -64,11 +64,6 @@ struct vmem_altmap {
+  * MEMORY_DEVICE_PCI_P2PDMA:
+  * Device memory residing in a PCI BAR intended for use with Peer-to-Peer
+  * transactions.
+- *
+- * MEMORY_DEVICE_ACCELERATOR:
+- * Device memory that is write combine cache used for cpu directly addresseble
+- * accelerators memory. Using of unchached mode is safe but also slow for
+- * intensive data movement.
+  */
+ enum memory_type {
+ 	/* 0 is reserved to catch uninitialized type fields */
+@@ -77,7 +72,6 @@ enum memory_type {
+ 	MEMORY_DEVICE_FS_DAX,
+ 	MEMORY_DEVICE_GENERIC,
+ 	MEMORY_DEVICE_PCI_P2PDMA,
+-	MEMORY_DEVICE_ACCELERATOR,
+ };
+ 
+ struct dev_pagemap_ops {
+diff --git a/mm/memremap.c b/mm/memremap.c
+index 271ea8cb2..08cbf54fe 100644
+--- a/mm/memremap.c
++++ b/mm/memremap.c
+@@ -342,9 +342,6 @@ void *memremap_pages(struct dev_pagemap *pgmap, int nid)
+ 	case MEMORY_DEVICE_PCI_P2PDMA:
+ 		params.pgprot = pgprot_noncached(params.pgprot);
+ 		break;
+-	case MEMORY_DEVICE_ACCELERATOR:
+-		params.pgprot = pgprot_writecombine(params.pgprot);
+-		break;
+ 	default:
+ 		WARN(1, "Invalid pgmap type %d\n", pgmap->type);
+ 		break;
+-- 
+2.34.1
+

@@ -1,0 +1,86 @@
+From 156f298e002db66d5b1ff4dbf2f6db4b829426ec Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Sun, 30 Jul 2023 21:03:15 -0400
+Subject: [PATCH 153/161] [pnm][zswap] Fix simulator state transition sequence
+
+The state transition sequence was changed in next way:
+1.In HOST thread: `done` flag of the compression/decompression unit is
+  set to false.
+2.In compression/decompression thread, when `done` flag is set to false,
+   - set state of the compression/decompression unit to IDLE
+   - set `is_idle` flag of the compression/decompression unit to true.
+
+This steps ensure that the simulator thread can only be used for the
+next compression/decompression after the previous
+compression/decompression process is completed.
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 22 ++++++++++++----------
+ 1 file changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 5a581f1b7..81bd743c0 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -154,9 +154,7 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 				pr_info("[HOST-C][%d] READ RESULT [%d] [%ld]\n",
+ 					tid, pnm_id, *out_len);
+ 
+-			WRITE_ONCE(pnm_ctrl->compress[pnm_id].state, IDLE);
+-			WRITE_ONCE(pnm_ctrl->compress[pnm_id].is_idle, true);
+-			atomic_inc(&pnm_ctrl->num_idle_comp_unit);
++			WRITE_ONCE(pnm_ctrl->compress[pnm_id].done, false);
+ 			return CXL_PNM_SUCCESS;
+ 		}
+ 	} while (ktime_before(ktime_get(), kdeadline));
+@@ -240,9 +238,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 				pr_info("[HOST-D][%d] READ RESULT [%d] [%ld]\n",
+ 					tid, pnm_id, *out_len);
+ 
+-			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].state, IDLE);
+-			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].is_idle, true);
+-			atomic_inc(&pnm_ctrl->num_idle_decomp_unit);
++			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].done, false);
+ 			return CXL_PNM_SUCCESS;
+ 		}
+ 	} while (ktime_before(ktime_get(), kdeadline));
+@@ -394,12 +390,15 @@ int pnm_compress_unit(void *p)
+ 			/* wait until the thread takes results */
+ 			while (!kthread_should_stop() &&
+ 			       READ_ONCE(sim_is_active)) {
+-				if (READ_ONCE(unit->state) & IDLE) {
++				if (!READ_ONCE(unit->done)) {
+ 					/* update statistics of pnm unit */
+ 					unit->num_used++;
+ 					unit->num_succ++;
+ 
+-					WRITE_ONCE(unit->done, false);
++					WRITE_ONCE(unit->state, IDLE);
++					WRITE_ONCE(unit->is_idle, true);
++					atomic_inc(
++						&pnm_ctrl->num_idle_comp_unit);
+ 
+ 					if (unlikely(log_enabled))
+ 						pr_info("[PNM-C][%d] STATE [IDLE] - HOST GET RESULT\n",
+@@ -522,12 +521,15 @@ int pnm_decompress_unit(void *p)
+ 			/* wait until the thread takes results */
+ 			while (!kthread_should_stop() ||
+ 			       READ_ONCE(sim_is_active)) {
+-				if (READ_ONCE(unit->state) & IDLE) {
++				if (!READ_ONCE(unit->done)) {
+ 					/* update statistics of pnm unit */
+ 					unit->num_used++;
+ 					unit->num_succ++;
+ 
+-					WRITE_ONCE(unit->done, false);
++					WRITE_ONCE(unit->state, IDLE);
++					WRITE_ONCE(unit->is_idle, true);
++					atomic_inc(
++						&pnm_ctrl->num_idle_decomp_unit);
+ 
+ 					if (unlikely(log_enabled))
+ 						pr_info("[PNM-D][%d] STATE [IDLE] - HOST GET RESULT\n",
+-- 
+2.34.1
+

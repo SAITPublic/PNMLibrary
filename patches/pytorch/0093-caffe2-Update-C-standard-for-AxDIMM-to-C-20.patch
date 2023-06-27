@@ -1,0 +1,25 @@
+From 34b629d79ccf4e5d6930368b38a54625b3d14918 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Fri, 25 Nov 2022 16:08:21 +0000
+Subject: [PATCH 093/128] [caffe2] Update C++ standard for AxDIMM to C++20
+
+---
+ caffe2/CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 309012d4..9caa1f15 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -990,7 +990,7 @@ elseif(USE_CUDA)
+   endif()
+ elseif(USE_AXDIMM)
+   add_library(torch_axdimm ${Caffe2_AXDIMM_SRCS})
+-  set_property(TARGET torch_axdimm PROPERTY CXX_STANDARD 17)
++  set_property(TARGET torch_axdimm PROPERTY CXX_STANDARD 20)
+ endif()
+ 
+ if(NOT MSVC AND USE_XNNPACK)
+-- 
+2.34.1
+

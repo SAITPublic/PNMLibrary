@@ -1,0 +1,31 @@
+From 7f06ce9653ac6abc7f1f52aaf813fe958b20389b Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Wed, 24 May 2023 16:33:47 +0300
+Subject: [PATCH 116/161] [DBA][Allocator] Calm of MSAN
+
+Resolves: MCS23-1097
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ include/uapi/linux/dba_resources.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/include/uapi/linux/dba_resources.h b/include/uapi/linux/dba_resources.h
+index cb813af3b..d6dbd167e 100644
+--- a/include/uapi/linux/dba_resources.h
++++ b/include/uapi/linux/dba_resources.h
+@@ -41,9 +41,9 @@ struct dba_allocation {
+ #define DBA_RESOURCE_IOC_MAGIC 'D'
+ 
+ #define DBA_IOCTL_ALLOCATE \
+-	_IOWR(DBA_RESOURCE_IOC_MAGIC, 1, struct dba_allocation)
++	_IOWR(DBA_RESOURCE_IOC_MAGIC, 1, struct dba_allocation *)
+ #define DBA_IOCTL_DEALLOCATE \
+-	_IOW(DBA_RESOURCE_IOC_MAGIC, 2, struct dba_allocation)
++	_IOW(DBA_RESOURCE_IOC_MAGIC, 2, struct dba_allocation *)
+ #define DBA_IOCTL_GET_THREAD _IO(DBA_RESOURCE_IOC_MAGIC, 3)
+ #define DBA_IOCTL_RELEASE_THREAD _IOW(DBA_RESOURCE_IOC_MAGIC, 4, uint8_t)
+ 
+-- 
+2.34.1
+

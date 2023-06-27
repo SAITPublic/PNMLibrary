@@ -1,0 +1,146 @@
+From 4d045580b37119102e1ffe3aa7e4b7aa6d190f50 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Wed, 1 Mar 2023 19:45:30 +0300
+Subject: [PATCH 105/128] [aten][caffe2] Change status codes -> exceptions
+
+We are moving away from status codes, and now will be using exceptions
+for handling errors. Reflect the changes here.
+
+Related to: AXDIMM-638
+---
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp  | 10 ++++--
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   |  5 ++-
+ .../operators/lengths_reducer_ops_axdimm.cc   | 32 +++++++++++--------
+ caffe2/python/pybind_state_axdimm.cc          |  2 --
+ 4 files changed, 29 insertions(+), 20 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index bdd90849..1e9efdc1 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -1,3 +1,5 @@
++#include "common/api/pnm_error.h"
++
+ #include <c10/util/Logging.h>
+ 
+ #include <ATen/native/axdimm/AxdimmTensor.h>
+@@ -70,9 +72,13 @@ AxdimmTensor::AxdimmTensor(
+ }
+ 
+ AxdimmLayoutWrapper::~AxdimmLayoutWrapper() {
+-  if (axd_status_e::SUCCESS != axdimm_deallocate_tables(device_, layout_handle_)) {
+-    LOG(ERROR) << "Failed to deallocate tables for handle: " << layout_handle_;
++  try {
++    axdimm_deallocate_tables(device_, layout_handle_);
++  } catch (pnm::error::Base& e) {
++    LOG(ERROR) << "Failed to deallocate tables for handle: " << layout_handle_
++               << ". Got error: " << e.what();
+   }
++
+   if (layout_) {
+     axdimm_destroy_tables_layout(layout_);
+   }
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index e239264c..1a9e3a65 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -41,7 +41,8 @@ at::Tensor embedding_bag_forward_simple_impl(
+       ten.get_tables_layout(),
+       ten.get_sls_type());
+ 
+-  auto status = axdimm_run_sls(
++  // might throw
++  axdimm_run_sls(
+       sls_op,
+       ten.get_device(),
+       minibatch_size,
+@@ -49,8 +50,6 @@ at::Tensor embedding_bag_forward_simple_impl(
+       static_cast<uint32_t*>(indices.data_ptr()),
+       output_view.begin());
+ 
+-  TORCH_CHECK(status == axd_status_e::SUCCESS, "Axdimm embeddings calculation failed");
+-
+   return torch::from_blob(
+       output_view.begin(),
+       {ten.get_num_tables(), minibatch_size, ten.get_sparse_feature_size()},
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 25c1b2c6..a7b253cd 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -6,6 +6,7 @@
+ #include "caffe2/utils/math.h"
+ 
+ #include "ai/api/axdimm.h"
++#include "common/api/pnm_error.h"
+ #include "core/api/axdimm_device.h"
+ 
+ #include <algorithm>
+@@ -296,16 +297,23 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     T* output_buf = output->template data<T>();
+ 
+     // 6) And finally run the operator.
+-    axd_status_e status = axdimm_run_sls(
+-        sls_op_,
+-        device_,
+-        M,
+-        (uint32_t*)lengths_blocked_,
+-        (uint32_t*)indices_blocked_,
+-        (uint8_t*)output_buf /* psum buffer */
+-    );
+ 
+-    return status == axd_status_e::SUCCESS;
++    try {
++      axdimm_run_sls(
++          sls_op_,
++          device_,
++          M,
++          (uint32_t*)lengths_blocked_,
++          (uint32_t*)indices_blocked_,
++          (uint8_t*)output_buf /* psum buffer */
++      );
++
++      return true;
++    } catch (pnm::error::Base& e) {
++      LOG(ERROR) << "axdimm_run_sls error: " << e.what();
++
++      return false;
++    }
+   }
+ 
+   enum {
+@@ -337,8 +345,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     auto fd = open(path.c_str(), O_RDONLY);
+     CAFFE_ENFORCE_NE(fd, -1, "Fail to open embedded tables file");
+ 
+-    auto tables_size = std::accumulate(rows.begin(), rows.end(), 0ULL) *
+-        sparse_feature_size;
++    auto tables_size =
++        std::accumulate(rows.begin(), rows.end(), 0ULL) * sparse_feature_size;
+ 
+     auto data =
+         mmap(nullptr, tables_size * sizeof(T), PROT_READ, MAP_PRIVATE, fd, 0);
+@@ -354,8 +362,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         sparse_feature_size * sizeof(T),
+         static_cast<axd_user_preferences>(memory_preference));
+ 
+-    CAFFE_ENFORCE_NE(0, tables_descriptor_, "AXDIMM memory allocation failure");
+-
+     LOG(INFO) << "Allocated private tables with descriptor: "
+               << tables_descriptor_;
+ 
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 4bc026dc..1b3d5780 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -86,8 +86,6 @@ void addAXDIMMGlobalMethods(py::module& m) {
+               row_size_in_bytes,
+               static_cast<axd_user_preferences>(mem_preference));
+ 
+-          CAFFE_ENFORCE_NE(0, descriptor, "AXDIMM memory allocation failure");
+-
+           load_tables(base_device, weight_file, descriptor);
+         } else {
+           descriptor = 0;
+-- 
+2.34.1
+

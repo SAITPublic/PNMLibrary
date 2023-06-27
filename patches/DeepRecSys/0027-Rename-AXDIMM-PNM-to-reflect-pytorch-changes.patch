@@ -1,0 +1,274 @@
+From 25462dcfd2a54516a28479b44966c2fde27564fb Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 9 May 2023 11:11:10 +0000
+Subject: [PATCH 27/33] Rename AXDIMM -> PNM to reflect pytorch changes
+
+* Perform massive AXDIMM -> PNM renaming to reflect respective pytorch
+  changes and generalize DLRM usage.
+* Introduce "--use_pnm" flag to run_DeepRecSys_pnm.sh.
+* Update README.md.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ DeepRecSys.py                                 | 23 +++++++-------
+ debug/test/README.md                          |  2 +-
+ .../{dlrm_axdimm.json => dlrm_pnm.json}       |  0
+ models/dlrm_s_caffe2.py                       | 30 +++++++++++--------
+ ...pRecSys_axdimm.sh => run_DeepRecSys_pnm.sh | 15 ++++++----
+ utils/utils.py                                |  8 ++---
+ 6 files changed, 45 insertions(+), 33 deletions(-)
+ rename models/configs/{dlrm_axdimm.json => dlrm_pnm.json} (100%)
+ rename run_DeepRecSys_axdimm.sh => run_DeepRecSys_pnm.sh (93%)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index bc8141f..f0d5bfa 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -154,18 +154,19 @@ def DeepRecSys():
+ 
+     print("[DeepRecSys] total inference engine ", args.inference_engines)
+ 
+-    # [AXDIMM caffe2 backend] Initialize AXDIMM for parent process
++    # [PNM caffe2 backend] Initialize PNM for parent process
+     dtype_in_bytes = 4 if args.sls_dtype in ["int32", "float32"] \
+-      else exit("(axdimm) sls_dtype: {0} is not supported.".format(args.sls_dtype))
++      else exit("(pnm) sls_dtype: {0} is not supported.".format(args.sls_dtype))
+ 
+-    if args.use_axdimm:
++    tables_descriptor = None
++    if args.use_pnm:
+       ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+ 
+       if args.share_tables:
+-        tables_descriptor = workspace.AxdimmStarter(args.table_weight_path, ln_emb,
+-                                                    args.arch_sparse_feature_size * dtype_in_bytes,
+-                                                    args.mem_preference,
+-                                                    args.share_tables)
++        tables_descriptor = workspace.PnmStarter(args.table_weight_path, ln_emb,
++                                                 args.arch_sparse_feature_size * dtype_in_bytes,
++                                                 args.mem_preference,
++                                                 args.share_tables)
+       else:
+         tables_descriptor = None
+ 
+@@ -301,12 +302,12 @@ def DeepRecSys():
+       assert not DeepRecEngines[i].is_alive()
+ 
+     status = 0
+-    # [AXDIMM caffe2 backend] Destroy AXDIMM for parent process.
+-    if args.use_axdimm and args.share_tables:
+-      status = workspace.AxdimmCloser()
++    # [PNM caffe2 backend] Destroy PNM for parent process.
++    if args.use_pnm and args.share_tables:
++      status = workspace.PnmCloser()
+ 
+     if (status != 0):
+-        print("(axdimm) axd_closer didn't operate properly.")
++        print("(pnm) PnmCloser didn't operate properly.")
+ 
+     sys.stdout.flush()
+ 
+diff --git a/debug/test/README.md b/debug/test/README.md
+index 001e95f..d9e8dcb 100644
+--- a/debug/test/README.md
++++ b/debug/test/README.md
+@@ -18,7 +18,7 @@ sudo python3 -m pip install pexpect
+ ```
+ 
+ Tests must be run from the root directory of the application, where
+-the `run_DeepRecSys_axdimm.sh` file is located. The following command
++the `run_DeepRecSys_pnm.sh` file is located. The following command
+ will run all tests:
+ 
+ ```sh
+diff --git a/models/configs/dlrm_axdimm.json b/models/configs/dlrm_pnm.json
+similarity index 100%
+rename from models/configs/dlrm_axdimm.json
+rename to models/configs/dlrm_pnm.json
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index cecb509..e94f442 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -105,10 +105,13 @@ class DLRM_Wrapper(object):
+             print("(Wrapper) Using {} Accel(s)...".format(naccels))
+         else:
+             device_opt = core.DeviceOption(caffe2_pb2.CPU)
+-            print("(Wrapper) Using CPU...")
++            if self.args.use_pnm:
++                print("(Wrapper) Using PNM...")
++            else:
++                print("(Wrapper) Using CPU...")
+ 
+         self.accel_en = accel_en
+-        self.use_axdimm_caffe2_backend = cli_args.use_axdimm
++        self.use_pnm = cli_args.use_pnm
+ 
+         num_tables = len(cli_args.arch_embedding_size.split("-"))
+ 
+@@ -219,8 +222,8 @@ class DLRM_Net(object):
+             _d = core.DeviceOption(caffe2_pb2.CUDA, 0)
+             # with core.DeviceScope(_d):
+             workspace.FeedBlob(tag, val, device_option=_d)
+-        elif self.use_axdimm_caffe2_backend:
+-            _d = core.DeviceOption(caffe2_pb2.AXDIMM, 0)
++        elif self.use_pnm:
++            _d = core.DeviceOption(caffe2_pb2.PNM, 0)
+             workspace.FeedBlob(tag, val, device_option=_d)
+         else:
+             workspace.FeedBlob(tag, val)
+@@ -291,7 +294,7 @@ class DLRM_Net(object):
+         len_s_combined = []
+         ind_s_combined = []
+         tbl_s_combined = []
+-        sls_s_combined = tag_layer + ":::" + "sls::axdimm"
++        sls_s_combined = tag_layer + ":::" + "sls::pnm"
+ 
+         for i in range(0, ln.size):
+             n = ln[i]
+@@ -327,9 +330,9 @@ class DLRM_Net(object):
+                 # Dequeue lengths vector as well
+                 model.net.DequeueBlobs(len_qs[i], len_s)
+ 
+-            # [AXDIMM Caffe2 Backend] In case of use_axdimm_caffe2_backend we combine inputs together and
++            # [PNM Caffe2 Backend] In case of use_pnm we combine inputs together and
+             # use one "vectorized" SparseLengthsSumVec operation for best performance.
+-            if self.use_axdimm_caffe2_backend:
++            if self.use_pnm:
+                 tbl_s_combined.append(tbl_s)
+                 ind_s_combined.append(ind_s)
+                 len_s_combined.append(len_s)
+@@ -347,8 +350,8 @@ class DLRM_Net(object):
+                     max_num_tasks=self.args.sls_workers)
+             emb_l.append(EE)
+ 
+-        if self.use_axdimm_caffe2_backend:
+-            with core.DeviceScope(core.DeviceOption(caffe2_pb2.AXDIMM, 0)):
++        if self.use_pnm:
++            with core.DeviceScope(core.DeviceOption(caffe2_pb2.PNM, 0)):
+                 rows = [int(v) for v in self.args.arch_embedding_size.split("-")]
+ 
+                 if self.args.use_secndp_algo:
+@@ -465,9 +468,9 @@ class DLRM_Net(object):
+         accel_en = self.args.use_accel
+ 
+         # ##########################
+-        # setup AXDIMM device
++        # setup PNM device
+         # ##########################
+-        self.use_axdimm_caffe2_backend = cli_args.use_axdimm
++        self.use_pnm = cli_args.use_pnm
+         self.tables_descriptor = tables_descriptor
+ 
+         if cli_args.arch_interaction_op == "dot":
+@@ -651,7 +654,10 @@ if __name__ == "__main__":
+         print("Using {} Accel(s)...".format(naccels))
+     else:
+         device_opt = core.DeviceOption(caffe2_pb2.CPU)
+-        print("Using CPU...")
++        if use_pnm:
++            print("Using PNM...")
++        else:
++            print("Using CPU...")
+ 
+     ### prepare training data ###
+     ln_bot = np.fromstring(args.arch_mlp_bot, dtype=int, sep="-")
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_pnm.sh
+similarity index 93%
+rename from run_DeepRecSys_axdimm.sh
+rename to run_DeepRecSys_pnm.sh
+index 1e96cd5..3f0bb78 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_pnm.sh
+@@ -18,7 +18,7 @@
+ # The number of epochs of epochs determines how many iterations to loop over
+ # Configuring these parameters is important to getting accurate caching
+ # behavior based on the use case being modeled
+-# Change to 10 to match AXDIMM test config.
++# Change to 10 to match PNM test config.
+ nepochs=40
+ # num_batches=32
+ num_batches=20
+@@ -77,6 +77,7 @@ accel_args=""
+ 
+ table_weight_path="./tables/embedded.bin"
+ 
++USE_PNM=''
+ USE_SECURE_ALGO=''
+ SLS_DTYPE='float32'
+ # shared by default
+@@ -86,6 +87,9 @@ DEBUG_STDIO=''
+ while [ "$#" -ne 0 ]
+ do
+   case "$1" in
++  "--use_pnm")
++          USE_PNM="--use_pnm"
++          ;;
+   "--secure")
+           USE_SECURE_ALGO="--use_secndp_algo"
+           ;;
+@@ -94,7 +98,7 @@ do
+           table_weight_path=$1
+ 	        ;;
+   "--tag")
+-	        TAG_VERIFICATION="--use_tags"
++          TAG_VERIFICATION="--use_tags"
+ 	        ;;
+   "--private_tables")
+           TABLES_SHARING_STRATEGY="--private_tables"
+@@ -127,8 +131,7 @@ done
+ 
+ engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
+ 
+-axdimm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION --use_axdimm --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
+-# axdimm_args=""
++pnm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION $USE_PNM --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
+ 
+ avg_arrival_rate=1
+ avg_arrival_args="--avg_arrival_rate $avg_arrival_rate"
+@@ -136,8 +139,10 @@ avg_arrival_args="--avg_arrival_rate $avg_arrival_rate"
+ # profiling_args="--enable_profiling"
+ profiling_args=""
+ 
++export OMP_NUM_THREADS="8"
++
+ # python DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/wide_and_deep.json" --tune_batch_qps --tune_accel_qps
+-cmd=(python3 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_axdimm.json" $axdimm_args $avg_arrival_args $profiling_args)
++cmd=(python3 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_pnm.json" $pnm_args $avg_arrival_args $profiling_args)
+ if [[ -n "$DEBUGGER" ]]; then
+   debug_args=()
+   if [[ -n "$DEBUG_STDIO" ]]; then
+diff --git a/utils/utils.py b/utils/utils.py
+index 5f44978..4848ac3 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -128,11 +128,11 @@ def cli():
+     parser.add_argument("--config_file", type=str, default=None)
+ 
+     # =========================================================================================
+-    # AXDIMM configuration
++    # PNM configuration
+     # =========================================================================================
+     parser.add_argument("--table_weight_path", type=str, default="./pretrained/real_0.5M_120table")
+ 
+-    mem_help = "Set the memory preference for AXDIMM"
++    mem_help = "Set the memory preference for PNM"
+ 
+     # Available memory preference (According to axd_user_preferences enum from libaxdimm.h):
+     # auto - AXDIMM_ALLOC_AUTO
+@@ -142,11 +142,11 @@ def cli():
+     parser.add_argument("--mem_preference_str", type=str, choices=mem_pref_id.keys(), default=None, help=mem_help)
+ 
+     # =========================================================================================
+-    # AXDIMM SecNDP configuration
++    # PNM SecNDP configuration
+     # =========================================================================================
+     parser.add_argument("--use_secndp_algo", action="store_true", default=False)
+     parser.add_argument("--use_tags", action="store_true", default=False)
+-    parser.add_argument("--use_axdimm", action="store_true", default=False)
++    parser.add_argument("--use_pnm", action="store_true", default=False)
+     parser.add_argument("--sls_dtype", type=str, choices=["float32", "int32"], default="float32")
+     parser.add_argument("--private_tables", dest='share_tables', action="store_false", default=True)
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,29 @@
+From 2f9b5ffaa39174e21de3ddd625f9c0473225141f Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 17 Oct 2022 18:48:03 +0300
+Subject: [PATCH 049/161] [drivers/dax/axdimm] Remove unnecessary comment.
+
+The comment about the ioctl magic in libaxdimm.h misspecified the magic
+number that is actually used in the code. This commit deletes the comment
+entirely, as the code is self-documenting.
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ include/uapi/linux/libaxdimm.h | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 2b0d51b80..cb978a137 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -159,7 +159,6 @@ struct axd_num_objects_request {
+ 	uint64_t num_objects;
+ };
+ 
+-/* Use 'k' as magic number */
+ #define AXDIMM_IOC_MAGIC 'T'
+ 
+ #define DEVICE_IOCRESET _IO(AXDIMM_IOC_MAGIC, 0)
+-- 
+2.34.1
+

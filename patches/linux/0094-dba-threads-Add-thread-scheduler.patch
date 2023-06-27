@@ -1,0 +1,330 @@
+From 91f9bacb8cb5bf21e4727f782dc81199ab747a3b Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 5 Apr 2023 18:26:54 +0300
+Subject: [PATCH 094/161] [dba][threads] Add thread scheduler
+
+This patch add blocking ioctl syscalls
+for acquiring and releasing DBA engine threads
+
+Resolves: MCS-746
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/dba_resource/Makefile           |   1 +
+ drivers/pnm/dba_resource/dba_thread_sched.c | 143 ++++++++++++++++++++
+ drivers/pnm/dba_resource/dba_thread_sched.h |  27 ++++
+ drivers/pnm/dba_resource/resource_device.c  |  41 +++++-
+ include/uapi/linux/dba_resources.h          |   6 +
+ 5 files changed, 214 insertions(+), 4 deletions(-)
+ create mode 100644 drivers/pnm/dba_resource/dba_thread_sched.c
+ create mode 100644 drivers/pnm/dba_resource/dba_thread_sched.h
+
+diff --git a/drivers/pnm/dba_resource/Makefile b/drivers/pnm/dba_resource/Makefile
+index 429289d2c..6cc31f24e 100644
+--- a/drivers/pnm/dba_resource/Makefile
++++ b/drivers/pnm/dba_resource/Makefile
+@@ -4,3 +4,4 @@ obj-$(CONFIG_DBA_RESOURCE) += dba_resource.o
+ 
+ dba_resource-y := resource_device.o
+ dba_resource-y += dba_allocator.o
++dba_resource-y += dba_thread_sched.o
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.c b/drivers/pnm/dba_resource/dba_thread_sched.c
+new file mode 100644
+index 000000000..40d962b6b
+--- /dev/null
++++ b/drivers/pnm/dba_resource/dba_thread_sched.c
+@@ -0,0 +1,143 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include "dba_thread_sched.h"
++#include "dba_log.h"
++
++#include <linux/kernel.h>
++#include <linux/fs.h>
++#include <linux/dba_resources.h>
++
++#define BUSY 1
++#define IDLE 0
++
++static struct dba_thread_sched dba_thread_sched = {
++	.threads = {},
++	.lock = __MUTEX_INITIALIZER(dba_thread_sched.lock),
++	.wq = __WAIT_QUEUE_HEAD_INITIALIZER(dba_thread_sched.wq)
++};
++
++/* When free engine found, return true, otherwise return false
++ * If engine not found, `out` parameter would be invalid
++ */
++static bool dba_find_free_thread(uint8_t *out)
++{
++	bool found_free_thread = false;
++	uint8_t thread = 0;
++
++	mutex_lock(&dba_thread_sched.lock);
++
++	for (; thread < DBA_THREAD_NUM; ++thread) {
++		if (dba_thread_sched.threads[thread].state == IDLE) {
++			dba_thread_sched.threads[thread].state = BUSY;
++			found_free_thread = true;
++			break;
++		}
++	}
++
++	mutex_unlock(&dba_thread_sched.lock);
++
++	*out = thread;
++
++	return found_free_thread;
++}
++
++static int dba_release_thread(unsigned long __user arg)
++{
++	int rc = 0;
++	uint8_t thread = arg;
++
++	if (thread >= DBA_THREAD_NUM) {
++		DBA_DBG("Invalid thread");
++		return -EINVAL;
++	}
++
++	mutex_lock(&dba_thread_sched.lock);
++
++	if (dba_thread_sched.threads[thread].state == BUSY) {
++		dba_thread_sched.threads[thread].state = IDLE;
++	} else {
++		DBA_ERR("Thread is already IDLE");
++		rc = -EINVAL;
++	}
++
++	mutex_unlock(&dba_thread_sched.lock);
++
++	wake_up_interruptible(&dba_thread_sched.wq);
++
++	return rc;
++}
++
++static int dba_get_thread(void)
++{
++	int rc = 0;
++	uint8_t thread = 0;
++
++	rc = wait_event_interruptible(dba_thread_sched.wq,
++				      dba_find_free_thread(&thread));
++
++	if (unlikely(rc)) {
++		DBA_WRN("Process interrupted, try to release thread");
++		dba_release_thread(thread);
++		return rc;
++	}
++
++	if (unlikely(thread >= DBA_THREAD_NUM)) {
++		DBA_ERR("Invalid thread, skip acquiring");
++		BUG();
++	}
++
++	return thread;
++}
++
++int reset_thread_sched(void)
++{
++	int rc = 0;
++	uint8_t thread = 0;
++
++	DBA_INF("Thread scheduler reset");
++
++	mutex_lock(&dba_thread_sched.lock);
++
++	for (; thread < DBA_THREAD_NUM; ++thread) {
++		if (dba_thread_sched.threads[thread].state == BUSY)
++			DBA_WRN("Busy thread hard reset %u", thread);
++
++		dba_thread_sched.threads[thread].state = IDLE;
++	}
++
++	mutex_unlock(&dba_thread_sched.lock);
++
++	wake_up_interruptible(&dba_thread_sched.wq);
++
++	return rc;
++}
++
++int init_thread_sched(void)
++{
++	return reset_thread_sched();
++}
++
++void destroy_thread_sched(void)
++{
++	mutex_destroy(&dba_thread_sched.lock);
++}
++
++int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
++{
++	int rc = 0;
++
++	switch (cmd) {
++	case DBA_IOCTL_GET_THREAD:
++		rc = dba_get_thread();
++		break;
++	case DBA_IOCTL_RELEASE_THREAD:
++		rc = dba_release_thread(arg);
++		break;
++	default:
++		DBA_ERR("ioctl dispatching error");
++		BUG();
++	}
++
++	return rc;
++}
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.h b/drivers/pnm/dba_resource/dba_thread_sched.h
+new file mode 100644
+index 000000000..c05ab26a6
+--- /dev/null
++++ b/drivers/pnm/dba_resource/dba_thread_sched.h
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __dba_thread_sched_H__
++#define __dba_thread_sched_H__
++
++#include <linux/wait.h>
++#include <linux/dba_resources.h>
++#include <linux/mutex.h>
++
++struct dba_thread_sched {
++	struct {
++		uint8_t state;
++		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
++	} threads[DBA_THREAD_NUM];
++	struct mutex lock;
++	uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(struct mutex)];
++	struct wait_queue_head wq;
++};
++
++int init_thread_sched(void);
++void destroy_thread_sched(void);
++int reset_thread_sched(void);
++
++int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg);
++
++#endif //__dba_thread_sched_H__
+diff --git a/drivers/pnm/dba_resource/resource_device.c b/drivers/pnm/dba_resource/resource_device.c
+index 0000d2e51..c23fcc4d4 100644
+--- a/drivers/pnm/dba_resource/resource_device.c
++++ b/drivers/pnm/dba_resource/resource_device.c
+@@ -3,6 +3,7 @@
+ 
+ #include "dba_log.h"
+ #include "dba_allocator.h"
++#include "dba_thread_sched.h"
+ 
+ #include <linux/init.h>
+ #include <linux/module.h>
+@@ -12,6 +13,26 @@
+ #include <linux/device.h>
+ #include <linux/dba_resources.h>
+ 
++static int dba_reset(void)
++{
++	int rc = 0;
++
++	rc = reset_memory_allocator();
++	if (rc) {
++		DBA_ERR("DBA allocator reset failed");
++		return rc;
++	}
++
++	rc = reset_thread_sched();
++
++	if (rc) {
++		DBA_ERR("DBA threads scheduler reset failed");
++		return rc;
++	}
++
++	return rc;
++}
++
+ long dba_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
+ {
+ 	int result = 0;
+@@ -23,14 +44,16 @@ long dba_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
+ 
+ 	switch (cmd) {
+ 	case DBA_IOCTL_RESET:
+-		result = reset_memory_allocator();
+-		if (result)
+-			DBA_ERR("DBA Resource Manager reset failed");
++		result = dba_reset();
+ 		break;
+ 	case DBA_IOCTL_ALLOCATE:
+ 	case DBA_IOCTL_DEALLOCATE:
+ 		result = allocator_ioctl(cmd, arg);
+ 		break;
++	case DBA_IOCTL_GET_THREAD:
++	case DBA_IOCTL_RELEASE_THREAD:
++		result = thread_sched_ioctl(cmd, arg);
++		break;
+ 	default:
+ 		result = -ENOTTY;
+ 		DBA_ERR("Unknown ioctl: %d", cmd);
+@@ -41,7 +64,8 @@ long dba_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
+ 
+ static const struct file_operations dba_resource_operation = {
+ 	.owner = THIS_MODULE,
+-	.unlocked_ioctl = dba_ioctl
++	.unlocked_ioctl = dba_ioctl,
++	.llseek = noop_llseek
+ };
+ static int device_major_number = -1;
+ static struct cdev resource_device;
+@@ -135,6 +159,13 @@ static int __init init_dba_resource_module(void)
+ 		return result;
+ 	}
+ 
++	result = init_thread_sched();
++
++	if (result) {
++		DBA_ERR("Fail to initialize memory threads scheduler.");
++		return result;
++	}
++
+ 	DBA_INF("Initialization is done");
+ 	return 0;
+ }
+@@ -145,6 +176,8 @@ static void __exit exit_dba_resource_module(void)
+ 
+ 	destroy_memory_allocator();
+ 
++	destroy_thread_sched();
++
+ 	DBA_INF("DBA Resource Manager unloaded.");
+ }
+ 
+diff --git a/include/uapi/linux/dba_resources.h b/include/uapi/linux/dba_resources.h
+index dadc0d1ac..35f66157b 100644
+--- a/include/uapi/linux/dba_resources.h
++++ b/include/uapi/linux/dba_resources.h
+@@ -28,6 +28,8 @@
+ // The default alignment for DAX device is 2M
+ #define DBA_MEMORY_ADDRESS_ALIGN 0x200000
+ 
++#define DBA_THREAD_NUM 3
++
+ struct dba_allocation {
+ 	uint64_t address;
+ 	uint64_t size;
+@@ -40,5 +42,9 @@ struct dba_allocation {
+ 	_IOWR(DBA_RESOURCE_IOC_MAGIC, 1, struct dba_allocation)
+ #define DBA_IOCTL_DEALLOCATE \
+ 	_IOW(DBA_RESOURCE_IOC_MAGIC, 2, struct dba_allocation)
++#define DBA_IOCTL_GET_THREAD \
++	_IO(DBA_RESOURCE_IOC_MAGIC, 3)
++#define DBA_IOCTL_RELEASE_THREAD \
++	_IOW(DBA_RESOURCE_IOC_MAGIC, 4, uint8_t)
+ 
+ #endif /* __DBA_RESOURCES_H__ */
+-- 
+2.34.1
+

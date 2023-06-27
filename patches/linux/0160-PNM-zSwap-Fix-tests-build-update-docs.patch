@@ -1,0 +1,144 @@
+From 1f72b6693ad6e2202ac562178beab5913412eb59 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Wed, 9 Aug 2023 09:04:41 +0300
+Subject: [PATCH 160/161] [PNM][zSwap] Fix tests build & update docs
+
+* madvice binary name changed
+
+Relative: MCS23-1446
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md                         |  9 ++---
+ PNM_ZSWAP_HOW_TO.md                         | 40 ++++++---------------
+ scripts/pnm/zswap/tests/memset/swapstress.c |  5 +--
+ 3 files changed, 19 insertions(+), 35 deletions(-)
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index a1af6b1c5..c163c16e9 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -1,11 +1,12 @@
+-# Deb packages
++# Kernel build & install
+ 
+-## Clean build
++## Build
+ 
+ ```bash
+-$ rm -f .config; cp -v config-pnm .config
+-$ rm -fr debian/ vmlinux-gdb.py # cleanup from previous build
++$ make distclean # cleanup from previous build
++$ cp -v config-pnm .config
+ $ make -j `getconf _NPROCESSORS_ONLN` bindeb-pkg # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
++# NOTE: to speed-up build process is recommended to use `ccache`: make CC="ccache gcc" -j `getconf _NPROCESSORS_ONLN`
+ ...
+ 
+ * DAX: direct access to differentiated memory
+diff --git a/PNM_ZSWAP_HOW_TO.md b/PNM_ZSWAP_HOW_TO.md
+index d463723b8..bbd165f24 100644
+--- a/PNM_ZSWAP_HOW_TO.md
++++ b/PNM_ZSWAP_HOW_TO.md
+@@ -1,28 +1,8 @@
+ Here is a brief instruction how to build and run linux kernel with pnm-zswap.
+ 
+-# Build kernel
++# Kernel build & install
+ 
+-First of all, we should prepare the build environment:
+-```bash
+-make clean # clear previous build
+-
+-# The next commands should be executed single time if kernel config doesn't change
+-rm -f .config; # clear old kernel config, if exists
+-cp -v config-pnm .config # use predefined pnm-config
+-```
+-
+-Now, we are ready to build kernel:
+-```bash
+-make -j `getconf _NPROCESSORS_ONLN` # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
+-```
+----
+-**NOTE**
+-
+-To speed-up build process is recommended to use `ccache`:
+-```bash
+-make CC="ccache gcc" -j `getconf _NPROCESSORS_ONLN`
+-```
+----
++Just follow the common [PNM_HOW_TO_BUILD](PNM_HOW_TO_BUILD.md#kernel-build--install) guide build and install steps.
+ 
+ During the build process you should specify several parameters, that are not predefined in `config-pnm` file.
+ Currently, our kernel contains modules for SLS and IMDB devices and there is no possibility to disable them,
+@@ -58,11 +38,6 @@ IMDB Resource Manager (IMDB_RESOURCE) [M/n/y/?] m
+ A scale of IMDB memory range (IMDB_MEMORY_SCALE) [0] (NEW) 0 # Put 0 or ignore
+ ```
+ 
+-After several minutes the build should be finished with line:
+-```
+-Kernel: arch/x86/boot/bzImage is ready  (#180)
+-```
+-
+ # Run QEMU for zswap
+ 
+ ## Create QEMU image
+@@ -92,7 +67,7 @@ vim /etc/ssh/sshd_config
+ PermitRootLogin yes
+ ...
+ ```
+-4) Add next commands to autorun to enable the network (you should install kernel modules in this case):
++4) Add next commands to autorun to enable the network (you should install kernel modules before as described below in **Optional** section):
+ ```bash
+ ip link set ens3 up
+ dhclient ens3
+@@ -182,7 +157,9 @@ You can use test application to trigger page swap. The application is located in
+ ```bash
+ cd scripts/pnm/zswap/tests/madvise
+ make
+-./madvice [num of pages] [num of threads] #[num of threads] should be lower or equal to 8
++./multiple_instances.sh # AND/OR
++./multiple_threads.sh # AND/OR
++./memory_memadvise [num of pages] [num of threads] #[num of threads] should be lower or equal to 8
+ ```
+ In `dmesg` you should see the lines like that:
+ ```
+@@ -279,3 +256,8 @@ Then you can poweroff OS with:
+ ```bash
+ poweroff
+ ```
++
++# SSH
++
++You should disable simulator as it was described in [Power off QEMU](#power-off-qemu) so that new SSH sessions
++can be connected to the QEMU, since the simulator is very CPU intensive.
+diff --git a/scripts/pnm/zswap/tests/memset/swapstress.c b/scripts/pnm/zswap/tests/memset/swapstress.c
+index c00937a91..c58903161 100644
+--- a/scripts/pnm/zswap/tests/memset/swapstress.c
++++ b/scripts/pnm/zswap/tests/memset/swapstress.c
+@@ -2,6 +2,7 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include <pthread.h>
++#include <stdbool.h>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -33,7 +34,7 @@ static void *thread_function(void *ptr)
+ 	if (!begin)
+ 		pthread_exit((void *)&FAILED);
+ 
+-	printf("Allocated %ld B\n", size);
++	printf("Allocated %zu B\n", data->size);
+ 
+ 	/* We allocated a lot of memory, so some unused pages swapped in
+ 	 * and pages which we write will be swapped out
+@@ -104,5 +105,5 @@ int main(int argc, char *argv[])
+ 			failed = true;
+ 	}
+ 
+-	return led ? FAILED : SUCCEED;
++	return failed ? FAILED : SUCCEED;
+ }
+-- 
+2.34.1
+

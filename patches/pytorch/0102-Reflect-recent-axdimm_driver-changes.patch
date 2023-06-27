@@ -1,0 +1,78 @@
+From b84d4442d635778fe5914a6177bda53177915a57 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 14 Feb 2023 15:57:50 +0900
+Subject: [PATCH 102/128] Reflect recent axdimm_driver changes
+
+* Move 'Minibatch size' parameter passing from 'axdimm_create_sls_op'
+  to 'axdimm_run_sls' call.
+* Rename PNMReductionOperation to PNMSLSOperation
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp | 4 ++--
+ caffe2/operators/lengths_reducer_ops_axdimm.cc   | 6 ++----
+ 2 files changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index c3b1e0c8..7475ca51 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -34,8 +34,7 @@ at::Tensor embedding_bag_forward_simple_impl(
+     uint32_t minibatch_size) {
+   const AxdimmTensor& ten = convert<AxdimmTensor>(weights);
+   const auto& tables_rows_num = ten.get_tables_rows_num();
+-  PNMReductionOperation* sls_op = axdimm_create_sls_op(
+-      minibatch_size,
++  PNMSLSOperation* sls_op = axdimm_create_sls_op(
+       ten.get_sparse_feature_size(),
+       ten.get_num_tables(),
+       const_cast<uint32_t*>(tables_rows_num.data()),
+@@ -45,6 +44,7 @@ at::Tensor embedding_bag_forward_simple_impl(
+   auto status = axdimm_run_sls(
+       sls_op,
+       ten.get_device(),
++      minibatch_size,
+       lengths_view.begin(),
+       static_cast<uint32_t*>(indices.data_ptr()),
+       output_view.begin());
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 13659263..cd67a121 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -226,8 +226,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     // 2) Create SLS operation on first call.
+     if (!sls_op_) {
+-      // Minibatch size.
+-      const int64_t M = Input(lengths_vec_start_idx_).size(0);
+       // Sparse feature size.
+       const int64_t D = Input(tables_vec_start_idx_).size_from_dim(1);
+       // A vector of embedding sizes.
+@@ -237,7 +235,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       }
+ 
+       sls_op_ = axdimm_create_sls_op(
+-          M,
+           D,
+           block_size_,
+           table_entry_list.data(),
+@@ -302,6 +299,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     int status = axdimm_run_sls(
+         sls_op_,
+         device_,
++        M,
+         (uint32_t*)lengths_blocked_,
+         (uint32_t*)indices_blocked_,
+         (uint8_t*)output_buf /* psum buffer */
+@@ -387,7 +385,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked lengths buffer
+   AxdimmBaseDevice* device_ =
+       nullptr; // AXDIMM device. TODO: move into AXDIMMContext
+-  PNMReductionOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
++  PNMSLSOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
+   AxdimmTablesLayout* tables_layout_ = nullptr;
+ 
+   bool private_tables_ = false;
+-- 
+2.34.1
+

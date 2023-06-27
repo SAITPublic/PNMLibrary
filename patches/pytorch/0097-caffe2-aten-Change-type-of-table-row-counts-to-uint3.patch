@@ -1,0 +1,98 @@
+From 265ed2a829e8c8d15af807ad6b954f5f0540c06e Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 19 Dec 2022 14:20:36 +0300
+Subject: [PATCH 097/128] [caffe2,aten] Change type of table row counts to
+ uint32_t.
+
+The numbers of rows in embedding tables were represented as uint64_t.
+This did not match the API, which accepted uint32_t only, and caused
+unnecessary copies of row count vectors and double conversion
+uint32_t -> uint64_t -> uint32_t. This commit changes the type
+to uint32_t and gets rid of these extra conversions.
+
+References: AXDIMM-477
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp | 4 +---
+ aten/src/ATen/native/axdimm/AxdimmSecureTensor.h   | 2 --
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h  | 6 +++---
+ caffe2/utils/proto_utils.cc                        | 3 ++-
+ 4 files changed, 6 insertions(+), 9 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+index 7970bf76..4ac22385 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+@@ -87,9 +87,7 @@ void AxdimmSecureTensor::load(const void* weights_data) {
+     }
+   }
+ 
+-  // [TODO AXDIMM-477: refactor secure part to use uint32_t tables length]
+-  rows_.insert(rows_.begin(), tables_rows_num_.begin(), tables_rows_num_.end());
+-  const auto& rows_view = ::axdimm::make_view(std::cref(rows_).get());
++  const auto& rows_view = ::axdimm::make_view(std::cref(tables_rows_num_).get());
+ 
+   ::axdimm::secure::DeviceArguments args(
+       ::axdimm::secure::UntrustedAxdimmDeviceParams{
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+index c081824a..8f8e907c 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+@@ -68,8 +68,6 @@ class AxdimmSecureTensor : public AxdimmBaseTensor {
+   void load(const void* weights_data);
+ 
+   std::shared_ptr<::axdimm::secure::ISecureRunner> runner_;
+-  // [TODO AXDIMM-477: refactor secure part to use uint32_t tables length]
+-  std::vector<uint64_t> rows_;
+   bool with_tag_;
+ };
+ 
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 60ca65ce..2156acd8 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -162,7 +162,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+ 
+   void init_secure_runner(
+       uint64_t sparse_feature_size,
+-      axdimm::common_view<const uint64_t> rows,
++      axdimm::common_view<const uint32_t> rows,
+       axdimm::common_view<const secure_core_value_type> data) {
+     if constexpr (std::is_same_v<Context, AXDIMMContext>) {
+       size_t tables_size_bytes = tables_size_ * sizeof(T);
+@@ -212,7 +212,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       sizeof(axdimm::uint128_t) / sizeof(secure_core_value_type);
+   int64_t sparse_feature_size_{};
+   size_t tables_size_{};
+-  std::vector<uint64_t> rows_;
++  std::vector<uint32_t> rows_;
+   bool with_tag_{false};
+   std::vector<uint8_t> tag_checks_;
+   std::vector<secure_core_value_type> psum_buffer_;
+@@ -244,7 +244,7 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+   auto path = this->template GetSingleArgument<std::string>("path", "");
+   CAFFE_ENFORCE(!path.empty(), "Empty file path");
+ 
+-  rows_ = this->template GetRepeatedArgument<uint64_t>("rows", {});
++  rows_ = this->template GetRepeatedArgument<uint32_t>("rows", {});
+   CAFFE_ENFORCE_NE(rows_.size(), 0, "Empty rows array");
+ 
+   auto fd = open(path.c_str(), O_RDONLY);
+diff --git a/caffe2/utils/proto_utils.cc b/caffe2/utils/proto_utils.cc
+index 8dc36700..b3a95eb9 100644
+--- a/caffe2/utils/proto_utils.cc
++++ b/caffe2/utils/proto_utils.cc
+@@ -461,7 +461,8 @@ INSTANTIATE_GET_REPEATED_ARGUMENT(int, ints, true)
+ INSTANTIATE_GET_REPEATED_ARGUMENT(int64_t, ints, true)
+ INSTANTIATE_GET_REPEATED_ARGUMENT(uint8_t, ints, true)
+ INSTANTIATE_GET_REPEATED_ARGUMENT(uint16_t, ints, true)
+-INSTANTIATE_GET_REPEATED_ARGUMENT(size_t, ints, true)
++INSTANTIATE_GET_REPEATED_ARGUMENT(uint32_t, ints, true)
++INSTANTIATE_GET_REPEATED_ARGUMENT(uint64_t, ints, true)
+ INSTANTIATE_GET_REPEATED_ARGUMENT(string, strings, false)
+ INSTANTIATE_GET_REPEATED_ARGUMENT(NetDef, nets, false)
+ INSTANTIATE_GET_REPEATED_ARGUMENT(TensorProto, tensors, false)
+-- 
+2.34.1
+

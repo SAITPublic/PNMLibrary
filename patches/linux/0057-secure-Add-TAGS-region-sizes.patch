@@ -1,0 +1,51 @@
+From bcdb0b2b17bf084435ffbf9cd33666d30a2d0cbb Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Tue, 18 Oct 2022 16:55:44 +0300
+Subject: [PATCH 057/161] [secure] Add TAGS region sizes
+
+Add size of TAGS region and number of TAGS region for single/double
+modes.
+
+Related to: AXDIMM-438
+---
+ include/uapi/linux/libaxdimm.h | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index cb978a137..f7e7dd90d 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -46,9 +46,13 @@
+ /* number of ranks on one chip select */
+ #define NUM_RANKS_PER_CS (NUM_OF_RANK / NUM_OF_CS)
+ 
+-/* number of Instruction & Psum buffers */
++/* number of Instruction, Psum & Tags buffers */
+ #define NUM_OF_INST_BUF 1
+ #define NUM_OF_PSUM_BUF 2
++#define NUM_OF_TAGS_BUF 2
++
++/* Single TAG size (Bytes) */
++#define ALIGNED_TAG_SIZE 64
+ 
+ /* Instruction Size (Bytes) */
+ #define INSTRUCTION_SIZE 8
+@@ -56,9 +60,12 @@
+ /* Data Size (Bytes) */
+ #define DATA_SIZE 4
+ 
+-/* Instruction & Psum Buffer Size (Bytes) */
+-#define INST_BUF_SIZE (256 * 1024)
+-#define PSUM_BUF_SIZE (256 * 1024)
++/* Instruction, Psum & Tags Buffers Size (Bytes) */
++#define HW_BUF_SIZE (256 * 1024)
++
++#define INST_BUF_SIZE HW_BUF_SIZE
++#define PSUM_BUF_SIZE HW_BUF_SIZE
++#define TAGS_BUF_SIZE HW_BUF_SIZE
+ 
+ /* Channel interleaving unit size (Bytes) */
+ #define CHANNEL_INTERLEAVING_SIZE 0x20000
+-- 
+2.34.1
+

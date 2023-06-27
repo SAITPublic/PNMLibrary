@@ -1,0 +1,323 @@
+From ca32a13f141261a2cb0364da6fe7fb2156253b93 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 25 Jul 2023 05:13:27 -0400
+Subject: [PATCH 146/161] [zSwap] Refactor zswap driver for consistency with
+ resource modules
+
+- Group sim files to one module and rename module to pnm_zswap_sim
+- Rename pnm zswap files to zswap_[part].(c|h)
+for consistency with resource modules
+- Rename mm module from cxl_zswap to pnm_zswa
+- Move pnm_zswap_sim header to drivers/pnm/zswap folder
+
+Related-to: MCS23-1370
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/zswap/Makefile                    | 12 ++++----
+ .../{compress_unit.c => zswap_compressor.c}   |  9 ++----
+ .../{compress_unit.h => zswap_compressor.h}   |  9 +++---
+ .../zswap/{cxl_pnm_drv.c => zswap_device.c}   |  2 ++
+ drivers/pnm/zswap/zswap_parameters.c          |  7 +++++
+ drivers/pnm/zswap/{pnm_sim.c => zswap_sim.c}  |  8 ++---
+ .../pnm/zswap/zswap_sim.h                     | 12 ++++++--
+ include/linux/pnm/cxl_zswap.h                 |  3 --
+ mm/pnm/Makefile                               |  4 +--
+ mm/pnm/{cxl_zswap.c => pnm_zswap.c}           |  2 +-
+ scripts/pnm/zswap/qemu/pnm_sim_mode.sh        | 29 +++++++++----------
+ 11 files changed, 49 insertions(+), 48 deletions(-)
+ rename drivers/pnm/zswap/{compress_unit.c => zswap_compressor.c} (97%)
+ rename drivers/pnm/zswap/{compress_unit.h => zswap_compressor.h} (73%)
+ rename drivers/pnm/zswap/{cxl_pnm_drv.c => zswap_device.c} (99%)
+ create mode 100644 drivers/pnm/zswap/zswap_parameters.c
+ rename drivers/pnm/zswap/{pnm_sim.c => zswap_sim.c} (99%)
+ rename include/linux/pnm/cxl_zswap_sim.h => drivers/pnm/zswap/zswap_sim.h (93%)
+ rename mm/pnm/{cxl_zswap.c => pnm_zswap.c} (99%)
+
+diff --git a/drivers/pnm/zswap/Makefile b/drivers/pnm/zswap/Makefile
+index b67f07d86..9b4a6798e 100644
+--- a/drivers/pnm/zswap/Makefile
++++ b/drivers/pnm/zswap/Makefile
+@@ -1,10 +1,8 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+-#[TODO: @y-lavrinenko] Rename modules
+-obj-$(CONFIG_PNM_ZSWAP) += cxl_pnm_drv.o
+-obj-$(CONFIG_PNM_ZSWAP) += pnm_sim.o
+-obj-$(CONFIG_PNM_ZSWAP) += compress_unit.o
++obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap_sim.o
+ 
+-cxl_pnm_drv-y := cxl_pnm_drv.o
+-pnm_sim-y := pnm_sim.o
+-compress_unit-y := compress_unit.o
++pnm_zswap_sim-y := zswap_device.o
++pnm_zswap_sim-y += zswap_sim.o
++pnm_zswap_sim-y += zswap_compressor.o
++pnm_zswap_sim-y += zswap_parameters.o
+diff --git a/drivers/pnm/zswap/compress_unit.c b/drivers/pnm/zswap/zswap_compressor.c
+similarity index 97%
+rename from drivers/pnm/zswap/compress_unit.c
+rename to drivers/pnm/zswap/zswap_compressor.c
+index 85e6c8417..9032a0ce8 100644
+--- a/drivers/pnm/zswap/compress_unit.c
++++ b/drivers/pnm/zswap/zswap_compressor.c
+@@ -3,7 +3,8 @@
+ 
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+-#include "compress_unit.h"
++#include "zswap_compressor.h"
++#include "zswap_sim.h"
+ 
+ #include <linux/smp.h>
+ #include <asm/unaligned.h>
+@@ -11,8 +12,6 @@
+ #include <linux/log2.h>
+ #include <linux/math64.h>
+ #include <linux/module.h>
+-#include <linux/pnm/cxl_zswap.h>
+-#include <linux/pnm/cxl_zswap_sim.h>
+ #include <linux/slab.h>
+ 
+ /***************************************************/
+@@ -123,10 +122,6 @@ module_param_named(meta_read_latency, meta_read_latency, uint, 0644);
+ static unsigned int bit_parallel_level = 8;
+ module_param_named(bit_parallel_level, bit_parallel_level, uint, 0644);
+ 
+-/* Enable/disable log for simulator */
+-static bool log_enabled;
+-module_param_named(log_enabled, log_enabled, bool, 0644);
+-
+ /* memcpy with AVX512 NTA */
+ void memcpy_nta(void *dst, const void *src, size_t len)
+ {
+diff --git a/drivers/pnm/zswap/compress_unit.h b/drivers/pnm/zswap/zswap_compressor.h
+similarity index 73%
+rename from drivers/pnm/zswap/compress_unit.h
+rename to drivers/pnm/zswap/zswap_compressor.h
+index c42b39349..c140b3af3 100644
+--- a/drivers/pnm/zswap/compress_unit.h
++++ b/drivers/pnm/zswap/zswap_compressor.h
+@@ -1,11 +1,12 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#ifndef __COMPRESSION_UNIT_H__
+-#define __COMPRESSION_UNIT_H__
++#ifndef __ZSWAP_COMPRESSOR_H__
++#define __ZSWAP_COMPRESSOR_H__
++
++#include "zswap_sim.h"
+ 
+ #include <linux/pnm/cxl_zswap.h>
+-#include <linux/pnm/cxl_zswap_sim.h>
+ 
+ // Functions to predict the performance improvement of
+ // PNM offloading
+@@ -13,4 +14,4 @@ int pnm_compress_sim(struct unit_info *c_unit, void __iomem *hidden_pool);
+ 
+ int pnm_decompress_sim(struct unit_info *d_unit, void __iomem *hidden_pool);
+ 
+-#endif /* __COMPRESSION_UNIT_H__ */
++#endif /* __ZSWAP_COMPRESSOR_H__ */
+diff --git a/drivers/pnm/zswap/cxl_pnm_drv.c b/drivers/pnm/zswap/zswap_device.c
+similarity index 99%
+rename from drivers/pnm/zswap/cxl_pnm_drv.c
+rename to drivers/pnm/zswap/zswap_device.c
+index 7a3b4aa1d..ed2bc0808 100644
+--- a/drivers/pnm/zswap/cxl_pnm_drv.c
++++ b/drivers/pnm/zswap/zswap_device.c
+@@ -1,6 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
++#include "zswap_sim.h"
++
+ #include <linux/io.h>
+ #include <linux/debugfs.h>
+ #include <linux/kernel.h>
+diff --git a/drivers/pnm/zswap/zswap_parameters.c b/drivers/pnm/zswap/zswap_parameters.c
+new file mode 100644
+index 000000000..590bc8349
+--- /dev/null
++++ b/drivers/pnm/zswap/zswap_parameters.c
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include "zswap_sim.h"
++
++bool log_enabled = 1;
++module_param_named(log_enabled, log_enabled, bool, 0644);
+diff --git a/drivers/pnm/zswap/pnm_sim.c b/drivers/pnm/zswap/zswap_sim.c
+similarity index 99%
+rename from drivers/pnm/zswap/pnm_sim.c
+rename to drivers/pnm/zswap/zswap_sim.c
+index 1052206ed..b9fbe64e7 100644
+--- a/drivers/pnm/zswap/pnm_sim.c
++++ b/drivers/pnm/zswap/zswap_sim.c
+@@ -20,7 +20,6 @@
+ #include <linux/module.h>
+ #include <linux/pnm/cxl_zswap.h>
+ #include <linux/pnm/cxl_zswap_driver.h>
+-#include <linux/pnm/cxl_zswap_sim.h>
+ #include <linux/sched.h>
+ #include <linux/semaphore.h>
+ #include <linux/slab.h>
+@@ -29,7 +28,8 @@
+ #include <linux/vmalloc.h>
+ #include <linux/workqueue.h>
+ 
+-#include "compress_unit.h"
++#include "zswap_compressor.h"
++#include "zswap_sim.h"
+ 
+ static struct pnm_info *pnm_ctrl;
+ 
+@@ -67,10 +67,6 @@ module_param_named(unit_poll_ns, unit_poll_ns, ulong, 0644);
+ static unsigned long read_poll_ns = 10000000000;
+ module_param_named(read_poll_ns, read_poll_ns, ulong, 0644);
+ 
+-/* Enable/disable log for simulator */
+-static bool log_enabled;
+-module_param_named(log_enabled, log_enabled, bool, 0644);
+-
+ /* Enable/disable pnm_simulator */
+ static bool pnm_sim_enabled;
+ static int pnm_sim_setup(const char *, const struct kernel_param *);
+diff --git a/include/linux/pnm/cxl_zswap_sim.h b/drivers/pnm/zswap/zswap_sim.h
+similarity index 93%
+rename from include/linux/pnm/cxl_zswap_sim.h
+rename to drivers/pnm/zswap/zswap_sim.h
+index a4ebc1dda..49c65fbed 100644
+--- a/include/linux/pnm/cxl_zswap_sim.h
++++ b/drivers/pnm/zswap/zswap_sim.h
+@@ -1,13 +1,19 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#ifndef __CXL_ZSWAP_SIM_H__
+-#define __CXL_ZSWAP_SIM_H__
++#ifndef __ZSWAP_SIM_H__
++#define __ZSWAP_SIM_H__
+ 
+ #include <linux/pnm/cxl_zswap.h>
+ #include <linux/pnm/cxl_zswap_driver.h>
+ #include <linux/spinlock.h>
+ 
++/* Enable/disable log for simulator */
++extern bool log_enabled;
++
++/* for cxl sim perf API */
++int cxl_pnm_offload(struct instruction *fetched_inst, size_t *out_len);
++
+ #define MAX_UNIT 8
+ 
+ /* TODO: These parameters are set for qemu.
+@@ -110,4 +116,4 @@ struct pnm_info {
+ 	void __iomem *hidden_pool;
+ };
+ 
+-#endif /* __CXL_ZSWAP_SIM_H__ */
++#endif //__ZSWAP_SIM_H__
+diff --git a/include/linux/pnm/cxl_zswap.h b/include/linux/pnm/cxl_zswap.h
+index 9f1ebfb2c..4838f69db 100644
+--- a/include/linux/pnm/cxl_zswap.h
++++ b/include/linux/pnm/cxl_zswap.h
+@@ -312,9 +312,6 @@ int pnm_unregister_driver(struct pnm_driver *driver);
+ 
+ #endif
+ 
+-/* for cxl sim perf API */
+-int cxl_pnm_offload(struct instruction *fetched_inst, size_t *out_len);
+-
+ #ifdef IOAT_DMA
+ int dma_request_chann(void);
+ 
+diff --git a/mm/pnm/Makefile b/mm/pnm/Makefile
+index b84041387..5e8a089f8 100644
+--- a/mm/pnm/Makefile
++++ b/mm/pnm/Makefile
+@@ -1,3 +1,3 @@
+-obj-$(CONFIG_PNM_ZSWAP) += cxl_zswap.o
++obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap.o
+ 
+-cxl_zswap-y := cxl_zswap.o
++pnm_zswap-y := pnm_zswap.o
+diff --git a/mm/pnm/cxl_zswap.c b/mm/pnm/pnm_zswap.c
+similarity index 99%
+rename from mm/pnm/cxl_zswap.c
+rename to mm/pnm/pnm_zswap.c
+index cd6d71e28..8ea055c9f 100644
+--- a/mm/pnm/cxl_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1578,7 +1578,7 @@ static int __init cxl_zswap_debugfs_init(void)
+ 	if (!debugfs_initialized())
+ 		return -ENODEV;
+ 
+-	cxl_zswap_debugfs_root = debugfs_create_dir("cxl_zswap", NULL);
++	cxl_zswap_debugfs_root = debugfs_create_dir("pnm_zswap", NULL);
+ 
+ 	debugfs_create_u64("pool_limit_hit", 0444, cxl_zswap_debugfs_root,
+ 			   &cxl_zpool_limit_hit);
+diff --git a/scripts/pnm/zswap/qemu/pnm_sim_mode.sh b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+index f88ce513e..b1cb0a81a 100755
+--- a/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
++++ b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+@@ -3,20 +3,19 @@
+ 
+ # Set pnm simulator
+ function set_pnm_sim() {
+-  echo Y > /sys/module/cxl_pnm_drv/parameters/pnm_drv_enabled
++  echo Y > /sys/module/pnm_zswap_sim/parameters/pnm_drv_enabled
+ 
+   # the number of pnm units
+-  echo 4 > /sys/module/pnm_sim/parameters/num_comp_unit
+-  echo 4 > /sys/module/pnm_sim/parameters/num_dcomp_unit
++  echo 4 > /sys/module/pnm_zswap_sim/parameters/num_comp_unit
++  echo 4 > /sys/module/pnm_zswap_sim/parameters/num_dcomp_unit
+ 
+   # set core affinity of kthreads for pnm units
+-  echo 8 > /sys/module/pnm_sim/parameters/pnm_core
++  echo 8 > /sys/module/pnm_zswap_sim/parameters/pnm_core
+ 
+   # for logging
+-  echo Y > /sys/module/pnm_sim/parameters/log_enabled
+-  echo Y > /sys/module/compress_unit/parameters/log_enabled
++  echo Y > /sys/module/pnm_zswap_sim/parameters/log_enabled
+ 
+-  echo Y > /sys/module/pnm_sim/parameters/enabled
++  echo Y > /sys/module/pnm_zswap_sim/parameters/enabled
+ 
+   echo 300 > /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
+   echo 1 > /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress
+@@ -25,18 +24,18 @@ function set_pnm_sim() {
+ 
+ # Set cxl_zswap
+ function set_cxl_zswap() {
+-  echo 1 > /sys/module/cxl_zswap/parameters/cxl_mem_node
+-  echo pnm > /sys/module/cxl_zswap/parameters/pnm_accel
+-  echo 20 > /sys/module/cxl_zswap/parameters/max_pool_percent
+-  echo zbud > /sys/module/cxl_zswap/parameters/zpool
+-  echo 90 > /sys/module/cxl_zswap/parameters/accept_threshold_percent
++  echo 1 > /sys/module/pnm_zswap/parameters/cxl_mem_node
++  echo pnm > /sys/module/pnm_zswap/parameters/pnm_accel
++  echo 20 > /sys/module/pnm_zswap/parameters/max_pool_percent
++  echo zbud > /sys/module/pnm_zswap/parameters/zpool
++  echo 90 > /sys/module/pnm_zswap/parameters/accept_threshold_percent
+ 
+-  echo Y > /sys/module/cxl_zswap/parameters/pnm_enabled
+-  echo Y > /sys/module/cxl_zswap/parameters/enabled
++  echo Y > /sys/module/pnm_zswap/parameters/pnm_enabled
++  echo Y > /sys/module/pnm_zswap/parameters/enabled
+ 
+   echo 100 > /proc/sys/vm/swappiness
+ 
+-  grep -R . /sys/kernel/debug/cxl_zswap
++  grep -R . /sys/kernel/debug/pnm_zswap
+ }
+ 
+ # Set environment for profiling
+-- 
+2.34.1
+

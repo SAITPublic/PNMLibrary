@@ -1,0 +1,207 @@
+From 03e936e850f87d02f7070c8f70d16f24eb40e806 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 02:07:09 +0300
+Subject: [PATCH 091/128] [aten] Support secure and sgx tensors in
+ EmbeddingBagAxdimm
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   | 147 +++++++++++++-----
+ 1 file changed, 110 insertions(+), 37 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index 8f5d0c07..99e53a7c 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -1,6 +1,5 @@
+-#include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
+ #include <ATen/native/axdimm/AxdimmPrecompiledOp.h>
+-#include <ATen/native/axdimm/AxdimmTensor.h>
++#include <ATen/native/axdimm/AxdimmTensorConvert.h>
+ 
+ #include <torch/autograd.h>
+ #include <torch/library.h>
+@@ -28,41 +27,18 @@ namespace at {
+ namespace native {
+ namespace axdimm {
+ 
+-at::Tensor embedding_bag_forward_only_axdimm(
++at::Tensor embedding_bag_forward_simple_impl(
+     const at::Tensor& weights,
+     const at::Tensor& indices,
+-    const at::Tensor& offsets,
++    ::axdimm::common_view<const uint32_t> lengths_view,
++    ::axdimm::common_view<uint8_t> output_view,
++    uint32_t minibatch_size,
+     c10::optional<int64_t> precompiled_op_id) {
+-  TORCH_INTERNAL_ASSERT(weights.is_axdimm());
+-  TORCH_CHECK(indices.is_cpu(), "Indices must be CPU tensor");
+-  TORCH_CHECK(offsets.is_cpu(), "Offsets must be CPU tensor");
+-  TORCH_CHECK(
+-      indices.scalar_type() == torch::kInt32,
+-      "Indices tensor type must be Int32")
+-  TORCH_CHECK(
+-      offsets.scalar_type() == torch::kInt32,
+-      "Offsets tensor type must be Int32")
+-  TORCH_CHECK(indices.is_contiguous(), "Indices tensor must be contiguous");
+-  TORCH_CHECK(offsets.is_contiguous(), "Lengths tensor must be contiguous");
+-  TORCH_CHECK(indices.dim() == 1, "Indices must be 1 dimensional");
+-  TORCH_CHECK(offsets.dim() == 2, "Offsets must be 2 dimensional");
+-
+-  const uint32_t minibatch_size = offsets.sizes()[1] - 1;
+-
+-  const AxdimmTensor& ten = convert(weights);
+-
+-  TORCH_CHECK(
+-      offsets.sizes()[0] == ten.get_num_tables(),
+-      "Offsets bags number must be equal to weights tables number");
+-
+-  uint8_t* psum_buf = new uint8_t
+-      [ten.get_num_tables() * minibatch_size * ten.get_sparse_feature_size() *
+-       weights.dtype().itemsize()];
++  const AxdimmTensor& ten = convert<AxdimmTensor>(weights);
+   const auto& tables_rows_num = ten.get_tables_rows_num();
+   AxdimmOperation* sls_op{};
+   if (precompiled_op_id) {
+-    sls_op =
+-        AxdimmPrecompiledOp::get_precompiled_op_by_id(*precompiled_op_id);
++    sls_op = AxdimmPrecompiledOp::get_precompiled_op_by_id(*precompiled_op_id);
+     axdimm_precompile_op(sls_op, ten.get_device());
+   } else {
+     sls_op = axdimm_create_sls_op(
+@@ -75,20 +51,17 @@ at::Tensor embedding_bag_forward_only_axdimm(
+         ten.get_sls_type());
+   }
+ 
+-  std::vector<uint32_t> axdimm_lengths;
+-  transform_offsets(offsets, axdimm_lengths);
+-
+   auto status = axdimm_run_sls(
+       sls_op,
+       ten.get_device(),
+-      axdimm_lengths.data(),
++      lengths_view.begin(),
+       static_cast<uint32_t*>(indices.data_ptr()),
+-      psum_buf);
++      output_view.begin());
+ 
+   TORCH_CHECK(status == AXDIMM_SUCCESS, "Axdimm embeddings calculation failed");
+ 
+   return torch::from_blob(
+-      psum_buf,
++      output_view.begin(),
+       {ten.get_num_tables(), minibatch_size, ten.get_sparse_feature_size()},
+       {minibatch_size * ten.get_sparse_feature_size(),
+        ten.get_sparse_feature_size(),
+@@ -97,6 +70,106 @@ at::Tensor embedding_bag_forward_only_axdimm(
+       torch::TensorOptions().dtype(weights.dtype()).device(torch::kCPU));
+ }
+ 
++at::Tensor embedding_bag_forward_secure_impl(
++    const at::Tensor& weights,
++    const at::Tensor& indices,
++    ::axdimm::common_view<const uint32_t> lengths_view,
++    ::axdimm::common_view<uint8_t> output_view,
++    uint32_t minibatch_size) {
++  const AxdimmSecureTensor& sec_ten = convert<AxdimmSecureTensor>(weights);
++
++  ::axdimm::common_view<uint8_t> checks{};
++  std::vector<uint8_t> tag_checks_;
++  if (sec_ten.with_tag()) {
++    tag_checks_.resize(minibatch_size * sec_ten.get_num_tables());
++    checks = ::axdimm::make_view(tag_checks_);
++  }
++
++  auto status = sec_ten.get_runner().run(
++      minibatch_size,
++      lengths_view,
++      ::axdimm::make_view(
++          static_cast<const uint32_t*>(indices.data_ptr()),
++          static_cast<const uint32_t*>(indices.data_ptr()) +
++              indices.sizes()[0]),
++      output_view,
++      checks);
++
++  TORCH_CHECK(status, "Axdimm secure embeddings calculation failed");
++
++  auto output_int_v = ::axdimm::view_cast<const uint32_t>(output_view);
++
++  if (weights.dtype() == torch::kFloat32) {
++    SecureScale<float>::reverse(
++        output_int_v, ::axdimm::view_cast<float>(output_view));
++  }
++
++  return torch::from_blob(
++      output_view.begin(),
++      {sec_ten.get_num_tables(),
++       minibatch_size,
++       sec_ten.get_sparse_feature_size()},
++      {minibatch_size * sec_ten.get_sparse_feature_size(),
++       sec_ten.get_sparse_feature_size(),
++       1},
++      [](void* data) { delete[] static_cast<uint8_t*>(data); },
++      torch::TensorOptions().dtype(weights.dtype()).device(torch::kCPU));
++}
++
++at::Tensor embedding_bag_forward_only_axdimm(
++    const at::Tensor& weights,
++    const at::Tensor& indices,
++    const at::Tensor& offsets,
++    c10::optional<int64_t> precompiled_op_id) {
++  TORCH_INTERNAL_ASSERT(weights.is_axdimm());
++  TORCH_CHECK(indices.is_cpu(), "Indices must be CPU tensor");
++  TORCH_CHECK(offsets.is_cpu(), "Offsets must be CPU tensor");
++  TORCH_CHECK(
++      indices.scalar_type() == torch::kInt32,
++      "Indices tensor type must be Int32")
++  TORCH_CHECK(
++      offsets.scalar_type() == torch::kInt32,
++      "Offsets tensor type must be Int32")
++  TORCH_CHECK(indices.is_contiguous(), "Indices tensor must be contiguous");
++  TORCH_CHECK(offsets.is_contiguous(), "Lengths tensor must be contiguous");
++  TORCH_CHECK(indices.dim() == 1, "Indices must be 1 dimensional");
++  TORCH_CHECK(offsets.dim() == 2, "Offsets must be 2 dimensional");
++
++  const uint32_t minibatch_size = offsets.sizes()[1] - 1;
++
++  const AxdimmBaseTensor& base_ten = convert<AxdimmBaseTensor>(weights);
++
++  TORCH_CHECK(
++      offsets.sizes()[0] == base_ten.get_num_tables(),
++      "Offsets bags number must be equal to weights tables number");
++  ;
++  const auto psum_buf_size_bytes = base_ten.get_num_tables() * minibatch_size *
++      base_ten.get_sparse_feature_size() * weights.dtype().itemsize();
++  uint8_t* psum_buf = new uint8_t[psum_buf_size_bytes];
++  auto output_view =
++      ::axdimm::make_view(psum_buf, psum_buf + psum_buf_size_bytes);
++
++  std::vector<uint32_t> axdimm_lengths;
++  transform_offsets(offsets, axdimm_lengths);
++  auto lengths_view = ::axdimm::make_view(std::cref(axdimm_lengths).get());
++
++  if (base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SECURE ||
++      base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SECURE_SGX) {
++    return embedding_bag_forward_secure_impl(
++        weights, indices, lengths_view, output_view, minibatch_size);
++  } else if (base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SIMPLE) {
++    return embedding_bag_forward_simple_impl(
++        weights,
++        indices,
++        lengths_view,
++        output_view,
++        minibatch_size,
++        precompiled_op_id);
++  } else {
++    TORCH_CHECK(false, "Unsupported Axdimm tensor type");
++  }
++}
++
+ // This allows to define new operator schema for already registered library
+ // (aten)
+ TORCH_LIBRARY_FRAGMENT(aten, m) {
+-- 
+2.34.1
+

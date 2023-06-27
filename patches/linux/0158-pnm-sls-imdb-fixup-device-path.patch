@@ -1,0 +1,692 @@
+From bb143d789f4e5f9fb3504f85268c1b9ac2b8aedc Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Thu, 20 Jul 2023 17:00:12 +0300
+Subject: [PATCH 158/161] [pnm][sls/imdb] fixup device path
+
+-add common class `pnm` module for (sls/imdb)_resource
+-add devnode (in func) with `pnm/` prefix in `pnm` class
+-introduce pnm_(init/destroy)_resource_device funcs
+
+Refers to MCS23-1024
+
+Signed-off-by: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+---
+ config-pnm                                  |   1 +
+ drivers/pnm/Kconfig                         |  12 ++
+ drivers/pnm/Makefile                        |   3 +
+ drivers/pnm/class_resource.c                |  79 +++++++++++++
+ drivers/pnm/device_resource.h               |  16 +++
+ drivers/pnm/imdb_resource/Makefile          |   1 +
+ drivers/pnm/imdb_resource/private.h         |   1 -
+ drivers/pnm/imdb_resource/resource_device.c | 114 ++++++++----------
+ drivers/pnm/log.h                           |  19 +++
+ drivers/pnm/sls_resource/Makefile           |   1 +
+ drivers/pnm/sls_resource/sls.c              | 123 ++++++++------------
+ include/uapi/linux/imdb_resources.h         |  10 +-
+ include/uapi/linux/sls_resources.h          |  18 +--
+ 13 files changed, 245 insertions(+), 153 deletions(-)
+ create mode 100644 drivers/pnm/class_resource.c
+ create mode 100644 drivers/pnm/device_resource.h
+ create mode 100644 drivers/pnm/log.h
+
+diff --git a/config-pnm b/config-pnm
+index eb56b3b25..aa2ccb75c 100644
+--- a/config-pnm
++++ b/config-pnm
+@@ -10011,6 +10011,7 @@ CONFIG_DEV_DAX_PMEM=m
+ CONFIG_DEV_DAX_HMEM=m
+ CONFIG_DEV_DAX_HMEM_DEVICES=y
+ CONFIG_DEV_DAX_KMEM=m
++CONFIG_PNM_CLASS_RESOURCE=m
+ CONFIG_DEV_SLS=y
+ CONFIG_SLS_RESOURCE=m
+ CONFIG_IMDB=y
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 40cbd56bb..6ebb65bcb 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -1,6 +1,17 @@
+ # SPDX-License-Identifier: GPL-2.0-only
++config PNM_CLASS_RESOURCE
++	tristate "PNM class resource manager"
++	help
++	  Support for management of SLS/IMDB class resource
++
++	  Create /sys/class/dev class resource
++	  with /dev/pnm/ devnode
++	  which used to create sls_resource and
++	  imdb_resource
++
+ config SLS_RESOURCE
+ 	tristate "SLS Resource Manager"
++	depends on PNM_CLASS_RESOURCE
+ 	help
+ 	  Support for management of SLS device resources
+ 
+@@ -54,6 +65,7 @@ config PNM_ZSWAP_NUMA_NODE
+ 
+ menuconfig IMDB_RESOURCE
+ 	tristate "IMDB Resource Manager"
++	depends on PNM_CLASS_RESOURCE
+ 	help
+ 	  Support for management of CXL-IMDB device resources
+ 
+diff --git a/drivers/pnm/Makefile b/drivers/pnm/Makefile
+index 2554cc453..870a076b6 100644
+--- a/drivers/pnm/Makefile
++++ b/drivers/pnm/Makefile
+@@ -1,5 +1,8 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
++obj-$(CONFIG_PNM_CLASS_RESOURCE) += pnm_class_resource.o
++pnm_class_resource-y := class_resource.o
++
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource/
+ obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource/
+ obj-$(CONFIG_PNM_ZSWAP_SIM) += zswap/
+diff --git a/drivers/pnm/class_resource.c b/drivers/pnm/class_resource.c
+new file mode 100644
+index 000000000..c73e69d4c
+--- /dev/null
++++ b/drivers/pnm/class_resource.c
+@@ -0,0 +1,79 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include "device_resource.h"
++#include "log.h"
++
++#include <linux/cdev.h>
++#include <linux/device.h>
++#include <linux/device/class.h>
++#include <linux/fs.h>
++#include <linux/module.h>
++
++#define RESOURCE_ACCESS_MODE 0666
++
++static struct class *pnm_device_class;
++
++void pnm_destroy_resource_device(struct device *resource_device)
++{
++	if (IS_ERR_OR_NULL(resource_device))
++		return;
++
++	PNM_INF("Destroy %s device", dev_name(resource_device));
++	device_destroy(pnm_device_class, resource_device->devt);
++}
++EXPORT_SYMBOL(pnm_destroy_resource_device);
++
++int pnm_create_resource_device(char *resource_device_name, int *device_number,
++			       struct device **resource_device)
++{
++	PNM_INF("Trying to create %s device...", resource_device_name);
++
++	*resource_device = device_create(pnm_device_class, NULL, *device_number,
++					 NULL, resource_device_name);
++
++	if (IS_ERR(*resource_device)) {
++		PNM_ERR("Fail to create %s device\n", resource_device_name);
++		return PTR_ERR(*resource_device);
++	}
++
++	PNM_INF("%s device is created.", resource_device_name);
++
++	return 0;
++}
++EXPORT_SYMBOL(pnm_create_resource_device);
++
++static char *devnode_func(struct device *dev, umode_t *mode)
++{
++	if (mode)
++		*mode = RESOURCE_ACCESS_MODE;
++
++	return kasprintf(GFP_KERNEL, "pnm/%s", dev_name(dev));
++}
++
++static int __init init_pnm_class(void)
++{
++	pnm_device_class = class_create(THIS_MODULE, "pnm");
++	if (IS_ERR(pnm_device_class)) {
++		PNM_ERR("Failed to create PNM class\n");
++		return PTR_ERR(pnm_device_class);
++	}
++	PNM_DBG("Created PNM class\n");
++
++	pnm_device_class->devnode = devnode_func;
++
++	return 0;
++}
++
++static void __exit exit_pnm_class(void)
++{
++	class_destroy(pnm_device_class);
++
++	PNM_INF("PNM class resource manager unloaded.");
++}
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("PNM class resource manager");
++
++module_init(init_pnm_class);
++module_exit(exit_pnm_class);
+diff --git a/drivers/pnm/device_resource.h b/drivers/pnm/device_resource.h
+new file mode 100644
+index 000000000..7881d1d31
+--- /dev/null
++++ b/drivers/pnm/device_resource.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __DEVICE_RESOURCE_H__
++#define __DEVICE_RESOURCE_H__
++
++#include <linux/cdev.h>
++#include <linux/device.h>
++#include <linux/fs.h>
++
++int pnm_create_resource_device(char *resource_device_name, int *device_number,
++			       struct device **resource_device);
++
++void pnm_destroy_resource_device(struct device *resource_device);
++
++#endif /* __DEVICE_RESOURCE_H__ */
+diff --git a/drivers/pnm/imdb_resource/Makefile b/drivers/pnm/imdb_resource/Makefile
+index c3376c1ba..df64424c3 100644
+--- a/drivers/pnm/imdb_resource/Makefile
++++ b/drivers/pnm/imdb_resource/Makefile
+@@ -2,6 +2,7 @@
+ 
+ obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource.o
+ 
++subdir-ccflags-y := -I $(srctree)/$(src)/..
+ imdb_resource-y := resource_device.o
+ imdb_resource-y += allocator.o
+ imdb_resource-y += thread_sched.o
+diff --git a/drivers/pnm/imdb_resource/private.h b/drivers/pnm/imdb_resource/private.h
+index 3b1bb5085..d5e04107a 100644
+--- a/drivers/pnm/imdb_resource/private.h
++++ b/drivers/pnm/imdb_resource/private.h
+@@ -16,6 +16,5 @@
+ #define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
+ #define IMDB_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
+ #define IMDB_RANK_SIZE (IMDB_MEMORY_TOTAL_SIZE / IMDB_NUM_OF_RANK)
+-#define IMDB_RW_MODE 0666
+ 
+ #endif /* __IMDB_PRIVATE_H__ */
+diff --git a/drivers/pnm/imdb_resource/resource_device.c b/drivers/pnm/imdb_resource/resource_device.c
+index 7cc677e0f..8ec621502 100644
+--- a/drivers/pnm/imdb_resource/resource_device.c
++++ b/drivers/pnm/imdb_resource/resource_device.c
+@@ -8,6 +8,8 @@
+ #include "sysfs.h"
+ #include "thread_sched.h"
+ 
++#include "device_resource.h"
++
+ #include <linux/cdev.h>
+ #include <linux/device.h>
+ #include <linux/fs.h>
+@@ -61,77 +63,31 @@ static const struct file_operations imdb_resource_operation = {
+ 	.llseek = noop_llseek
+ };
+ static int device_major_number = -1;
+-static struct cdev resource_device;
+-static struct class *device_class;
+-static struct device *device;
++static struct cdev imdb_resource_cdev;
++static struct device *imdb_resource_device;
+ 
+-static void destroy_resource_device(int device_created)
++static int imdb_alloc_chrdev_region(void)
+ {
+-	if (device_created) {
+-		IMDB_INF("Destroy IMDB resource device");
+-		device_destroy(device_class, device_major_number);
+-		cdev_del(&resource_device);
+-	}
+-
+-	if (device_class)
+-		class_destroy(device_class);
++	return alloc_chrdev_region(&device_major_number, 0, 1,
++				   IMDB_RESOURCE_DEVICE_NAME);
++}
+ 
+-	if (device_major_number != -1)
++static void imdb_destroy_chrdev_region(void)
++{
++	if (likely(device_major_number))
+ 		unregister_chrdev_region(device_major_number, 1);
+ }
+ 
+-static char *devnode_func(struct device *dev, umode_t *mode)
++static int imdb_init_cdev(void)
+ {
+-	if (!mode)
+-		return NULL;
++	cdev_init(&imdb_resource_cdev, &imdb_resource_operation);
+ 
+-	*mode = IMDB_RW_MODE;
+-	return NULL;
++	return cdev_add(&imdb_resource_cdev, device_major_number, 1);
+ }
+ 
+-static int create_resource_device(void)
++static void imdb_destroy_cdev(void)
+ {
+-	int device_created = 0;
+-
+-	IMDB_INF("Trying to create resource device...");
+-
+-	if (alloc_chrdev_region(&device_major_number, 0, 1,
+-				IMDB_RESOURCE_DEVICE_NAME) < 0) {
+-		IMDB_ERR("Fail to allocate chrdev region");
+-		goto fail;
+-	}
+-
+-	device_class = class_create(THIS_MODULE, IMDB_RESOURCE_CLASS_NAME);
+-	if (unlikely(!device_class)) {
+-		IMDB_ERR("Fail to create device class");
+-		goto fail;
+-	}
+-
+-	device_class->devnode = devnode_func;
+-
+-	device = device_create(device_class, NULL, device_major_number, NULL,
+-			       IMDB_RESOURCE_DEVICE_NAME);
+-
+-	if (unlikely(!device)) {
+-		IMDB_ERR("Fail to create device in /dev/*");
+-		goto fail;
+-	}
+-
+-	device_created = 1;
+-	cdev_init(&resource_device, &imdb_resource_operation);
+-
+-	if (cdev_add(&resource_device, device_major_number, 1) == -1) {
+-		IMDB_ERR("Fail to add device.");
+-		goto fail;
+-	}
+-
+-	IMDB_INF("The resource device is created.");
+-
+-	return 0;
+-
+-fail:
+-	destroy_resource_device(device_created);
+-	return -1;
++	cdev_del(&imdb_resource_cdev);
+ }
+ 
+ static int __init init_imdb_resource_module(void)
+@@ -140,16 +96,32 @@ static int __init init_imdb_resource_module(void)
+ 
+ 	IMDB_INF("Begin IMDB Resource Manager initialization...");
+ 
+-	result = create_resource_device();
++	result = imdb_alloc_chrdev_region();
++
++	if (unlikely(result)) {
++		IMDB_ERR("Fail to allocate chrdev region");
++		goto alloc_chrdev_fail;
++	}
++
++	result = pnm_create_resource_device(IMDB_RESOURCE_DEVICE_NAME,
++					    &device_major_number,
++					    &imdb_resource_device);
+ 
+-	if (unlikely(result < 0)) {
++	if (unlikely(result)) {
+ 		IMDB_ERR("IMDB Resource Manager initialization failed");
+ 		goto resource_device_fail;
+ 	}
+ 
++	result = imdb_init_cdev();
++
++	if (unlikely(result)) {
++		IMDB_ERR("Fail to add %s cdev.", IMDB_RESOURCE_DEVICE_NAME);
++		goto init_cdev_fail;
++	}
++
+ 	result = initialize_memory_allocator();
+ 
+-	if (unlikely(result < 0)) {
++	if (unlikely(result)) {
+ 		IMDB_ERR("Fail to initialize memory allocator.");
+ 		goto allocator_fail;
+ 	}
+@@ -161,7 +133,7 @@ static int __init init_imdb_resource_module(void)
+ 		goto thread_sched_fail;
+ 	}
+ 
+-	result = imdb_build_sysfs(device);
++	result = imdb_build_sysfs(imdb_resource_device);
+ 
+ 	if (unlikely(result)) {
+ 		IMDB_ERR("Fail to build sysfs.");
+@@ -176,16 +148,24 @@ static int __init init_imdb_resource_module(void)
+ thread_sched_fail:
+ 	destroy_memory_allocator();
+ allocator_fail:
+-	destroy_resource_device(1);
++	imdb_destroy_cdev();
++init_cdev_fail:
++	pnm_destroy_resource_device(imdb_resource_device);
+ resource_device_fail:
++	imdb_destroy_chrdev_region();
++alloc_chrdev_fail:
+ 	return result;
+ }
+ 
+ static void __exit exit_imdb_resource_module(void)
+ {
+-	imdb_destroy_sysfs(device);
++	imdb_destroy_sysfs(imdb_resource_device);
++
++	imdb_destroy_cdev();
++
++	pnm_destroy_resource_device(imdb_resource_device);
+ 
+-	destroy_resource_device(1);
++	imdb_destroy_chrdev_region();
+ 
+ 	destroy_memory_allocator();
+ 
+diff --git a/drivers/pnm/log.h b/drivers/pnm/log.h
+new file mode 100644
+index 000000000..8027f3398
+--- /dev/null
++++ b/drivers/pnm/log.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __PNM_LOG_H__
++#define __PNM_LOG_H__
++
++#include <linux/kernel.h>
++
++#define PNM_DD_MARK "[PNM_RESOURCE_MGR]"
++
++#define PNM_PRINT(level, fmt, ...)                                 \
++	pr_##level(PNM_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
++		   ##__VA_ARGS__)
++#define PNM_ERR(fmt, ...) PNM_PRINT(err, fmt, ##__VA_ARGS__)
++#define PNM_WRN(fmt, ...) PNM_PRINT(warn, fmt, ##__VA_ARGS__)
++#define PNM_INF(fmt, ...) PNM_PRINT(info, fmt, ##__VA_ARGS__)
++#define PNM_DBG(fmt, ...) PNM_PRINT(debug, fmt, ##__VA_ARGS__)
++
++#endif /* __PNM_LOG_H__ */
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index d5f9a7f6a..2052e3669 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -1,6 +1,7 @@
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource.o
+ 
+ CFLAGS_sls.o += -DSLS_DRIVER_VERSION=\"$(shell git rev-parse --short HEAD)\"
++subdir-ccflags-y := -I $(srctree)/$(src)/..
+ sls_resource-y := resource.o
+ sls_resource-y += sls.o
+ sls_resource-y += allocator.o
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index ca84dd085..2fba27a90 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -6,6 +6,8 @@
+ #include "process_manager.h"
+ #include "sysfs.h"
+ 
++#include "device_resource.h"
++
+ #include <linux/cdev.h>
+ #include <linux/dax.h>
+ #include <linux/fs.h>
+@@ -22,16 +24,8 @@ MODULE_VERSION(SLS_DRIVER_VERSION);
+ #endif
+ 
+ #define SLS_RESOURCE_BASE_MINOR 0
+-#define SLS_RESOURCE_DRIVER_NAME "sls_resource"
+-#define SLS_RESOURCE_REGION_NAME SLS_RESOURCE_DRIVER_NAME
+-#define SLS_RESOURCE_CLASS_NAME SLS_RESOURCE_DRIVER_NAME
+-
+-#define SLS_RESOURCE_ACCESS_MODE 0666
+-
+-#define SLS_RESOURCE_DEVICE_NAME SLS_RESOURCE_PATH_INTERNAL
+ 
+ static struct sls_mem_info mem_info;
+-static struct class *sls_resource_class;
+ static struct device *sls_resource_device;
+ static struct cdev sls_resource_cdev;
+ static dev_t sls_resource_device_number;
+@@ -131,76 +125,29 @@ static const struct file_operations sls_resource_ops = {
+ 	.unlocked_ioctl = sls_ioctl,
+ };
+ 
+-static char *devnode_func(struct device *dev, umode_t *mode)
++static int sls_alloc_cdev_region(void)
+ {
+-	if (!mode)
+-		return NULL;
+-
+-	*mode = SLS_RESOURCE_ACCESS_MODE;
+-	return NULL;
++	return alloc_chrdev_region(&sls_resource_device_number,
++				   SLS_RESOURCE_BASE_MINOR, 1,
++				   SLS_RESOURCE_DEVICE_NAME);
+ }
+ 
+-static int init_sls_resource_dev(void)
++static void sls_destroy_chrdev_region(void)
+ {
+-	int err = 0;
+-
+-	err = alloc_chrdev_region(&sls_resource_device_number,
+-				  SLS_RESOURCE_BASE_MINOR, 1,
+-				  SLS_RESOURCE_REGION_NAME);
+-	if (err) {
+-		SLS_ERR("Failed to allocate chrdev region\n");
+-		goto fail;
+-	}
+-	SLS_DBG("sls_resource chrdev region: major %d, minor %d\n",
+-		MAJOR(sls_resource_device_number),
+-		MINOR(sls_resource_device_number));
+-
+-	sls_resource_class = class_create(THIS_MODULE, SLS_RESOURCE_CLASS_NAME);
+-	if (IS_ERR(sls_resource_class)) {
+-		err = PTR_ERR(sls_resource_class);
+-		SLS_ERR("Failed to create device class\n");
+-		goto fail_region;
+-	}
+-	SLS_DBG("Created class %s\n", SLS_RESOURCE_CLASS_NAME);
+-
+-	sls_resource_class->devnode = devnode_func;
+-
+-	sls_resource_device = device_create(sls_resource_class, NULL,
+-					    sls_resource_device_number, NULL,
+-					    "%s", SLS_RESOURCE_DEVICE_NAME);
+-	if (IS_ERR(sls_resource_device)) {
+-		err = PTR_ERR(sls_resource_device);
+-		SLS_ERR("Failed to create %s device\n",
+-			SLS_RESOURCE_DEVICE_NAME);
+-		goto fail_class;
+-	}
++	if (likely(sls_resource_device_number))
++		unregister_chrdev_region(sls_resource_device_number, 1);
++}
+ 
++static int sls_init_cdev(void)
++{
+ 	cdev_init(&sls_resource_cdev, &sls_resource_ops);
+-	err = cdev_add(&sls_resource_cdev, sls_resource_device_number, 1);
+-	if (err) {
+-		SLS_ERR("Failed to add %s cdev\n", SLS_RESOURCE_DEVICE_NAME);
+-		goto fail_device;
+-	}
+ 
+-	SLS_INF("%s device is created\n", SLS_RESOURCE_DEVICE_NAME);
+-	return 0;
+-
+-fail_device:
+-	device_destroy(sls_resource_class, sls_resource_device_number);
+-fail_class:
+-	class_destroy(sls_resource_class);
+-fail_region:
+-	unregister_chrdev_region(sls_resource_device_number, 1);
+-fail:
+-	return err;
++	return cdev_add(&sls_resource_cdev, sls_resource_device_number, 1);
+ }
+ 
+-static void destroy_sls_resource_dev(void)
++static void sls_destroy_cdev(void)
+ {
+ 	cdev_del(&sls_resource_cdev);
+-	device_destroy(sls_resource_class, sls_resource_device_number);
+-	class_destroy(sls_resource_class);
+-	unregister_chrdev_region(sls_resource_device_number, 1);
+ }
+ 
+ int init_sls_device(void)
+@@ -220,17 +167,37 @@ int init_sls_device(void)
+ 	if (sls_device_type == SLS_UNDEFINED)
+ 		goto resource_device_fail;
+ 
++	/* Alloc chrdev region */
++	err = sls_alloc_cdev_region();
++
++	if (unlikely(err)) {
++		SLS_ERR("Failed to allocate chrdev region\n");
++		goto alloc_chrdev_fail;
++	}
++	SLS_DBG("sls_resource chrdev region: major %d, minor %d\n",
++		MAJOR(sls_resource_device_number),
++		MINOR(sls_resource_device_number));
++
+ 	/* Initialize sls_resource device */
+-	err = init_sls_resource_dev();
+-	if (err)
++	err = pnm_create_resource_device(SLS_RESOURCE_DEVICE_NAME,
++					 &sls_resource_device_number,
++					 &sls_resource_device);
++	if (unlikely(err))
+ 		goto resource_device_fail;
+ 
++	err = sls_init_cdev();
++
++	if (unlikely(err)) {
++		SLS_ERR("Failed to add %s cdev\n", SLS_RESOURCE_DEVICE_NAME);
++		goto init_cdev_fail;
++	}
++
+ 	/* Initialize device mem_info */
+ 	sls_set_mem_info(&mem_info);
+ 
+ 	/* Initialize memory allocator */
+ 	err = init_sls_allocator(&mem_info, sls_device_type);
+-	if (err)
++	if (unlikely(err))
+ 		goto allocator_fail;
+ 
+ 	/* Reset ranks status and synchronization primitives */
+@@ -238,7 +205,7 @@ int init_sls_device(void)
+ 
+ 	/* Create sysfs subsystem for the device */
+ 	err = build_sls_sysfs(&mem_info, sls_resource_device, sls_device_type);
+-	if (err)
++	if (unlikely(err))
+ 		goto build_sls_sysfs_fail;
+ 
+ 	SLS_INF("Initialization is done");
+@@ -248,8 +215,12 @@ int init_sls_device(void)
+ 	destroy_rank_scheduler();
+ 	cleanup_process_manager();
+ allocator_fail:
+-	destroy_sls_resource_dev();
++	sls_destroy_cdev();
++init_cdev_fail:
++	pnm_destroy_resource_device(sls_resource_device);
+ resource_device_fail:
++	sls_destroy_chrdev_region();
++alloc_chrdev_fail:
+ 	return err;
+ }
+ 
+@@ -269,6 +240,12 @@ void cleanup_sls_device(void)
+ 	/* Remove test attribute */
+ 	destroy_sls_sysfs();
+ 
++	/* Destroy sls_resource chrdev */
++	sls_destroy_cdev();
++
+ 	/* Destroy sls_resource device */
+-	destroy_sls_resource_dev();
++	pnm_destroy_resource_device(sls_resource_device);
++
++	/* Destroy sls_resource chrdev region */
++	sls_destroy_chrdev_region();
+ }
+diff --git a/include/uapi/linux/imdb_resources.h b/include/uapi/linux/imdb_resources.h
+index 57edd9074..b7c3bd82e 100644
+--- a/include/uapi/linux/imdb_resources.h
++++ b/include/uapi/linux/imdb_resources.h
+@@ -20,11 +20,13 @@
+ 
+ // [TODO: y-lavrinenko] Should be merged with libimdb.h when the last is on kernel
+ 
+-#define IMDB_RESOURCE_CLASS_NAME "imdb_resource"
+-#define IMDB_RESOURCE_DEVICE_NAME "pnm/" IMDB_RESOURCE_CLASS_NAME
+-#define IMDB_RESOURCE_DEVICE_PATH "/dev/" IMDB_RESOURCE_DEVICE_NAME
++#define IMDB_RESOURCE_CLASS_NAME "pnm"
++#define IMDB_RESOURCE_DEVICE_NAME "imdb_resource"
++#define IMDB_RESOURCE_DEVICE_PATH \
++	"/dev/" IMDB_RESOURCE_CLASS_NAME "/" IMDB_RESOURCE_DEVICE_NAME
+ 
+-#define IMDB_SYSFS_PATH "/sys/class/"IMDB_RESOURCE_CLASS_NAME"/pnm!"IMDB_RESOURCE_CLASS_NAME
++#define IMDB_SYSFS_PATH \
++	"/sys/class/" IMDB_RESOURCE_CLASS_NAME "/" IMDB_RESOURCE_DEVICE_NAME
+ 
+ #define IMDB_THREAD_NUM 3
+ #define IMDB_NUM_OF_RANK 2
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 5ac6bc0ea..1f4e842da 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -38,24 +38,26 @@
+ /* Data Size (Bytes) */
+ #define DATA_SIZE 4
+ 
++#define SLS_RESOURCE_CLASS_NAME "pnm"
++#define SLS_RESOURCE_DEVICE_NAME "sls_resource"
++
+ /* Path to SLS resource manager device within /dev */
+-#define SLS_RESOURCE_PATH_INTERNAL "pnm/sls_resource"
++#define SLS_RESOURCE_PATH_INTERNAL \
++	SLS_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
+ 
+ /* Path to SLS resource manager device */
+-#define SLS_RESOURCE_PATH "/dev/" SLS_RESOURCE_PATH_INTERNAL
++#define SLS_RESOURCE_PATH \
++	"/dev/" SLS_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
+ 
+ /* Path to SLS memory device */
+-#define SLS_MEMDEV_PATH "/dev/sls_device"
++#define SLS_MEMDEV_PATH \
++	"/dev/" SLS_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
+ 
+ /* Path to DAX device */
+ #define DAX_PATH "/dev/dax0.0"
+ 
+ /* Path to sls_resource sysfs root */
+-/* [TODO: @a.korzun] Rename this to SLS_SYSFS_ROOT or a similar name. */
+-#define DAX_SYSFS_ROOT "/sys/class/sls_resource"
+-
+-// Block of sysfs relative paths for device
+-// DAX_SYSFS_ROOT"/dax%d.%d/ranks"
++#define SLS_SYSFS_ROOT "/sys/class/" SLS_RESOURCE_PATH_INTERNAL
+ 
+ /* O_WRONLY Path to reset device, write "1" for reset */
+ #define DEVICE_RESET_PATH "reset"
+-- 
+2.34.1
+

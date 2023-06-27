@@ -1,0 +1,115 @@
+From aabd192d27c934900ec9df961f2639dc6facbd12 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Fri, 17 Mar 2023 15:37:04 +0300
+Subject: [PATCH 109/128] [refactor] Use new SLSRunner
+
+API changed:
+* All info about operation stored in `PNMSLSOperation`
+* `axdimm_run_sls` -> `SLSRunner::run`
+
+Related to: AXDIMM-638
+---
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   | 15 +++++----
+ .../operators/lengths_reducer_ops_axdimm.cc   | 32 ++++++++++++-------
+ 2 files changed, 29 insertions(+), 18 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index a40638b8..7daffdfc 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -1,5 +1,6 @@
+ #include "ai/api/axdimm.h"
+ #include "ai/api/sls_operation.h"
++#include "ai/api/sls_runner.h"
+ 
+ #include <ATen/native/axdimm/AxdimmTensorConvert.h>
+ 
+@@ -44,14 +45,14 @@ at::Tensor embedding_bag_forward_simple_impl(
+       ten.get_tables_layout(),
+       ten.get_sls_type()};
+ 
++  auto indices_view = pnm::view_cast<const uint32_t>(pnm::make_view(
++      static_cast<const uint8_t*>(indices.data_ptr()), indices.nbytes()));
++
++  sls_op.set_run_params(
++      minibatch_size, lengths_view, indices_view, output_view);
++
+   // might throw
+-  axdimm_run_sls(
+-      sls_op,
+-      ten.get_device().internal(),
+-      minibatch_size,
+-      lengths_view.begin(),
+-      static_cast<uint32_t*>(indices.data_ptr()),
+-      output_view.begin());
++  SLSRunner::run(ten.get_device(), sls_op);
+ 
+   return torch::from_blob(
+       output_view.begin(),
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 63edfebe..26ed6d50 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -6,7 +6,10 @@
+ #include "caffe2/utils/math.h"
+ 
+ #include "ai/api/axdimm.h"
++#include "ai/api/sls_operation.h"
++#include "ai/api/sls_runner.h"
+ #include "common/api/pnm_error.h"
++#include "common/api/pnm_views.h"
+ #include "core/api/axdimm_device.h"
+ 
+ #include <algorithm>
+@@ -281,8 +284,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       lengths_offset_in_bytes += lengths_size_in_bytes;
+     }
+ 
+-    T* output_buf = output->template data<T>();
+-
+     // 6) Create the operator
+ 
+     const uint32_t sparse_feature_size =
+@@ -294,21 +295,30 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         tables_layout_,
+         SLSType::Float};
+ 
++    // NOTE: After the procedure above the _offset_ variables contain the actual
++    // full sizes
++    auto lengths_view = pnm::view_cast<const uint32_t>(
++        pnm::make_view(lengths_blocked_, lengths_offset_in_bytes));
++    auto indices_view = pnm::view_cast<const uint32_t>(
++        pnm::make_view(indices_blocked_, indices_offset_in_bytes));
++    // NOTE: Even though this method is marked as deprecated, it's successor
++    // `data_ptr` for some reason is not available in this file...
++    // NOTE: We can only call .data<T> with the exact T, otherwise this will
++    // throw an error. And so we cast this ourselves after getting a pointer
++    auto psum_view = pnm::make_view(
++        reinterpret_cast<uint8_t*>(output->template data<T>()),
++        output->nbytes());
++
++    sls_op.set_run_params(M, lengths_view, indices_view, psum_view);
++
+     // 7) And finally run it.
+ 
+     try {
+-      axdimm_run_sls(
+-          sls_op,
+-          device_.internal(),
+-          M,
+-          (uint32_t*)lengths_blocked_,
+-          (uint32_t*)indices_blocked_,
+-          (uint8_t*)output_buf /* psum buffer */
+-      );
++      SLSRunner::run(device_, sls_op);
+ 
+       return true;
+     } catch (pnm::error::Base& e) {
+-      LOG(ERROR) << "axdimm_run_sls error: " << e.what();
++      LOG(ERROR) << "SLSRunner::run error: " << e.what();
+ 
+       return false;
+     }
+-- 
+2.34.1
+

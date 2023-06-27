@@ -1,0 +1,131 @@
+From 32d6e7570726d418600cb79f8746853c66a5eb7d Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 29 Oct 2021 17:02:55 +0900
+Subject: [PATCH 002/128] [caffe2/core] Add dummy AXDIMMContext implementation
+
+Add dummy AXDIMMContext implementation, the actual content should be
+refined later (especially Copy* methods).
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/context_axdimm.h | 108 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 108 insertions(+)
+ create mode 100644 caffe2/core/context_axdimm.h
+
+diff --git a/caffe2/core/context_axdimm.h b/caffe2/core/context_axdimm.h
+new file mode 100644
+index 00000000..321566e5
+--- /dev/null
++++ b/caffe2/core/context_axdimm.h
+@@ -0,0 +1,108 @@
++#ifndef CAFFE2_CORE_CONTEXT_AXDIMM_H_
++#define CAFFE2_CORE_CONTEXT_AXDIMM_H_
++
++#include "caffe2/core/common.h"
++#include "caffe2/core/context.h"
++#include "caffe2/core/context_base.h"
++#include "caffe2/core/logging.h"
++#include "caffe2/core/tensor.h"
++#include "caffe2/core/types.h"
++#include "caffe2/proto/caffe2_pb.h"
++
++#include <c10/core/Device.h>
++#include <c10/core/Stream.h>
++
++namespace caffe2 {
++
++class C10_EXPORT AXDIMMContext final : public BaseContext {
++ public:
++  // The default axdimm context constructor.
++  explicit AXDIMMContext(int device_id = -1) : device_id_(device_id){};
++
++  ~AXDIMMContext() override {
++    FinishDeviceComputation();
++  }
++
++  inline void SwitchToDevice(StreamId stream_id) override {
++    // Empty now.
++  }
++
++  using BaseContext::SwitchToDevice;
++
++  inline void WaitEvent(const Event& ev) override {
++    ev.Wait(AXDIMM, this);
++  }
++
++  inline void Record(Event* ev, const char* err_msg = nullptr) const override {
++    CAFFE_ENFORCE(ev, "Event must not be null.");
++    ev->Record(AXDIMM, this, err_msg);
++  }
++
++  // Note on current use cases:
++  // FinishDeviceComputation must be called on the same cpu thread as
++  // SwitchToDevice()
++  void FinishDeviceComputation() override {}
++
++  inline int device_id() const {
++    return device_id_;
++  }
++
++  template <class SrcContext, class DstContext>
++  inline void CopyBytes(size_t nbytes, const void* src, void* dst) {
++    // Empty now.
++  }
++
++  void CopyBytesSameDevice(size_t nbytes, const void* src, void* dst) override {
++    CopyBytes<AXDIMMContext, AXDIMMContext>(nbytes, src, dst);
++  }
++
++  void CopyBytesToCPU(size_t nbytes, const void* src, void* dst) override {
++    CopyBytes<AXDIMMContext, CPUContext>(nbytes, src, dst);
++  }
++
++  void CopyBytesFromCPU(size_t nbytes, const void* src, void* dst) override {
++    CopyBytes<CPUContext, AXDIMMContext>(nbytes, src, dst);
++  }
++
++  template <typename T, class SrcContext, class DstContext>
++  inline void Copy(int n, const T* src, T* dst) {
++    CopyBytes<SrcContext, DstContext>(
++        n * sizeof(T), static_cast<const void*>(src), static_cast<void*>(dst));
++  }
++
++  template <class SrcContext, class DstContext>
++  inline void
++  CopyItems(const TypeMeta meta, size_t n, const void* src, void* dst) {
++    CAFFE_ENFORCE(!meta.copy(), "AXDIMMContext requires fundamental types.");
++    CopyBytes<SrcContext, DstContext>(n * meta.itemsize(), src, dst);
++  }
++
++  // By default AXDIMM operators have async device parts (???)
++  static bool HasAsyncPartDefault() {
++    return true;
++  }
++
++  // (???)
++  static bool SupportsAsyncScheduling() {
++    return true;
++  }
++
++  at::Device device() const override {
++    return at::Device(AXDIMM, device_id_);
++  }
++
++  DeviceType device_type() const override {
++    return AXDIMM;
++  }
++
++  static constexpr DeviceType GetDeviceType() {
++    return AXDIMM;
++  }
++
++ protected:
++  int device_id_;
++};
++
++} // namespace caffe2
++
++#endif // CAFFE2_CORE_CONTEXT_AXDIMM_H_
+-- 
+2.34.1
+

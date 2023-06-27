@@ -1,0 +1,28 @@
+From 914812dbb90f0f26b6e7c8149d09fe27c04e7666 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Fri, 18 Nov 2022 12:26:31 +0300
+Subject: [PATCH 15/23] update path for ci
+
+Because dlrm use absolute path for tables we need to update it for new workspaces
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ run_test.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/run_test.sh b/run_test.sh
+index ad20999..d77b38f 100755
+--- a/run_test.sh
++++ b/run_test.sh
+@@ -12,7 +12,7 @@ num_indices_per_lookup_fixed=1
+ interaction_op="cat"
+ num_batches=100
+ axdimm_tensor_type="simple"
+-weights_path="/var/lib/jenkins/workspace/axdimm_ci/input/DLRM_FLOAT/embedded.bin"
++weights_path="/var/lib/jenkins/workspace/axdimm_ci/base/input/DLRM_FLOAT/embedded.bin"
+ script_run_command="python3"
+ script_dir=$(dirname "$0")
+ 
+-- 
+2.34.1
+

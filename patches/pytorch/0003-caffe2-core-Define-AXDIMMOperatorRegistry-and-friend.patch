@@ -1,0 +1,52 @@
+From b2260408372999c7e5f371b07bd37d4eb18deb29 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 29 Oct 2021 17:16:00 +0900
+Subject: [PATCH 003/128] [caffe2/core] Define AXDIMMOperatorRegistry and
+ friends
+
+Define AXDIMMOperatorRegistry and necessary macro:
+
+* REGISTER_AXDIMM_OPERATOR_CREATOR
+* REGISTER_AXDIMM_OPERATOR
+* REGISTER_AXDIMM_OPERATOR_STR
+* REGISTER_AXDIMM_OPERATOR_WITH_ENGINE
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/operator.h | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/caffe2/core/operator.h b/caffe2/core/operator.h
+index ff845e03..dc4f403a 100644
+--- a/caffe2/core/operator.h
++++ b/caffe2/core/operator.h
+@@ -1424,6 +1424,26 @@ C10_DECLARE_REGISTRY(
+   REGISTER_HIP_OPERATOR_WITH_ENGINE(                           \
+       name, CUDNN, __VA_ARGS__) // Make CUDNN an alias of MIOPEN for HIP ops
+ 
++C10_DECLARE_REGISTRY(
++    AXDIMMOperatorRegistry,
++    OperatorBase,
++    const OperatorDef&,
++    Workspace*);
++#define REGISTER_AXDIMM_OPERATOR_CREATOR(key, ...) \
++  C10_REGISTER_CREATOR(AXDIMMOperatorRegistry, key, __VA_ARGS__)
++#define REGISTER_AXDIMM_OPERATOR(name, ...)                               \
++  IMPORT_IF_NOT_MSVC void CAFFE2_PLEASE_ADD_OPERATOR_SCHEMA_FOR_##name(); \
++  static void CAFFE2_UNUSED CAFFE_ANONYMOUS_VARIABLE_AXDIMM##name() {     \
++    CAFFE2_PLEASE_ADD_OPERATOR_SCHEMA_FOR_##name();                       \
++  }                                                                       \
++  C10_REGISTER_CLASS(AXDIMMOperatorRegistry, name, __VA_ARGS__)
++#define REGISTER_AXDIMM_OPERATOR_STR(str_name, ...) \
++  C10_REGISTER_TYPED_CLASS(AXDIMMOperatorRegistry, str_name, __VA_ARGS__)
++
++#define REGISTER_AXDIMM_OPERATOR_WITH_ENGINE(name, engine, ...) \
++  C10_REGISTER_CLASS(                                           \
++      AXDIMMOperatorRegistry, name##_ENGINE_##engine, __VA_ARGS__)
++
+ // StaticLinkingProtector is a helper class that ensures that the Caffe2
+ // library is linked correctly with whole archives (in the case of static
+ // linking). What happens is that when CreateOperator is called for the first
+-- 
+2.34.1
+

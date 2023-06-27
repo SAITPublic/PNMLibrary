@@ -1,0 +1,103 @@
+From d156f0a1ba979f72f06f10ac2b6abf391f3f24d1 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Tue, 4 Jul 2023 00:40:39 -0400
+Subject: [PATCH 32/33] [pnm] Add option to select SLS device
+
+The `--sls_device_interface` option was added to select which type of
+device should be used for SLS operation. The possible option is:
+ - AXDIMM
+ - CXL
+
+Resolve: MCS23-1292
+---
+ DeepRecSys.py           | 1 +
+ models/dlrm_s_caffe2.py | 3 ++-
+ run_DeepRecSys_pnm.sh   | 7 ++++++-
+ utils/utils.py          | 6 ++++++
+ 4 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index f0d5bfa..e0f9c0a 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -166,6 +166,7 @@ def DeepRecSys():
+         tables_descriptor = workspace.PnmStarter(args.table_weight_path, ln_emb,
+                                                  args.arch_sparse_feature_size * dtype_in_bytes,
+                                                  args.mem_preference,
++                                                 args.sls_device_interface,
+                                                  args.share_tables)
+       else:
+         tables_descriptor = None
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index e94f442..cadc74d 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -369,7 +369,8 @@ class DLRM_Net(object):
+                                                        [sls_s_combined],
+                                                        tables_layout_descriptor=self.tables_descriptor,
+                                                        path=self.args.table_weight_path,
+-                                                       mem_preference=self.args.mem_preference)
++                                                       mem_preference=self.args.mem_preference,
++                                                       device_type=self.args.sls_device_interface)
+                 emb_l.append(EE)
+ 
+         return emb_l, weights_l
+diff --git a/run_DeepRecSys_pnm.sh b/run_DeepRecSys_pnm.sh
+index 3f0bb78..e07ff6d 100755
+--- a/run_DeepRecSys_pnm.sh
++++ b/run_DeepRecSys_pnm.sh
+@@ -80,6 +80,7 @@ table_weight_path="./tables/embedded.bin"
+ USE_PNM=''
+ USE_SECURE_ALGO=''
+ SLS_DTYPE='float32'
++SLS_DINTERFACE='AXDIMM'
+ # shared by default
+ TABLES_SHARING_STRATEGY=""
+ DEBUGGER=''
+@@ -107,6 +108,10 @@ do
+           shift
+           SLS_DTYPE=$1
+           ;;
++  "--sls_device_interface")
++          shift
++          SLS_DINTERFACE=$1
++          ;;
+   "--num_engines")
+           shift
+           inference_engines=$1
+@@ -131,7 +136,7 @@ done
+ 
+ engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
+ 
+-pnm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION $USE_PNM --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
++pnm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION $USE_PNM --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY --sls_device_interface $SLS_DINTERFACE"
+ 
+ avg_arrival_rate=1
+ avg_arrival_args="--avg_arrival_rate $avg_arrival_rate"
+diff --git a/utils/utils.py b/utils/utils.py
+index 4848ac3..c19c3d7 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -150,6 +150,9 @@ def cli():
+     parser.add_argument("--sls_dtype", type=str, choices=["float32", "int32"], default="float32")
+     parser.add_argument("--private_tables", dest='share_tables', action="store_false", default=True)
+ 
++    sls_dev_interfaces = {"AXDIMM" : 0, "CXL" : 1}
++    parser.add_argument("--sls_device_interface", action="store", type=str, choices=sls_dev_interfaces.keys(), default="AXDIMM")
++
+     args = parser.parse_args()
+ 
+     # Memory preference wasn't set, so get it from number of inference engines
+@@ -159,6 +162,9 @@ def cli():
+     # Convert memory preference to id
+     args.mem_preference = mem_pref_id[args.mem_preference_str]
+ 
++    # Convert device interface to id
++    args.sls_device_interface = sls_dev_interfaces[args.sls_device_interface]
++
+     if args.model_type == "din":
+       table_sizes = list(np.fromstring(args.arch_embedding_size, dtype=int, sep="-"))
+       user_profile_table = table_sizes[0]
+-- 
+2.34.1
+

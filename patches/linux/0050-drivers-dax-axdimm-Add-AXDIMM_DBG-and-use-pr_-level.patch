@@ -1,0 +1,45 @@
+From 0e181dd06f95407809088daa7bcef8c01ef6b23f Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Wed, 28 Sep 2022 12:51:31 +0300
+Subject: [PATCH 050/161] [drivers/dax/axdimm] Add AXDIMM_DBG and use
+ pr_<level>.
+
+`AXDIMM_PRINT(level, ...)` was originally implemented using `printk`.
+This commit enables `AXDIMM_PRINT` to use `pr_<level>(...)` functions
+instead. It also adds the `AXDIMM_DBG` macro, which prints a message
+with the debug loglevel using `pr_debug`. Compared to `printk`,
+`pr_debug` opts in to the dynamic debug mechanism, which allows
+debug messages to be dynamically enabled/disabled via the debugfs
+interface.
+
+References: AXDIMM-372
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ drivers/dax/axdimm_log.h | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/dax/axdimm_log.h b/drivers/dax/axdimm_log.h
+index 70b3793da..6bc791f13 100644
+--- a/drivers/dax/axdimm_log.h
++++ b/drivers/dax/axdimm_log.h
+@@ -9,11 +9,11 @@
+ #define AXDIMM_DD_MARK "[DAX_AXDIMM_DD]"
+ 
+ #define AXDIMM_PRINT(level, fmt, ...)                                          \
+-	printk(level AXDIMM_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__,        \
++	pr_##level(AXDIMM_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__,          \
+ 	       ##__VA_ARGS__)
+-#define AXDIMM_ERR(fmt, ...) AXDIMM_PRINT(KERN_ERR, fmt, ##__VA_ARGS__)
+-#define AXDIMM_WRN(fmt, ...) AXDIMM_PRINT(KERN_WARNING, fmt, ##__VA_ARGS__)
+-#define AXDIMM_INF(fmt, ...) AXDIMM_PRINT(KERN_INFO, fmt, ##__VA_ARGS__)
+-#define AXDIMM_DBG(fmt, ...) AXDIMM_PRINT(KERN_DEBUG, fmt, ##__VA_ARGS__)
++#define AXDIMM_ERR(fmt, ...) AXDIMM_PRINT(err, fmt, ##__VA_ARGS__)
++#define AXDIMM_WRN(fmt, ...) AXDIMM_PRINT(warn, fmt, ##__VA_ARGS__)
++#define AXDIMM_INF(fmt, ...) AXDIMM_PRINT(info, fmt, ##__VA_ARGS__)
++#define AXDIMM_DBG(fmt, ...) AXDIMM_PRINT(debug, fmt, ##__VA_ARGS__)
+ 
+ #endif /* __AXDIMM_LOG_H__ */
+-- 
+2.34.1
+

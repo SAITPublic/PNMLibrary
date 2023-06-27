@@ -1,0 +1,213 @@
+From 0eeaf48d0aa844306276f216f1dc3fc7e3feae51 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 23 Dec 2021 15:14:32 +0900
+Subject: [PATCH 017/161] [drivers/dax/axdimm] Cleanup axdimm_meminfo_cdev in
+ case of probe failure
+
+Add axdimm_meminfo_cdev cleanup in case of dax driver probe failure,
+otherwise next load will fail due to axdimm_meminfo_cdev already exists in
+kernel memory.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm.c |  1 +
+ drivers/dax/device.c | 63 ++++++++++++++++++++++++--------------------
+ 2 files changed, 36 insertions(+), 28 deletions(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 9160c2155..a4529560d 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -372,4 +372,5 @@ void cleanup_axdimm_device()
+ 
+ 	/* Destroy device class for meminfo cdev */
+ 	class_destroy(axdimm_meminfo_class);
++	axdimm_meminfo_class = NULL;
+ }
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 51b0d9ecd..7d73e3b43 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -104,11 +104,10 @@ static void dax_set_mapping(struct vm_fault *vmf, pfn_t pfn,
+ }
+ 
+ static vm_fault_t __dev_dax_pte_fault(struct dev_dax *dev_dax,
+-				struct vm_fault *vmf)
++				struct vm_fault *vmf, pfn_t *pfn)
+ {
+ 	struct device *dev = &dev_dax->dev;
+ 	phys_addr_t phys;
+-	pfn_t pfn;
+ 	unsigned int fault_size = PAGE_SIZE;
+ 
+ 	if (check_vma(dev_dax, vmf->vma, __func__))
+@@ -129,21 +128,20 @@ static vm_fault_t __dev_dax_pte_fault(struct dev_dax *dev_dax,
+ 		return VM_FAULT_SIGBUS;
+ 	}
+ 
+-	pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP);
++	*pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP);
+ 
+-	dax_set_mapping(vmf, pfn, fault_size);
++	dax_set_mapping(vmf, *pfn, fault_size);
+ 
+-	return vmf_insert_mixed(vmf->vma, vmf->address, pfn);
++	return vmf_insert_mixed(vmf->vma, vmf->address, *pfn);
+ }
+ 
+ static vm_fault_t __dev_dax_pmd_fault(struct dev_dax *dev_dax,
+-				struct vm_fault *vmf)
++				struct vm_fault *vmf, pfn_t *pfn)
+ {
+ 	unsigned long pmd_addr = vmf->address & PMD_MASK;
+ 	struct device *dev = &dev_dax->dev;
+ 	phys_addr_t phys;
+ 	pgoff_t pgoff;
+-	pfn_t pfn;
+ 	unsigned int fault_size = PMD_SIZE;
+ 
+ 	if (check_vma(dev_dax, vmf->vma, __func__))
+@@ -172,22 +170,21 @@ static vm_fault_t __dev_dax_pmd_fault(struct dev_dax *dev_dax,
+ 		return VM_FAULT_SIGBUS;
+ 	}
+ 
+-	pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP);
++	*pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP);
+ 
+-	dax_set_mapping(vmf, pfn, fault_size);
++	dax_set_mapping(vmf, *pfn, fault_size);
+ 
+-	return vmf_insert_pfn_pmd(vmf, pfn, vmf->flags & FAULT_FLAG_WRITE);
++	return vmf_insert_pfn_pmd(vmf, *pfn, vmf->flags & FAULT_FLAG_WRITE);
+ }
+ 
+ #ifdef CONFIG_HAVE_ARCH_TRANSPARENT_HUGEPAGE_PUD
+ static vm_fault_t __dev_dax_pud_fault(struct dev_dax *dev_dax,
+-				struct vm_fault *vmf)
++				struct vm_fault *vmf, pfn_t *pfn)
+ {
+ 	unsigned long pud_addr = vmf->address & PUD_MASK;
+ 	struct device *dev = &dev_dax->dev;
+ 	phys_addr_t phys;
+ 	pgoff_t pgoff;
+-	pfn_t pfn;
+ 	unsigned int fault_size = PUD_SIZE;
+ 
+ 
+@@ -217,11 +214,11 @@ static vm_fault_t __dev_dax_pud_fault(struct dev_dax *dev_dax,
+ 		return VM_FAULT_SIGBUS;
+ 	}
+ 
+-	pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP);
++	*pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP);
+ 
+-	dax_set_mapping(vmf, pfn, fault_size);
++	dax_set_mapping(vmf, *pfn, fault_size);
+ 
+-	return vmf_insert_pfn_pud(vmf, pfn, vmf->flags & FAULT_FLAG_WRITE);
++	return vmf_insert_pfn_pud(vmf, *pfn, vmf->flags & FAULT_FLAG_WRITE);
+ }
+ #else
+ static vm_fault_t __dev_dax_pud_fault(struct dev_dax *dev_dax,
+@@ -237,6 +234,7 @@ static vm_fault_t dev_dax_huge_fault(struct vm_fault *vmf,
+ 	struct file *filp = vmf->vma->vm_file;
+ 	vm_fault_t rc = VM_FAULT_SIGBUS;
+ 	int id;
++	pfn_t pfn;
+ 	struct dev_dax *dev_dax = filp->private_data;
+ 
+ 	dev_dbg(&dev_dax->dev, "%s: %s (%#lx - %#lx) size = %d\n", current->comm,
+@@ -246,13 +244,13 @@ static vm_fault_t dev_dax_huge_fault(struct vm_fault *vmf,
+ 	id = dax_read_lock();
+ 	switch (pe_size) {
+ 	case PE_SIZE_PTE:
+-		rc = __dev_dax_pte_fault(dev_dax, vmf);
++		rc = __dev_dax_pte_fault(dev_dax, vmf, &pfn);
+ 		break;
+ 	case PE_SIZE_PMD:
+-		rc = __dev_dax_pmd_fault(dev_dax, vmf);
++		rc = __dev_dax_pmd_fault(dev_dax, vmf, &pfn);
+ 		break;
+ 	case PE_SIZE_PUD:
+-		rc = __dev_dax_pud_fault(dev_dax, vmf);
++		rc = __dev_dax_pud_fault(dev_dax, vmf, &pfn);
+ 		break;
+ 	default:
+ 		rc = VM_FAULT_SIGBUS;
+@@ -422,9 +420,8 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	is_axdimm_device = dev_dax->is_axdimm_device ||
+ 			   is_axdimm_range(range->start, range->end);
+ 
+-	if (is_axdimm_device) {
++	if (is_axdimm_device)
+ 		init_axdimm_device(dev_dax);
+-	}
+ 
+ 	pgmap = dev_dax->pgmap;
+ 
+@@ -433,21 +430,24 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 		if (dev_dax->nr_range > 1 && !dev_dax->is_axdimm_device) {
+ 			dev_warn(dev,
+ 				"static pgmap / multi-range device conflict\n");
+-			return -EINVAL;
++			rc = -EINVAL;
++			goto out_err;
+ 		}
+ 	} else {
+ 		if (dev_dax->pgmap) {
+ 			dev_warn(dev,
+ 				 "dynamic-dax with pre-populated page map\n");
+-			return -EINVAL;
++			rc = -EINVAL;
++			goto out_err;
+ 		}
+ 
+ 		pgmap = devm_kzalloc(dev,
+                        struct_size(pgmap, ranges, dev_dax->nr_range - 1),
+                        GFP_KERNEL);
+-		if (!pgmap)
+-			return -ENOMEM;
+-
++		if (!pgmap) {
++			rc = -ENOMEM;
++			goto out_err;
++		}
+ 		pgmap->nr_range = dev_dax->nr_range;
+ 		dev_dax->pgmap = pgmap;
+ 
+@@ -463,7 +463,8 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 					range_len(range), dev_name(dev))) {
+ 			dev_warn(dev, "mapping%d: %#llx-%#llx could not reserve range\n",
+ 					i, range->start, range->end);
+-			return -EBUSY;
++			rc = -EBUSY;
++			goto out_err;
+ 		}
+ 	}
+ 
+@@ -485,14 +486,20 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	cdev_set_parent(cdev, &dev->kobj);
+ 	rc = cdev_add(cdev, dev->devt, 1);
+ 	if (rc)
+-		return rc;
++		goto out_err;
+ 
+ 	rc = devm_add_action_or_reset(dev, dev_dax_cdev_del, cdev);
+ 	if (rc)
+-		return rc;
++		goto out_err;
+ 
+ 	run_dax(dax_dev);
++
+ 	return devm_add_action_or_reset(dev, dev_dax_kill, dev_dax);
++
++out_err:
++	if (is_axdimm_device)
++		cleanup_axdimm_device();
++	return rc;
+ }
+ EXPORT_SYMBOL_GPL(dev_dax_probe);
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,145 @@
+From b1dd01159e74db93aa98ca508407e612359f598d Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 24 Jan 2023 11:56:23 +0000
+Subject: [PATCH 26/33] Delete --sls_accel parameter
+
+Previously "--sls_accel cpu" was used to test secure operator code.
+
+But now we don't use it and don't actively test this case at all.
+
+This mode also never worked for non-secure operators.
+
+Related to: AXDIMM-409
+---
+ DeepRecSys.py            |  6 +++---
+ models/dlrm_s_caffe2.py  | 19 ++++++-------------
+ run_DeepRecSys_axdimm.sh |  7 +------
+ utils/utils.py           |  2 +-
+ 4 files changed, 11 insertions(+), 23 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index ef51ead..bc8141f 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -78,7 +78,7 @@ def response_queue_handler(
+ ):
+   inference_engines_finished = 0
+   response_sets = {}
+-  
++
+   while inference_engines_finished < num_inference_engines:
+     response = response_queue.get()
+ 
+@@ -158,7 +158,7 @@ def DeepRecSys():
+     dtype_in_bytes = 4 if args.sls_dtype in ["int32", "float32"] \
+       else exit("(axdimm) sls_dtype: {0} is not supported.".format(args.sls_dtype))
+ 
+-    if args.sls_accel:
++    if args.use_axdimm:
+       ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+ 
+       if args.share_tables:
+@@ -302,7 +302,7 @@ def DeepRecSys():
+ 
+     status = 0
+     # [AXDIMM caffe2 backend] Destroy AXDIMM for parent process.
+-    if args.sls_accel and args.share_tables:
++    if args.use_axdimm and args.share_tables:
+       status = workspace.AxdimmCloser()
+ 
+     if (status != 0):
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index 34818cd..cecb509 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -108,7 +108,7 @@ class DLRM_Wrapper(object):
+             print("(Wrapper) Using CPU...")
+ 
+         self.accel_en = accel_en
+-        self.use_axdimm_caffe2_backend = cli_args.sls_accel is not None
++        self.use_axdimm_caffe2_backend = cli_args.use_axdimm
+ 
+         num_tables = len(cli_args.arch_embedding_size.split("-"))
+ 
+@@ -348,20 +348,13 @@ class DLRM_Net(object):
+             emb_l.append(EE)
+ 
+         if self.use_axdimm_caffe2_backend:
+-            if self.args.sls_accel == "axdimm":
+-                dev_type = caffe2_pb2.AXDIMM
+-            elif self.args.sls_accel == "cpu":
+-                dev_type = caffe2_pb2.CPU
+-            else:
+-                raise ValueError("Wrong device type: {}".format(self.args.sls_accel))
+-
+-            secure_operators_map = {"float32": model.net.SecureSparseLengthsSumVec,
+-                                    "int32": model.net.SecureSparseLengthsSumIntVec}
+-
+-            with core.DeviceScope(core.DeviceOption(dev_type, 0)):
++            with core.DeviceScope(core.DeviceOption(caffe2_pb2.AXDIMM, 0)):
+                 rows = [int(v) for v in self.args.arch_embedding_size.split("-")]
+ 
+                 if self.args.use_secndp_algo:
++                    secure_operators_map = {"float32": model.net.SecureSparseLengthsSumVec,
++                                            "int32": model.net.SecureSparseLengthsSumIntVec}
++
+                     op = secure_operators_map[self.args.sls_dtype]
+                     EE = op([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+                             [sls_s_combined],
+@@ -474,7 +467,7 @@ class DLRM_Net(object):
+         # ##########################
+         # setup AXDIMM device
+         # ##########################
+-        self.use_axdimm_caffe2_backend = cli_args.sls_accel is not None
++        self.use_axdimm_caffe2_backend = cli_args.use_axdimm
+         self.tables_descriptor = tables_descriptor
+ 
+         if cli_args.arch_interaction_op == "dot":
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index c816e47..1e96cd5 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -78,7 +78,6 @@ accel_args=""
+ table_weight_path="./tables/embedded.bin"
+ 
+ USE_SECURE_ALGO=''
+-SLS_ACCEL="axdimm"
+ SLS_DTYPE='float32'
+ # shared by default
+ TABLES_SHARING_STRATEGY=""
+@@ -100,10 +99,6 @@ do
+   "--private_tables")
+           TABLES_SHARING_STRATEGY="--private_tables"
+ 	        ;;
+-  "--device")
+-          shift
+-          SLS_ACCEL=$1
+-          ;;
+   "--sls_dtype")
+           shift
+           SLS_DTYPE=$1
+@@ -132,7 +127,7 @@ done
+ 
+ engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
+ 
+-axdimm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION --sls_accel $SLS_ACCEL --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
++axdimm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION --use_axdimm --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
+ # axdimm_args=""
+ 
+ avg_arrival_rate=1
+diff --git a/utils/utils.py b/utils/utils.py
+index 515cf38..5f44978 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -146,7 +146,7 @@ def cli():
+     # =========================================================================================
+     parser.add_argument("--use_secndp_algo", action="store_true", default=False)
+     parser.add_argument("--use_tags", action="store_true", default=False)
+-    parser.add_argument("--sls_accel", type=str, default=None)
++    parser.add_argument("--use_axdimm", action="store_true", default=False)
+     parser.add_argument("--sls_dtype", type=str, choices=["float32", "int32"], default="float32")
+     parser.add_argument("--private_tables", dest='share_tables', action="store_false", default=True)
+ 
+-- 
+2.34.1
+

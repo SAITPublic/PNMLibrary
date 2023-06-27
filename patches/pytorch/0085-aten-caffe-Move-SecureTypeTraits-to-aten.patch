@@ -1,0 +1,239 @@
+From 017974d3bc3d243819b79a30d29888a4273a57c5 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 01:40:41 +0300
+Subject: [PATCH 085/128] [aten,caffe] Move SecureTypeTraits to aten
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ .../ATen/native/axdimm/AxdimmTypeHelpers.h    | 66 +++++++++++++++++++
+ .../lengths_reducer_ops_sec_axdimm.cc         |  8 +--
+ .../lengths_reducer_ops_sec_axdimm.h          | 45 ++++---------
+ 3 files changed, 81 insertions(+), 38 deletions(-)
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h b/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
+new file mode 100644
+index 00000000..cb713858
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmTypeHelpers.h
+@@ -0,0 +1,66 @@
++#ifndef __AXDIMM_TYPE_HELPERS__
++#define __AXDIMM_TYPE_HELPERS__
++
++#include "core/api/c++/axdimm_views.h"
++
++#include <algorithm>
++#include <cstdint>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++// Compile type helper to resolve types for sls operator
++template <typename T>
++struct SecureTypeTraits {
++  using secure_engine_value_t = T;
++  static constexpr bool APPLY_SCALE = false;
++};
++
++// Instantiation for float
++template <>
++struct SecureTypeTraits<float> {
++  using secure_engine_value_t = uint32_t;
++  static constexpr bool APPLY_SCALE = true;
++  static constexpr auto SCALE_FACTOR =
++      10'000'000; // Crop float to 7 digit after decimal
++};
++
++// Instantiation for double
++template <>
++struct SecureTypeTraits<double> {
++  using secure_engine_value_t = uint64_t;
++  static constexpr bool APPLY_SCALE = true;
++  static constexpr auto SCALE_FACTOR =
++      10'000'000; // Crop float to 7 digit after decimal
++};
++
++template <typename T>
++struct SecureScale {
++  using initial_t = T;
++  using scaled_t = typename SecureTypeTraits<T>::secure_engine_value_t;
++
++  static void apply(
++      ::axdimm::common_view<const initial_t> src,
++      ::axdimm::common_view<scaled_t> dst) {
++    std::transform(src.begin(), src.end(), dst.begin(), [](const auto v) {
++      return static_cast<scaled_t>(
++          v * SecureTypeTraits<initial_t>::SCALE_FACTOR);
++    });
++  }
++
++  static void reverse(
++      ::axdimm::common_view<const scaled_t> src,
++      ::axdimm::common_view<initial_t> dst) {
++    std::transform(src.begin(), src.end(), dst.begin(), [](const auto v) {
++      return static_cast<initial_t>(v) /
++          SecureTypeTraits<initial_t>::SCALE_FACTOR;
++    });
++  }
++};
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
++
++#endif
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 478e63cd..d585eaf4 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -16,7 +16,7 @@ REGISTER_AXDIMM_OPERATOR(
+         float,
+         TensorTypes<float, at::Half>,
+         axdimm::secure::ProdConsAXDIMMRunner<
+-            typename SecureTypeTraits<float>::secure_engine_value_t>,
++    typename ::at::native::axdimm::SecureTypeTraits<float>::secure_engine_value_t>,
+         AXDIMMContext>);
+ 
+ REGISTER_CPU_OPERATOR(
+@@ -25,7 +25,7 @@ REGISTER_CPU_OPERATOR(
+         float,
+         TensorTypes<float, at::Half>,
+         axdimm::secure::ProdConsCPURunner<
+-            typename SecureTypeTraits<float>::secure_engine_value_t>,
++            typename ::at::native::axdimm::SecureTypeTraits<float>::secure_engine_value_t>,
+         CPUContext>);
+ 
+ //-------------------UINT32_T OPERATORS---------------------------------
+@@ -35,7 +35,7 @@ REGISTER_AXDIMM_OPERATOR(
+         int32_t,
+         TensorTypes<int32_t>,
+         axdimm::secure::ProdConsAXDIMMRunner<
+-            typename SecureTypeTraits<int32_t>::secure_engine_value_t>,
++            typename ::at::native::axdimm::SecureTypeTraits<int32_t>::secure_engine_value_t>,
+         AXDIMMContext>);
+ 
+ REGISTER_CPU_OPERATOR(
+@@ -44,7 +44,7 @@ REGISTER_CPU_OPERATOR(
+         int32_t,
+         TensorTypes<int32_t>,
+         axdimm::secure::ProdConsCPURunner<
+-            typename SecureTypeTraits<int32_t>::secure_engine_value_t>,
++            typename ::at::native::axdimm::SecureTypeTraits<int32_t>::secure_engine_value_t>,
+         CPUContext>);
+ 
+ //-------------------OPERATORS SCHEMA---------------------------------
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index dbd606cc..59b3705a 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -12,36 +12,13 @@
+ #include "secure/plain/devices/trivial_cpu.h"
+ #include "secure/plain/devices/untrusted_axdimm_device.h"
+ 
++#include <ATen/native/axdimm/AxdimmTypeHelpers.h>
++
+ #include <fcntl.h>
+ #include <sys/mman.h>
+ 
+ namespace caffe2 {
+ 
+-// Compile type helper to resolve types for sls operator
+-template <typename T>
+-struct SecureTypeTraits {
+-  using secure_engine_value_t = T;
+-  static constexpr bool apply_scale = false;
+-};
+-
+-// Instantiation for float
+-template <>
+-struct SecureTypeTraits<float> {
+-  using secure_engine_value_t = uint32_t;
+-  static constexpr bool apply_scale = true;
+-  static constexpr auto SCALE_FACTOR =
+-      10'000'000; // Crop float to 7 digit after decimal
+-};
+-
+-// Instantiation for double
+-template <>
+-struct SecureTypeTraits<double> {
+-  using secure_engine_value_t = uint64_t;
+-  static constexpr bool apply_scale = true;
+-  static constexpr auto SCALE_FACTOR =
+-      10'000'000; // Crop float to 7 digit after decimal
+-};
+-
+ // A templated class that implements SparseLengths[Sum,WeightedSum,Mean] for
+ // AXDIMM.
+ template <
+@@ -55,11 +32,11 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+   template <class... Args>
+   explicit AXDIMMSecureSparseLengthsReductionOpVec(Args&&... args)
+       : Operator<Context>(std::forward<Args>(args)...) {
+-    if constexpr (SecureTypeTraits<T>::apply_scale) {
++    if constexpr (::at::native::axdimm::SecureTypeTraits<T>::APPLY_SCALE) {
+       LOG(WARNING) << "Secure operator works only with integer types. "
+                       "The floating values will be converted to integer "
+                       "by expression I = static_cast<I>(F * "
+-                   << SecureTypeTraits<T>::SCALE_FACTOR << " )";
++                   << ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR << " )";
+     }
+     with_tag_ = this->template GetSingleArgument<bool>("with_tag", false);
+     if (with_tag_) {
+@@ -161,13 +138,13 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+ 
+     auto output_int_v = axdimm::view_cast<secure_core_value_type>(output_view);
+ 
+-    if constexpr (SecureTypeTraits<T>::apply_scale) {
++    if constexpr (::at::native::axdimm::SecureTypeTraits<T>::APPLY_SCALE) {
+       std::transform(
+           output_int_v.begin(),
+           output_int_v.end(),
+           output_view.begin(),
+           [this](const auto v) {
+-            return static_cast<T>(v) / SecureTypeTraits<T>::SCALE_FACTOR;
++            return static_cast<T>(v) / ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR;
+           }); // Restore floating point values
+     }
+ 
+@@ -176,7 +153,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+ 
+  private:
+   using secure_core_value_type =
+-      typename SecureTypeTraits<T>::secure_engine_value_t;
++      typename ::at::native::axdimm::SecureTypeTraits<T>::secure_engine_value_t;
+ 
+   template <typename...>
+   static constexpr std::false_type always_false{};
+@@ -282,12 +259,12 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+   auto data_v = axdimm::make_view(
+       static_cast<const T*>(data), static_cast<const T*>(data) + tables_size_);
+ 
+-  if constexpr (SecureTypeTraits<T>::apply_scale) {
++  if constexpr (::at::native::axdimm::SecureTypeTraits<T>::APPLY_SCALE) {
+     std::vector<secure_core_value_type> qdata(tables_size_);
+     std::transform(
+         data_v.begin(), data_v.end(), qdata.begin(), [](const auto v) {
+           return static_cast<secure_core_value_type>(
+-              v * SecureTypeTraits<T>::SCALE_FACTOR); // Transform floating
++              v * ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR); // Transform floating
+                                                       // point values to integer
+         });
+     init_secure_runner(
+@@ -335,9 +312,9 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+         Input(i).template data<T>() + rows_[i] * sparse_feature_size_,
+         std::back_inserter(qdata),
+         [](const auto v) {
+-          if constexpr (SecureTypeTraits<T>::apply_scale)
++          if constexpr (::at::native::axdimm::SecureTypeTraits<T>::APPLY_SCALE)
+             return static_cast<secure_core_value_type>(
+-                v * SecureTypeTraits<T>::SCALE_FACTOR);
++                v * ::at::native::axdimm::SecureTypeTraits<T>::SCALE_FACTOR);
+           else
+             return v;
+         });
+-- 
+2.34.1
+

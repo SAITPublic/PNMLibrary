@@ -1,0 +1,93 @@
+From 2a2ff0a93ca1e070aaa2267d0ebdfa40fcec4ad4 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 10 Aug 2023 14:40:30 +0300
+Subject: [PATCH 159/161] [sls_resource][bug] Fix device type default value
+
+- if device type not specified, than default value in sysfs will be empty,
+because string pointer is NULL
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c | 52 +++++++++++++++++++++++++---------
+ 1 file changed, 38 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 2fba27a90..b61e1ca0d 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -30,24 +30,51 @@ static struct device *sls_resource_device;
+ static struct cdev sls_resource_cdev;
+ static dev_t sls_resource_device_number;
+ 
+-static enum sls_device_type sls_device_type = CONFIG_DEV_SLS_BUS;
++static int set_sls_device_type(const char *val, const struct kernel_param *kp)
++{
++	enum sls_device_type *dev_type = (enum sls_device_type *)kp->arg;
+ 
+-static char *sls_device_name;
+-module_param_named(device, sls_device_name, charp, 0444);
++	if (strcmp("AXDIMM", val) == 0) {
++		*dev_type = SLS_AXDIMM;
++		return 0;
++	}
+ 
+-static enum sls_device_type get_device_type(char *device_name)
+-{
+-	if (strcmp("AXDIMM", device_name) == 0)
+-		return SLS_AXDIMM;
++	if (strcmp("CXL", val) == 0) {
++		*dev_type = SLS_CXL;
++		return 0;
++	}
+ 
+-	if (strcmp("CXL", device_name) == 0)
+-		return SLS_CXL;
++	SLS_ERR("Unknown device name: %s\n", val);
+ 
+-	SLS_ERR("Unknown device name: %s\n", device_name);
++	return -EINVAL;
++}
+ 
+-	return SLS_UNDEFINED;
++static int get_sls_device_type(char *buffer, const struct kernel_param *kp)
++{
++	const enum sls_device_type type = *((enum sls_device_type *)kp->arg);
++
++	switch (type) {
++	case SLS_AXDIMM:
++		return sysfs_emit(buffer, "AXDIMM\n");
++	case SLS_CXL:
++		return sysfs_emit(buffer, "CXL\n");
++	case SLS_UNDEFINED:
++	case SLS_MAX:
++		break;
++	}
++
++	SLS_ERR("Unknown device name: %d\n", type);
++
++	return -EINVAL;
+ }
+ 
++static enum sls_device_type sls_device_type = CONFIG_DEV_SLS_BUS;
++static const struct kernel_param_ops sls_device_type_ops = {
++	.set = set_sls_device_type,
++	.get = get_sls_device_type,
++};
++module_param_cb(device, &sls_device_type_ops, &sls_device_type, 0444);
++
+ int sls_release(struct inode *node, struct file *f)
+ {
+ 	return release_sls_process();
+@@ -161,9 +188,6 @@ int init_sls_device(void)
+ 		return -EINVAL;
+ 	}
+ 
+-	if (sls_device_name)
+-		sls_device_type = get_device_type(sls_device_name);
+-
+ 	if (sls_device_type == SLS_UNDEFINED)
+ 		goto resource_device_fail;
+ 
+-- 
+2.34.1
+

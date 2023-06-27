@@ -1,0 +1,780 @@
+From a201a548a0253c9ff3760af2f1f6d4ddf3ec5a0b Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Tue, 11 Apr 2023 17:19:56 +0300
+Subject: [PATCH 104/161] [refactor] Cleanup ERRORs and WARNINGs reported by
+ checkpatch
+
+Resolves: MCS23-292
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ MAINTAINERS                                   | 16 ++++++++
+ clean_linux_debs.py                           |  1 +
+ drivers/cxl/Kconfig                           |  8 +++-
+ drivers/cxl/cxldba.h                          |  2 +-
+ drivers/cxl/dba.c                             |  2 +-
+ drivers/dax/Kconfig                           | 37 ++++++++++++++-----
+ drivers/dax/dba-private.h                     |  2 +-
+ drivers/dax/device.c                          |  3 +-
+ drivers/pnm/Kconfig                           | 16 +++++---
+ .../pnm/axdimm_resource/axdimm_allocator.c    | 16 ++++----
+ .../pnm/axdimm_resource/axdimm_allocator.h    |  2 +-
+ .../axdimm_resource/axdimm_process_manager.c  |  9 ++---
+ .../axdimm_resource/axdimm_process_manager.h  |  8 ++--
+ .../axdimm_resource/axdimm_rank_scheduler.c   | 34 ++++++++---------
+ .../axdimm_resource/axdimm_rank_scheduler.h   |  4 +-
+ drivers/pnm/axdimm_resource/axdimm_sysfs.c    |  2 -
+ drivers/pnm/axdimm_resource/axdimm_sysfs.h    |  3 ++
+ drivers/pnm/dba_resource/dba_allocator.c      | 15 +++-----
+ drivers/pnm/dba_resource/dba_allocator.h      |  2 +-
+ drivers/pnm/dba_resource/dba_log.h            |  2 +-
+ drivers/pnm/dba_resource/dba_thread_sched.c   |  7 +---
+ drivers/pnm/dba_resource/dba_thread_sched.h   |  2 +-
+ include/linux/axdimm_common.h                 |  4 +-
+ include/uapi/linux/dba_resources.h            |  1 +
+ include/uapi/linux/libaxdimm.h                | 11 +++---
+ install_axdimm_headers.sh                     |  3 +-
+ install_axdimm_resource.sh                    |  3 +-
+ install_dba_resource.sh                       |  1 +
+ install_debs.sh                               |  2 +
+ 29 files changed, 132 insertions(+), 86 deletions(-)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 886d3f69e..a907cc7ec 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -5228,6 +5228,22 @@ S:	Maintained
+ F:	drivers/cxl/
+ F:	include/uapi/linux/cxl_mem.h
+ 
++SAMSUNG PROCESSING NEAR MEMORY (PNM)
++M:	Maxim Ostapenko <maxim.o@samsung.com>
++M:	YeonGon Cho <yeongon.cho@samsung.com>
++M:	Yong-Min Tai <ym.tai@samsung.com>
++M:	Youngsam Shin <youngsam.shin@samsung.com>
++S:	Maintained
++F:	PNM_HOW_TO_BUILD.md
++F:	config-axdimm
++F:	include/uapi/linux/dba_resources.h
++F:	include/uapi/linux/libaxdimm.h
++F:	install_axdimm_headers.sh
++F:	install_axdimm_resource.sh
++F:	install_dax_drivers.sh
++F:	install_dba_resource.sh
++F:	install_debs.sh
++
+ CONEXANT ACCESSRUNNER USB DRIVER
+ L:	accessrunner-general@lists.sourceforge.net
+ S:	Orphan
+diff --git a/clean_linux_debs.py b/clean_linux_debs.py
+index e2529a9c1..c30eefe33 100755
+--- a/clean_linux_debs.py
++++ b/clean_linux_debs.py
+@@ -1,4 +1,5 @@
+ #!/usr/bin/python3
++# SPDX-License-Identifier: GPL-2.0
+ import subprocess
+ 
+ from argparse import ArgumentParser, Namespace
+diff --git a/drivers/cxl/Kconfig b/drivers/cxl/Kconfig
+index 85e1cd945..c62ac7517 100644
+--- a/drivers/cxl/Kconfig
++++ b/drivers/cxl/Kconfig
+@@ -112,10 +112,14 @@ config CXL_REGION
+ 	select GET_FREE_REGION
+ 
+ config CXL_DBA
+-	tristate "Enable CXL: Database accelerator"
++	tristate "Database accelerator"
+ 	default m
+ 	depends on CXL_BUS && CXL_MEM
+ 	help
+-	  Enable support of CXL DBA accelerator.
++	  Enable DBA accelerator support.
++
++	  DBA accelerator is a Type 2 CXL device - a PNM
++	  device. It is incorporated into memory attached
++	  through the CXL interface.
+ 
+ endif
+diff --git a/drivers/cxl/cxldba.h b/drivers/cxl/cxldba.h
+index dbcd383bd..71e9d10e2 100644
+--- a/drivers/cxl/cxldba.h
++++ b/drivers/cxl/cxldba.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0-only
++/* SPDX-License-Identifier: GPL-2.0-only */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __CXL_DBA_H__
+diff --git a/drivers/cxl/dba.c b/drivers/cxl/dba.c
+index 6abd1621b..2601ebfe6 100644
+--- a/drivers/cxl/dba.c
++++ b/drivers/cxl/dba.c
+@@ -19,6 +19,6 @@ static struct cxl_driver dba_driver = { .name = "cxl_dba",
+ 					.id = CXL_DEVICE_DBA };
+ 
+ module_cxl_driver(dba_driver);
+-MODULE_LICENSE("GPL v2");
++MODULE_LICENSE("GPL");
+ MODULE_IMPORT_NS(CXL);
+ MODULE_ALIAS_CXL(CXL_DEVICE_DBA);
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 6ddce31da..328901f3e 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -67,31 +67,39 @@ config DEV_DAX_KMEM
+ 	  Say N if unsure.
+ 
+ config DEV_DAX_PMEM_COMPAT
+-	tristate "PMEM DAX: support the deprecated /sys/class/dax interface"
++	tristate "PMEM DAX: tools compatibility"
+ 	depends on m && DEV_DAX_PMEM=m
+ 	default DEV_DAX_PMEM
+ 	help
++	  Support the deprecated /sys/class/dax interface
++
+ 	  Older versions of the libdaxctl library expect to find all
+ 	  device-dax instances under /sys/class/dax. If libdaxctl in
+ 	  your distribution is older than v58 say M, otherwise say N.
+ 
+ config AXDIMM
+-	bool "Enable AXDIMM support"
++	bool "AXDIMM support"
+ 	depends on DEV_DAX || DEV_DAX=m
+ 	default n
+ 	help
+-	  Enable support for AxDIMM accelerator.
++	  Enable support for AXDIMM accelerator.
++
++	  AXDIMM accelerator is a PNM device. It is attached
++	  through the DIMM interface. This option will enable
++	  allocation of a DAX region for use by this device.
+ 
+ if AXDIMM
+ 
+ config AXDIMM_BASE_ADDR
+-	int "A base physical address of AXDIMM range in gigabytes"
++	int "A base address of AXDIMM range"
+ 	depends on AXDIMM
+ 	range 4 66
+ 	default 4
+ 	help
++	  A base physical address of AXDIMM range in gigabytes
++
+ 	  This value is used to detect AXDIMM range in DAX driver and
+-	  mao respectively.
++	  map it accordingly.
+ 
+ config AXDIMM_MEMORY_SCALE
+ 	int "A scale of AXDIMM memory range"
+@@ -99,17 +107,26 @@ config AXDIMM_MEMORY_SCALE
+ 	range 0 4
+ 	default 1
+ 	help
+-	  This value is used to scale AXDIMM memory range in DAX driver.
+-	  For default memory range = 64 gigabytes and scale = 1,
+-	  total range = 64/(2^scale) = 32 gigabytes.
++	  Setup memory range size for AXDIMM
++
++	  This value is used to scale the total AXDIMM memory range
++	  in DAX driver.
++	  The maximum possible memory is 64 gigabytes. And the scale
++	  parameter allows to scale this down by powers of 2. The calculation
++	  for the real memory size is total_size = 64 / (2^scale) gigabytes.
++	  By default scale = 1, and so the default total_size = 32 gigabytes
+ 
+ endif
+ 
+ endif
+ 
+ config DBA
+-       bool "Enable CXL DBA support"
++       bool "Database Accelerator"
+        depends on (DEV_DAX || DEV_DAX=m) && (CXL_DBA || CXL_DBA=m)
+        default n
+        help
+-         Enable support for CXL DBA memory accelerator
++	 Enable support for CXL DBA memory accelerator.
++
++	 DBA accelerator is a PNM device. It is attached through
++	 the CXL interface. This option will enable allocation of a
++	 DAX region for use by this device.
+diff --git a/drivers/dax/dba-private.h b/drivers/dax/dba-private.h
+index c4ffedf20..80a3c6c98 100644
+--- a/drivers/dax/dba-private.h
++++ b/drivers/dax/dba-private.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0
++/* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+ 
+ #ifndef _DBA_PRIVATE_H_
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 99d52ffe6..79d7a1d5e 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -483,9 +483,8 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	pgmap->type = MEMORY_DEVICE_GENERIC;
+ 
+ #if defined(CONFIG_AXDIMM) || defined(CONFIG_DBA)
+-	if (is_axdimm_device || is_dba_range(range->start, range->end)) {
++	if (is_axdimm_device || is_dba_range(range->start, range->end))
+ 		pgmap->type = MEMORY_DEVICE_ACCELERATOR;
+-	}
+ #endif
+ 
+ 	if (dev_dax->align > PAGE_SIZE)
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 7575d0982..74ea99414 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -1,14 +1,18 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ config AXDIMM_RESOURCE
+-  tristate "AXDIMM Resource Manager: manage AXDIMM device resources"
+-  help
+-    Create /dev/pnm/axdimm_resource device with ioctl and sysfs interfaces
+-    for interaction with rank and memory allocator and other AXDIMM device
+-    resources.
++	tristate "AXDIMM Resource Manager"
++	help
++	  Support for management of AXDIMM device resources
++
++	  Create /dev/pnm/axdimm_resource device with ioctl and sysfs interfaces
++	  for interaction with rank and memory allocator and other AXDIMM device
++	  resources.
+ 
+ config DBA_RESOURCE
+-	tristate "DBA Resource Manager: handle resource of CXL-DBA device"
++	tristate "DBA Resource Manager"
+ 	help
++	  Support for management of CXL-DBA device resources
++
+ 	  Create /dev/pnm/dba_resourceX device that provides IOCTL
+ 	  interface to handle DBA resources like memory, threads and
+ 	  cores.
+diff --git a/drivers/pnm/axdimm_resource/axdimm_allocator.c b/drivers/pnm/axdimm_resource/axdimm_allocator.c
+index 338e677b4..8d3185392 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_allocator.c
++++ b/drivers/pnm/axdimm_resource/axdimm_allocator.c
+@@ -251,7 +251,7 @@ static int add_obj_pack(struct axdimm_allocator *alloc,
+ 
+ /* Get total number of allocated objects depends on user memory policy. */
+ static inline uint64_t gen_num_obj(uint64_t num_user_obj,
+-				   axd_user_preferences pref)
++				   enum axd_user_preferences pref)
+ {
+ 	switch (GET_ALLOC_POLICY(pref)) {
+ 	case AXDIMM_ALLOC_AUTO:
+@@ -270,7 +270,7 @@ static inline uint64_t gen_num_obj(uint64_t num_user_obj,
+  * depends on user memory policy.
+  */
+ static inline uint64_t gen_rank_num_obj(uint64_t num_user_obj,
+-					axd_user_preferences pref)
++					enum axd_user_preferences pref)
+ {
+ 	switch (GET_ALLOC_POLICY(pref)) {
+ 	case AXDIMM_ALLOC_AUTO:
+@@ -292,7 +292,7 @@ static inline uint64_t gen_rank_num_obj(uint64_t num_user_obj,
+  */
+ static inline uint64_t get_user_obj_idx(uint64_t obj_idx, uint8_t rank,
+ 					uint64_t rank_num_obj,
+-					axd_user_preferences pref)
++					enum axd_user_preferences pref)
+ {
+ 	switch (GET_ALLOC_POLICY(pref)) {
+ 	case AXDIMM_ALLOC_AUTO:
+@@ -387,6 +387,7 @@ static uint8_t select_optimal_rank(struct axdimm_allocator *alloc)
+ 
+ 	for (rank = 1; rank < NUM_OF_RANK; ++rank) {
+ 		size_t rank_free_space = gen_pool_avail(alloc->mem_pools[rank]);
++
+ 		if (max_free_space < rank_free_space) {
+ 			max_free_space = rank_free_space;
+ 			optimal_rank = rank;
+@@ -440,9 +441,8 @@ static int allocate_in_ranks(uint64_t num_obj, struct axdimm_allocator *alloc,
+ 				err_code = pool_alloc_mem_obj(alloc, idx, rank,
+ 							      rank_num_obj,
+ 							      objects, request);
+-				if (unlikely(err_code)) {
++				if (unlikely(err_code))
+ 					goto alloc_ranks_out;
+-				}
+ 			}
+ 		}
+ 	}
+@@ -496,9 +496,9 @@ static int allocate_memory(struct axdimm_allocator *alloc,
+ {
+ 	int err_code;
+ 	/* Array with allocated memory objects depends on user memory policy,
+-	* if no issues with allocation and filling by original user objects,
+-	* it's placed into object packages storage.
+-	*/
++	 * if no issues with allocation and filling by original user objects,
++	 * it's placed into object packages storage.
++	 */
+ 	struct axd_memory_object *objects = NULL;
+ 	/* Total number of allocated objects given the user memory policy */
+ 	const uint64_t num_obj =
+diff --git a/drivers/pnm/axdimm_resource/axdimm_allocator.h b/drivers/pnm/axdimm_resource/axdimm_allocator.h
+index 8efe9f1cf..62d85e418 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_allocator.h
++++ b/drivers/pnm/axdimm_resource/axdimm_allocator.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0
++/* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __AXDIMM_ALLOCATOR_H__
+diff --git a/drivers/pnm/axdimm_resource/axdimm_process_manager.c b/drivers/pnm/axdimm_resource/axdimm_process_manager.c
+index 2439be908..ffe1e9b4e 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_process_manager.c
++++ b/drivers/pnm/axdimm_resource/axdimm_process_manager.c
+@@ -44,9 +44,8 @@ find_current_proc_res(struct axdimm_process_manager *mgr)
+ 	pid_t pid = get_current_process_id();
+ 
+ 	list_for_each_entry(proc_res, &mgr->active_process_list, list) {
+-		if (proc_res->pid == pid) {
++		if (proc_res->pid == pid)
+ 			return proc_res;
+-		}
+ 	}
+ 
+ 	return NULL;
+@@ -66,8 +65,7 @@ static void track_leaked_resources(struct axdimm_process_manager *mgr,
+ 	atomic64_inc(&mgr->leaked);
+ 	list_move(&proc_res->list, &mgr->leaked_process_list);
+ 
+-	AXDIMM_DBG("Tracked leakage by pid: %d, tid: %d; rank_rw_mask: %d,"
+-		   " rank_rd_mask: %d\n",
++	AXDIMM_DBG("Tracked leakage by pid: %d, tid: %d; rank_rw_mask: %d, rank_rd_mask: %d\n",
+ 		   get_current_process_id(), current->pid,
+ 		   proc_res->rank_write_mask, proc_res->rank_read_mask);
+ 
+@@ -83,7 +81,8 @@ static int release_process_resources(struct axdimm_proc_resources *proc_res,
+ {
+ 	/* in base case scenario the resources above should be already
+ 	 * released, but we need to check in case we are on
+-	 * 'killed process' path */
++	 * 'killed process' path
++	 */
+ 	int i;
+ 	struct axdimm_proc_desc *proc_desc;
+ 	struct axdimm_proc_desc *proc_desc_tmp;
+diff --git a/drivers/pnm/axdimm_resource/axdimm_process_manager.h b/drivers/pnm/axdimm_resource/axdimm_process_manager.h
+index 19d4f299f..d51b147e5 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_process_manager.h
++++ b/drivers/pnm/axdimm_resource/axdimm_process_manager.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0
++/* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __AXDIMM_PROCESS_MANAGER_H__
+@@ -20,7 +20,8 @@ struct axdimm_proc_desc {
+ struct axdimm_proc_resources {
+ 	int pid;
+ 	/* [TODO:] need to checkout performance impact of using just list,
+-	 * maybe some more advanced data structure is required (rb_tree)  */
++	 * maybe some more advanced data structure is required (rb_tree)
++	 */
+ 	struct list_head alloc_desc_list;
+ 	int rank_write_mask;
+ 	int rank_read_mask;
+@@ -39,7 +40,8 @@ struct axdimm_proc_resources {
+  */
+ struct axdimm_process_manager {
+ 	/* [TODO:] need to checkout performance impact of using just list,
+-	 * maybe some more advanced data structure is required (rb_tree)  */
++	 * maybe some more advanced data structure is required (rb_tree)
++	 */
+ 	atomic64_t enable_cleanup;
+ 	struct list_head active_process_list;
+ 	struct list_head leaked_process_list;
+diff --git a/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
+index 9dd9b62bf..56e1531d0 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
++++ b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
+@@ -14,7 +14,8 @@
+ #define MAX_MSK_VAL ((1 << NUM_OF_RANK) - 1)
+ 
+ /* this timeout value was tunned for FPGA, in order to avoid hangs, which
+- * presumably come from userspace rank acquire attempts in a loop */
++ * presumably come from userspace rank acquire attempts in a loop
++ */
+ #define RETRY_TIMEOUT_NS (100000)
+ 
+ static atomic_t wr_flag = ATOMIC_INIT(0);
+@@ -22,8 +23,6 @@ static atomic_t rd_flag = ATOMIC_INIT(0);
+ static DECLARE_WAIT_QUEUE_HEAD(wr_wq);
+ static DECLARE_WAIT_QUEUE_HEAD(rd_wq);
+ 
+-extern struct axdimm_process_manager axdimm_proc_mgr;
+-
+ static unsigned long acquire_free_rank_for_write(struct axdimm_rank_scheduler *rank_sched,
+ 				       unsigned int rw_msk, unsigned int wo_msk)
+ {
+@@ -45,14 +44,14 @@ static void find_free_ranks(struct axdimm_rank_scheduler *rank_sched,
+ 	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
+ 
+ 	/* fill wo_msk and rw_msk according to actual read and write
+-         * rank statuses and user requested mask */
++	 * rank statuses and user requested mask
++	 */
+ 	for (rank = 0; rank < NUM_OF_RANK; rank++) {
+ 		if (msk & (1 << rank) && axd_rs[rank].wr_stat == IDLE_STATE) {
+-			if (axd_rs[rank].rd_stat == IDLE_STATE) {
++			if (axd_rs[rank].rd_stat == IDLE_STATE)
+ 				*rw_msk |= (1 << rank);
+-			} else {
++			else
+ 				*wo_msk |= (1 << rank);
+-			}
+ 		}
+ 	}
+ 
+@@ -208,30 +207,29 @@ static __no_kcsan int wait_for_rank(struct axdimm_rank_scheduler *rank_sched,
+ 
+ int get_retry_read(struct axdimm_rank_scheduler *rank_sched, unsigned int arg)
+ {
+-	if (wait_for_rank(rank_sched, &rd_flag, &rd_wq) >= 0) {
++	if (wait_for_rank(rank_sched, &rd_flag, &rd_wq) >= 0)
+ 		return get_rank_read(rank_sched, arg);
+-	}
++
+ 	return -1;
+ }
+ 
+ int get_retry_write(struct axdimm_rank_scheduler *rank_sched, unsigned int arg)
+ {
+-	if (wait_for_rank(rank_sched, &wr_flag, &wr_wq) >= 0) {
++	if (wait_for_rank(rank_sched, &wr_flag, &wr_wq) >= 0)
+ 		return get_rank_write(rank_sched, arg);
+-	}
++
+ 	return -1;
+ }
+ int get_rank_retry(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 		   unsigned int arg)
+ {
+-	if (cmd == GET_RANK_FOR_READ) {
++	if (cmd == GET_RANK_FOR_READ)
+ 		return get_retry_read(rank_sched, arg);
+-	} else if (cmd == GET_RANK_FOR_WRITE) {
++	else if (cmd == GET_RANK_FOR_WRITE)
+ 		return get_retry_write(rank_sched, arg);
+-	} else {
+-		AXDIMM_ERR("Unknown rank operation cmd [%d]\n", cmd);
+-		return -EINVAL;
+-	}
++
++	AXDIMM_ERR("Unknown rank operation cmd [%d]\n", cmd);
++	return -EINVAL;
+ }
+ 
+ static int get_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+@@ -250,6 +248,7 @@ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 		    unsigned int arg)
+ {
+ 	int ret = get_rank(rank_sched, cmd, arg);
++
+ 	if (ret < 0) /* was not able to get rank for write, retry */
+ 		ret = get_rank_retry(rank_sched, cmd, arg);
+ 
+@@ -291,6 +290,7 @@ int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched,
+ 			unsigned int cmd, unsigned int arg)
+ {
+ 	int rank;
++
+ 	rank = release_and_wakeup(rank_sched, cmd, arg);
+ 
+ 	if (rank >= 0)
+diff --git a/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.h b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.h
+index 4726653f6..b3d810343 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.h
++++ b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0
++/* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __AXDIMM_RANK_SCHEDULER_H__
+@@ -25,6 +25,8 @@ struct axdimm_rank_scheduler {
+ 	struct mutex rank_stat_lock;
+ };
+ 
++extern struct axdimm_process_manager axdimm_proc_mgr;
++
+ void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched);
+ void init_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched);
+ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+diff --git a/drivers/pnm/axdimm_resource/axdimm_sysfs.c b/drivers/pnm/axdimm_resource/axdimm_sysfs.c
+index a4bb34bd4..ac21cb19e 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_sysfs.c
++++ b/drivers/pnm/axdimm_resource/axdimm_sysfs.c
+@@ -22,8 +22,6 @@
+ #define WITH_NULL_TERM(var) (var + 1)
+ 
+ static struct axdimm_dev *axdimm_device;
+-extern struct axdimm_rank_scheduler axdimm_rank_sched;
+-extern struct axdimm_process_manager axdimm_proc_mgr;
+ static struct kobject *ranks_kobj;
+ 
+ static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+diff --git a/drivers/pnm/axdimm_resource/axdimm_sysfs.h b/drivers/pnm/axdimm_resource/axdimm_sysfs.h
+index 4cf702a11..b0f5dab5a 100644
+--- a/drivers/pnm/axdimm_resource/axdimm_sysfs.h
++++ b/drivers/pnm/axdimm_resource/axdimm_sysfs.h
+@@ -7,6 +7,9 @@
+ struct device;
+ struct axdimm_dev;
+ 
++extern struct axdimm_rank_scheduler axdimm_rank_sched;
++extern struct axdimm_process_manager axdimm_proc_mgr;
++
+ int build_axdimm_sysfs(struct axdimm_dev *dev, struct device *resource_dev);
+ void destroy_axdimm_sysfs(void);
+ 
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+index b7697921f..5b23ce941 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/dba_resource/dba_allocator.c
+@@ -60,6 +60,7 @@ static int destroy_memory_pool(struct MemoryAllocator *alloc)
+ static int allocate_memory(struct dba_allocation *req)
+ {
+ 	int result = 0;
++
+ 	mutex_lock(&allocator_lock);
+ 
+ 	req->address = gen_pool_alloc(general_alloc.pool, req->size);
+@@ -82,7 +83,7 @@ static void deallocate_memory(struct dba_allocation *req)
+ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ {
+ 	struct dba_allocation request;
+-	int rc = 0;
++	int rc = -EFAULT;
+ 
+ 	rc = !!copy_from_user(&request, (void __user *)arg, sizeof(request));
+ 
+@@ -90,23 +91,18 @@ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ 		return -EFAULT;
+ 
+ 	switch (cmd) {
+-	case DBA_IOCTL_ALLOCATE: {
++	case DBA_IOCTL_ALLOCATE:
+ 		rc = allocate_memory(&request);
+ 		break;
+-	}
+-	case DBA_IOCTL_DEALLOCATE: {
++	case DBA_IOCTL_DEALLOCATE:
+ 		deallocate_memory(&request);
+ 		break;
+ 	}
+-	default:
+-		DBA_ERR("ioctl dispatching error");
+-		BUG();
+-	}
+ 
+ 	if (rc)
+ 		return rc;
+ 
+-	rc = !!copy_to_user((void __user*)arg, &request, sizeof(request));
++	rc = !!copy_to_user((void __user *)arg, &request, sizeof(request));
+ 
+ 	if (rc)
+ 		return -EFAULT;
+@@ -117,6 +113,7 @@ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ int initialize_memory_allocator(void)
+ {
+ 	int result = 0;
++
+ 	mutex_init(&allocator_lock);
+ 	mutex_lock(&allocator_lock);
+ 
+diff --git a/drivers/pnm/dba_resource/dba_allocator.h b/drivers/pnm/dba_resource/dba_allocator.h
+index 6bee68605..b2be488b2 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.h
++++ b/drivers/pnm/dba_resource/dba_allocator.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0
++/* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __DBA_ALLOCATOR_H__
+diff --git a/drivers/pnm/dba_resource/dba_log.h b/drivers/pnm/dba_resource/dba_log.h
+index ee9a964fb..888d812a6 100644
+--- a/drivers/pnm/dba_resource/dba_log.h
++++ b/drivers/pnm/dba_resource/dba_log.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0
++/* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __DBA_LOG_H__
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.c b/drivers/pnm/dba_resource/dba_thread_sched.c
+index 40d962b6b..6b390e59b 100644
+--- a/drivers/pnm/dba_resource/dba_thread_sched.c
++++ b/drivers/pnm/dba_resource/dba_thread_sched.c
+@@ -84,7 +84,7 @@ static int dba_get_thread(void)
+ 
+ 	if (unlikely(thread >= DBA_THREAD_NUM)) {
+ 		DBA_ERR("Invalid thread, skip acquiring");
+-		BUG();
++		return -EFAULT;
+ 	}
+ 
+ 	return thread;
+@@ -125,7 +125,7 @@ void destroy_thread_sched(void)
+ 
+ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
+ {
+-	int rc = 0;
++	int rc = -EFAULT;
+ 
+ 	switch (cmd) {
+ 	case DBA_IOCTL_GET_THREAD:
+@@ -134,9 +134,6 @@ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
+ 	case DBA_IOCTL_RELEASE_THREAD:
+ 		rc = dba_release_thread(arg);
+ 		break;
+-	default:
+-		DBA_ERR("ioctl dispatching error");
+-		BUG();
+ 	}
+ 
+ 	return rc;
+diff --git a/drivers/pnm/dba_resource/dba_thread_sched.h b/drivers/pnm/dba_resource/dba_thread_sched.h
+index c05ab26a6..d1f2c35cd 100644
+--- a/drivers/pnm/dba_resource/dba_thread_sched.h
++++ b/drivers/pnm/dba_resource/dba_thread_sched.h
+@@ -1,4 +1,4 @@
+-// SPDX-License-Identifier: GPL-2.0
++/* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __dba_thread_sched_H__
+diff --git a/include/linux/axdimm_common.h b/include/linux/axdimm_common.h
+index c58cdbb0e..fdb6463bc 100644
+--- a/include/linux/axdimm_common.h
++++ b/include/linux/axdimm_common.h
+@@ -26,7 +26,7 @@
+ #define EMBT_BASE_CS1_OFFSET (0x800000000ULL >> AXDIMM_MEMORY_SCALE)
+ 
+ /* The enumeration of axdimm memory addresses */
+-typedef enum _axd_mem_regions_e {
++enum axd_mem_regions_e {
+ 	AXDIMM_BASE_CS0 = 0,
+ 	AXDIMM_TAGS_CS0 = 1,
+ 	AXDIMM_PSUM_CS0 = 2,
+@@ -34,7 +34,7 @@ typedef enum _axd_mem_regions_e {
+ 	AXDIMM_TAGS_CS1 = 4,
+ 	AXDIMM_PSUM_CS1 = 5,
+ 	NUM_OF_MEM_REGION = 6 /* Number of index for memory mapping region */
+-} axd_mem_regions_e;
++};
+ 
+ struct axdmem_info {
+ 	uint64_t mem_offset[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+diff --git a/include/uapi/linux/dba_resources.h b/include/uapi/linux/dba_resources.h
+index 35f66157b..08a529a73 100644
+--- a/include/uapi/linux/dba_resources.h
++++ b/include/uapi/linux/dba_resources.h
+@@ -1,3 +1,4 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+ /*
+  * Copyright (C) 2023 Samsung Electronics Co. LTD
+  *
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 9d37c7620..ccad58e74 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -1,3 +1,4 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+ /*
+  * Copyright (C) 2021 Samsung Electronics Co. LTD
+  *
+@@ -137,22 +138,22 @@
+ #define RANK_REGION_PSUM_OFFSET_PATH RANK_REGION_OFFSET_PATH(psum)
+ 
+ /* The enumeration of axdimm blocks addresses */
+-typedef enum _axd_mem_blocks_e {
++enum axd_mem_blocks_e {
+ 	AXDIMM_BLOCK_BASE = 0,
+ 	AXDIMM_BLOCK_INST = 1,
+ 	AXDIMM_BLOCK_CFGR = 2,
+ 	AXDIMM_BLOCK_TAGS = 3,
+ 	AXDIMM_BLOCK_PSUM = 4,
+ 	AXDIMM_BLOCK_MAX = 5
+-} axd_mem_blocks_e;
++};
+ 
+ /* The enumeration of table allocation preferences */
+-typedef enum _axd_user_preferences {
++enum axd_user_preferences {
+ 	AXDIMM_ALLOC_AUTO = 0,
+ 	AXDIMM_ALLOC_REPLICATE_ALL,
+ 	AXDIMM_ALLOC_DISTRIBUTE_ALL,
+ 	AXDIMM_ALLOC_SINGLE
+-} axd_user_preferences;
++};
+ 
+ #define AXD_USER_PREF_BITS 8
+ #define AXD_USER_RANK_BITS 8
+@@ -182,7 +183,7 @@ struct axd_memory_alloc_request {
+ 	uint64_t descriptor;
+ 	uint64_t *user_objects_sizes;
+ 	uint64_t num_user_objects;
+-	axd_user_preferences preference;
++	enum axd_user_preferences preference;
+ };
+ 
+ /* Get memory objects by descriptor */
+diff --git a/install_axdimm_headers.sh b/install_axdimm_headers.sh
+index 96de4ba22..8b44dfebe 100755
+--- a/install_axdimm_headers.sh
++++ b/install_axdimm_headers.sh
+@@ -5,4 +5,5 @@
+ set -e
+ 
+ sudo cp -v include/uapi/linux/libaxdimm.h /usr/include/linux
+-sudo cp -v include/uapi/linux/libaxdimm.h /usr/src/linux-headers-`uname -r`/include/uapi/linux/libaxdimm.h
++sudo cp -v include/uapi/linux/libaxdimm.h \
++ /usr/src/linux-headers-`uname -r`/include/uapi/linux/libaxdimm.h
+diff --git a/install_axdimm_resource.sh b/install_axdimm_resource.sh
+index c47a138e6..30be9c996 100755
+--- a/install_axdimm_resource.sh
++++ b/install_axdimm_resource.sh
+@@ -6,7 +6,8 @@ set -e
+ 
+ script_dir="`dirname "$0"`"
+ 
+-sudo cp -v drivers/pnm/axdimm_resource/*.ko /lib/modules/`uname -r`/kernel/drivers/pnm/axdimm_resource/
++sudo cp -v drivers/pnm/axdimm_resource/*.ko \
++ /lib/modules/`uname -r`/kernel/drivers/pnm/axdimm_resource/
+ sudo modprobe axdimm_resource "$@"
+ 
+ sh "$script_dir/install_axdimm_headers.sh"
+diff --git a/install_dba_resource.sh b/install_dba_resource.sh
+index f2680b61e..5cfb06e63 100755
+--- a/install_dba_resource.sh
++++ b/install_dba_resource.sh
+@@ -1,4 +1,5 @@
+ #!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
+ 
+ set -e
+ 
+diff --git a/install_debs.sh b/install_debs.sh
+index 3f664102e..e8fd4c8b1 100755
+--- a/install_debs.sh
++++ b/install_debs.sh
+@@ -1,3 +1,5 @@
++# SPDX-License-Identifier: GPL-2.0
++
+ cd $(dirname $0)
+ 
+ ./clean_linux_debs.py . -y
+-- 
+2.34.1
+

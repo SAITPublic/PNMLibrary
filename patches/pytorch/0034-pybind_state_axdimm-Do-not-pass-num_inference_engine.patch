@@ -1,0 +1,36 @@
+From 505be0476785cfc63ecfede392b71cecd8ae718b Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 1 Dec 2021 13:47:18 +0900
+Subject: [PATCH 034/128] [pybind_state_axdimm] Do not pass
+ 'num_inference_engines' anymore
+
+AXDIMM library doesn't need this parameter anymore, thus remove it.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/python/pybind_state_axdimm.cc | 9 +++------
+ 1 file changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 0866558d..aa7a4c21 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -32,12 +32,9 @@ REGISTER_BLOB_FEEDER(AXDIMM, TensorFeeder<AXDIMMContext>);
+ namespace py = pybind11;
+ 
+ void addAXDIMMGlobalMethods(py::module& m) {
+-  m.def(
+-      "axdimm_starter",
+-      [](unsigned num_inference_engines, const std::string& weight_path) {
+-        return static_cast<int>(
+-            axdimm::axdimm_starter(num_inference_engines, weight_path));
+-      });
++  m.def("axdimm_starter", [](const std::string& weight_path) {
++    return static_cast<int>(axdimm::axdimm_starter(weight_path));
++  });
+   m.def("axdimm_closer", []() {
+     return static_cast<int>(axdimm::axdimm_closer());
+   });
+-- 
+2.34.1
+

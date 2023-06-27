@@ -1,0 +1,319 @@
+From c63512bce6d23944deb1a618aefbd3a60cc96628 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Thu, 3 Aug 2023 05:42:42 -0400
+Subject: [PATCH 157/161] [pnm][zswap] Add HOWTO for pnm zswap
+
+The HOWTO document was added. The manual contains brief description how
+to build and run kernel with pnm-zswap support.
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md |   3 +-
+ PNM_ZSWAP_HOW_TO.md | 281 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 283 insertions(+), 1 deletion(-)
+ create mode 100644 PNM_ZSWAP_HOW_TO.md
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index ed80412c3..a1af6b1c5 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -22,7 +22,8 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+       2. CXL (DEV_SLS_CXL) (NEW)
+     choice[1-2?]: -> choose between AXDIMM and CXL SLS
+ 
+-CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y
++# If CXL-zSwap is required set the next options, otherwise just leave it as default.
++CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y # Or N if you don't want to build kernel with zswap
+   CXL-zSwap simulator (PNM_ZSWAP_SIM) [Y/n/m/?] (NEW) m
+   Modify allocation policy in zbud allocator (PNM_ZSWAP_MODIFY_ZBUD) [Y/n/?] (NEW) y
+     A NUMA node index (PNM_ZSWAP_NUMA_NODE) [1] (NEW) 1
+diff --git a/PNM_ZSWAP_HOW_TO.md b/PNM_ZSWAP_HOW_TO.md
+new file mode 100644
+index 000000000..d463723b8
+--- /dev/null
++++ b/PNM_ZSWAP_HOW_TO.md
+@@ -0,0 +1,281 @@
++Here is a brief instruction how to build and run linux kernel with pnm-zswap.
++
++# Build kernel
++
++First of all, we should prepare the build environment:
++```bash
++make clean # clear previous build
++
++# The next commands should be executed single time if kernel config doesn't change
++rm -f .config; # clear old kernel config, if exists
++cp -v config-pnm .config # use predefined pnm-config
++```
++
++Now, we are ready to build kernel:
++```bash
++make -j `getconf _NPROCESSORS_ONLN` # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
++```
++---
++**NOTE**
++
++To speed-up build process is recommended to use `ccache`:
++```bash
++make CC="ccache gcc" -j `getconf _NPROCESSORS_ONLN`
++```
++---
++
++During the build process you should specify several parameters, that are not predefined in `config-pnm` file.
++Currently, our kernel contains modules for SLS and IMDB devices and there is no possibility to disable them,
++so you should just ignore it during the build.
++
++During the build you should setup all parameters in next states:
++```bash
++* DAX: direct access to differentiated memory
++*
++DAX: direct access to differentiated memory (DAX) [Y/?] y
++  Device DAX: direct access mapping device (DEV_DAX) [M/n/y/?] m
++    PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
++  HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
++  DEV_SLS support (DEV_SLS) [Y/n/?] y
++  KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
++  A base address of SLS range (DEV_SLS_BASE_ADDR) [4] (NEW) 4 # Put 4 or ignore
++  A scale of SLS memory range (DEV_SLS_MEMORY_SCALE) [1] (NEW) 1 # Put 1 or ignore
++  Choose PNM SLS type
++  > 1. AXDIMM (DEV_SLS_AXDIMM) (NEW)
++    2. CXL (DEV_SLS_CXL) (NEW)
++  choice[1-2?]: 1 # Put 1 or ignore
++
++Database Accelerator (IMDB) [Y/n/?] y
++SLS Resource Manager (SLS_RESOURCE) [M/n/y/?] m
++CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y # This flag enables PNM_ZSWAP in kernel
++  CXL-zSwap simulator (PNM_ZSWAP_SIM) [Y/n/m/?] (NEW) y # This flag enables build of PNM_ZSWAP simulators (ps and fs)
++  Modify allocation policy in zbud allocator (PNM_ZSWAP_MODIFY_ZBUD) [Y/n/?] (NEW) y # Here we enable modification of zbud
++    A NUMA node index (PNM_ZSWAP_NUMA_NODE) [1] (NEW) 1 # Related to flag above, here we define the numa-node that is used as memory storage
++*
++* IMDB Resource Manager
++*
++IMDB Resource Manager (IMDB_RESOURCE) [M/n/y/?] m
++A scale of IMDB memory range (IMDB_MEMORY_SCALE) [0] (NEW) 0 # Put 0 or ignore
++```
++
++After several minutes the build should be finished with line:
++```
++Kernel: arch/x86/boot/bzImage is ready  (#180)
++```
++
++# Run QEMU for zswap
++
++## Create QEMU image
++
++First off all, you should prepare the image for qemu. You can use script `create_rootfs.sh` from `./scripts/pnm/zswap`
++directory.
++```bash
++./scripts/pnm/zswap/create_rootfs.sh [path to image directory]
++```
++After creating rootfs, you will end in shell that mounted to 'qemu image'.
++In this shell you should complete next steps:
++1) Change root password
++```bash
++passwd
++```
++2) Package update
++```bash
++apt update
++apt upgrade
++apt install vim pciutils debian-keyring debian-archive-keyring \
++               openssh-server numactl build-essential cmake gcc g++
++```
++3) Modify sshd config
++```bash
++vim /etc/ssh/sshd_config
++...
++PermitRootLogin yes
++...
++```
++4) Add next commands to autorun to enable the network (you should install kernel modules in this case):
++```bash
++ip link set ens3 up
++dhclient ens3
++```
++5) Quit
++
++---
++**Optional**
++
++You can install kernel modules into qemu image.
++```bash
++make INSTALL_MOD_PATH=../mount-point.dir modules_install
++```
++---
++
++## Run qemu with compiled kernel
++
++To check kernel you should run qemu by `run_sim.sh` script:
++```bash
++./scripts/pnm/zswap/qemu/run_sim.sh [path to kernel root] [path to qemu's image directory]
++```
++
++When OS load you will be able to connect to QEMU by ssh with `root` user and 22242 port. Also, you can use qemu console
++if ssh is not working for some reason:
++```bash
++ssh -p 22242 root@localhost
++```
++
++## Run functional simulator
++
++The default mode for zswap simulator is `functional simulator` with `deflate` compression algorithm. To enable pnm zswap
++you should execute next command:
++```bash
++./scripts/pnm/zswap/qemu/swap_setting.sh
++./scripts/pnm/zswap/qemu/pnm_sim_mode.sh
++```
++The output after that should be the next:
++```
++always madvise [never]
++always defer defer+madvise madvise [never]
++1
++/sys/kernel/debug/pnm_zswap/stored_pages:0
++/sys/kernel/debug/pnm_zswap/pool_total_size:0
++/sys/kernel/debug/pnm_zswap/duplicate_entry:0
++/sys/kernel/debug/pnm_zswap/written_back_pages:0
++/sys/kernel/debug/pnm_zswap/reject_compress_poor:0
++/sys/kernel/debug/pnm_zswap/reject_kmemcache_fail:0
++/sys/kernel/debug/pnm_zswap/reject_alloc_fail:0
++/sys/kernel/debug/pnm_zswap/reject_reclaim_fail:0
++/sys/kernel/debug/pnm_zswap/pool_limit_hit:0
++```
++
++And in `dmesg` you should see next line:
++```
++[   70.299602] [pnm_drv]: cxl_pnm_drv_run
++[   70.299756] [pnm_drv]: successfully register pnm misc device
++[   70.299977] [pnm_drv]: kthread_bind
++[   70.301229] [pnm_drv]: wake_up_process
++[   70.302695] [pnm_drv]: cxl_pnm_drv loaded
++[   70.302820] pnm_zswap_sim: [pnm_sim] pnm simulator engine loaded!
++[   70.303554] pnm_zswap_sim: [pnm_sim] hidden_pool: 0x0000000086c16d3f-0x00000000eec8e83b 8589934592 bytes
++[   70.303562] pnm_zswap_sim: [pnm_sim] compress_queue: 0x00000000eec8e83b-0x00000000eec8e83b    4096 bytes
++[   70.303566] pnm_zswap_sim: [pnm_sim] decompress_queue: 0x00000000e8aa19ef-0x000000006a3bb538    4096 bytes
++[   70.303569] pnm_zswap_sim: [pnm_sim] completion_queue: 0x000000006a3bb538-0x0000000073f082e9    4096 bytes
++[   70.303815] pnm_zswap_sim: [pnm_sim] compress unit[0] generation succeeded
++[   70.303909] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.303994] pnm_zswap_sim: [pnm_sim] compress unit[1] generation succeeded
++[   70.304098] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.304167] pnm_zswap_sim: [pnm_sim] compress unit[2] generation succeeded
++[   70.304262] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.304317] pnm_zswap_sim: [pnm_sim] compress unit[3] generation succeeded
++[   70.304390] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.304458] pnm_zswap_sim: [pnm_sim] decompress unit[0] generation succeeded
++[   70.304535] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.304638] pnm_zswap_sim: [pnm_sim] decompress unit[1] generation succeeded
++[   70.304780] pnm_zswap_sim: [pnm_sim] decompress unit[2] generation succeeded
++[   70.304785] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.304864] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.304941] pnm_zswap_sim: [pnm_sim] decompress unit[3] generation succeeded
++[   70.305064] [FS] Compression unit created. Compression algorithm is [deflate]
++[   70.306669] pnm_zswap: NODE 0 Free/Total Pages:   956006 /  1007754
++[   70.306673] pnm_zswap: NODE 1 Free/Total Pages:  5126754 /  5160208
++[   70.306675] pnm_zswap: Total Pages:  6167962
++```
++
++You can use test application to trigger page swap. The application is located in `scripts/pnm/zswap/tests/madvise`.
++```bash
++cd scripts/pnm/zswap/tests/madvise
++make
++./madvice [num of pages] [num of threads] #[num of threads] should be lower or equal to 8
++```
++In `dmesg` you should see the lines like that:
++```
++[  326.409966] pnm_zswap_sim: [HOST] OFFLOADING TO PNM
++[  326.409973] pnm_zswap_sim: [HOST-C][558] IDLE UNITs 4
++[  326.409976] pnm_zswap_sim: [HOST-C][558] ALLOCATED IN PNM [0] 1 IDLE UNITs 3
++[  326.409979] pnm_zswap_sim: [PNM-C][558] STATE [RUNNING] - READY TO RUN
++[  326.410040] [FS] Page compression done. Compression ratio: 4096 / 22
++[  326.410042] pnm_zswap_sim: [PNM-C][558] STATE [DONE] - FINISH
++[  326.410043] pnm_zswap_sim: [HOST-C][558] READ RESULT [0] [22]
++[  326.410046] pnm_zswap_sim: [PNM-C][558] STATE [IDLE] - HOST GET RESULT
++[  326.410046] pnm_zswap_sim: [HOST] PNM COMPRESSION FINISHED 0
++[  331.410323] pnm_zswap_sim: [HOST] OFFLOADING TO PNM
++[  331.410327] pnm_zswap_sim: [HOST-D][558] IDLE UNITs 4
++[  331.410330] pnm_zswap_sim: [HOST-D][558] ALLOCATED IN PNM [0] 1 IDLE UNITs 3
++[  331.410333] pnm_zswap_sim: [PNM-D][558] STATE [RUNNING] - READY TO RUN
++[  331.410349] [FS] Decompression done. Original size (22) bytes. Decompressed size (4096) bytes
++[  331.410352] pnm_zswap_sim: [HOST-D][558] READ RESULT [0] [4096]
++[  331.410354] pnm_zswap_sim: [PNM-D][558] STATE [DONE] - FINISH
++[  331.410355] pnm_zswap_sim: [HOST] PNM DECOMPRESSION FINISHED 0
++[  331.410356] pnm_zswap_sim: [PNM-D][558] STATE [IDLE] - HOST GET RESULT
++```
++
++To the compression algorithm can be changed by updating `compressor` parameter for `pnm_zswap_sim` module. You should
++stop the simulator, if it's active, to update `compressor` parameter:
++```bash
++echo "N" > /sys/module/pnm_zswap_sim/parameters/enabled
++```
++then you should select the compression algorithm, and store their name to `compressor`
++```bash
++echo "lzo" > /sys/module/pnm_zswap_sim/parameters/compressor #lzo is a compression algorithm
++```
++
++---
++**NOTE**
++
++There are only two algorithms is available by default: `deflate` and `lzo`. The other algorithm should be loaded via crypto
++library. The list of supported algorithm can be found in `/proc/crypto` by `compression` type.
++---
++
++When the algorithm is set, the simulator should be run:
++```bash
++echo "Y" > /sys/module/pnm_zswap_sim/parameters/enabled
++```
++
++## Run performance simulator
++
++As we said early, the default mode for the simulator is a `functional` simulator. So, to run performance simulator you
++should stop simulator (if sim. is running):
++```bash
++echo "N" > /sys/module/pnm_zswap_sim/parameters/enabled
++```
++After simulator stop, you should write `ps` value to `compressor` parameter. This value switch simulator from functional
++to performance mode.
++```bash
++echo "ps" > /sys/module/pnm_zswap_sim/parameters/compressor
++```
++Then you can enable simulator and make some benchmark in performance mode.
++```bash
++echo "Y" > /sys/module/pnm_zswap_sim/parameters/enabled
++```
++The output should look like that:
++```
++[ 2011.077935] pnm_zswap_sim: [pnm_sim] pnm simulator engine loaded!
++[ 2011.078053] pnm_zswap_sim: [pnm_sim] hidden_pool: 0x0000000086c16d3f-0x00000000eec8e83b 8589934592 bytes
++[ 2011.078058] pnm_zswap_sim: [pnm_sim] compress_queue: 0x00000000eec8e83b-0x00000000eec8e83b    4096 bytes
++[ 2011.078063] pnm_zswap_sim: [pnm_sim] decompress_queue: 0x00000000e8aa19ef-0x000000006a3bb538    4096 bytes
++[ 2011.078065] pnm_zswap_sim: [pnm_sim] completion_queue: 0x000000006a3bb538-0x0000000073f082e9    4096 bytes
++[ 2011.078707] pnm_zswap_sim: [pnm_sim] compress unit[0] generation succeeded
++[ 2011.078778] pnm_zswap_sim: [PS] Initialize performance simulator
++[ 2011.079058] pnm_zswap_sim: [pnm_sim] compress unit[1] generation succeeded
++[ 2011.079158] pnm_zswap_sim: [PS] Initialize performance simulator
++[ 2011.079395] pnm_zswap_sim: [pnm_sim] compress unit[2] generation succeeded
++[ 2011.079553] pnm_zswap_sim: [PS] Initialize performance simulator
++[ 2011.079594] pnm_zswap_sim: [pnm_sim] compress unit[3] generation succeeded
++[ 2011.079783] pnm_zswap_sim: [pnm_sim] decompress unit[0] generation succeeded
++[ 2011.079848] pnm_zswap_sim: [PS] Initialize performance simulator
++[ 2011.079980] pnm_zswap_sim: [pnm_sim] decompress unit[1] generation succeeded
++[ 2011.080067] pnm_zswap_sim: [PS] Initialize performance simulator
++[ 2011.080195] pnm_zswap_sim: [PS] Initialize performance simulator
++[ 2011.080250] pnm_zswap_sim: [pnm_sim] decompress unit[2] generation succeeded
++[ 2011.080386] pnm_zswap_sim: [PS] Initialize performance simulator
++[ 2011.080549] pnm_zswap_sim: [pnm_sim] decompress unit[3] generation succeeded
++```
++
++# Power off QEMU
++
++You should disable simulator before shutdown QEMU, otherwise the OS will have stuck:
++```bash
++echo "N" > /sys/module/pnm_zswap_sim/parameters/enabled
++```
++
++Then you can poweroff OS with:
++```bash
++poweroff
++```
+-- 
+2.34.1
+

@@ -1,0 +1,37 @@
+From 99bb2aaa417b3a0c9f5c6d3620cb3735f5b1aa32 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Mon, 24 Jul 2023 01:37:54 -0400
+Subject: [PATCH 145/161] [zswap] Fix bug in create_rootfs.sh
+
+Fix mount path in create_rootfs.sh script.
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ scripts/pnm/zswap/create_rootfs.sh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/scripts/pnm/zswap/create_rootfs.sh b/scripts/pnm/zswap/create_rootfs.sh
+index 438c54c01..80984a86e 100755
+--- a/scripts/pnm/zswap/create_rootfs.sh
++++ b/scripts/pnm/zswap/create_rootfs.sh
+@@ -9,7 +9,7 @@ IMAGE_PATH=${ROOT_PATH}/${IMAGE_NAME}
+ /usr/bin/qemu-img create ${IMAGE_PATH} 20g
+ mkfs.ext4 ${IMAGE_PATH}
+ mkdir -p ${ROOT_PATH}/mount-point.dir
+-sudo mount -o loop ${IMAGE_NAME} ${ROOT_PATH}/mount-point.dir/
++sudo mount -o loop ${IMAGE_PATH} ${ROOT_PATH}/mount-point.dir/
+ sudo apt install debootstrap debian-keyring debian-archive-keyring
+ 
+ # When debootstrap install if wget error occurs,
+@@ -17,7 +17,7 @@ sudo apt install debootstrap debian-keyring debian-archive-keyring
+ 
+ ## for Ubuntu 22.04
+ sudo debootstrap --include=openssh-server,linux-firmware \
+-      --arch amd64 jammy /home/ylavrinenko/vm/mount-point.dir/
++      --arch amd64 jammy ${ROOT_PATH}/mount-point.dir/
+ 
+ ## for Ubuntu 16.04
+ # sudo debootstrap --include=openssh-server,linux-firmware --arch amd64 xenial ../mount-point.dir/
+-- 
+2.34.1
+

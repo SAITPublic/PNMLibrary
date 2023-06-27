@@ -1,0 +1,248 @@
+From 810076761f10e6b296816740147228c18a7e77db Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 01:42:12 +0300
+Subject: [PATCH 086/128] [aten] Add secure tensor class for secure and sgx
+ operations
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ .../ATen/native/axdimm/AxdimmSecureTensor.cpp | 133 ++++++++++++++++++
+ .../ATen/native/axdimm/AxdimmSecureTensor.h   |  84 +++++++++++
+ 2 files changed, 217 insertions(+)
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+new file mode 100644
+index 00000000..b766b440
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+@@ -0,0 +1,133 @@
++#include "secure/plain/devices/untrusted_axdimm_params.h"
++
++#include <ATen/native/axdimm/AxdimmSecureTensor.h>
++
++#include <torch/library.h>
++#include <torch/types.h>
++
++#include <algorithm>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++AxdimmSecureTensor::AxdimmSecureTensor(
++    const std::string& weights_path,
++    const c10::ScalarType& scalar_type,
++    const at::Tensor& tables_rows_num,
++    AxdimmTensorType tensor_type,
++    uint32_t num_tables,
++    uint32_t sparse_feature_size,
++    axd_user_preferences preference,
++    bool precompile,
++    bool with_tag)
++    : AxdimmBaseTensor(
++          weights_path,
++          scalar_type,
++          tables_rows_num,
++          tensor_type,
++          num_tables,
++          sparse_feature_size,
++          preference),
++      precompile_(precompile),
++      with_tag_(with_tag) {
++  load(mmap_weights_file());
++}
++
++AxdimmSecureTensor::AxdimmSecureTensor(
++    const at::Tensor& weights,
++    AxdimmTensorType type,
++    uint32_t num_tables,
++    uint32_t features_per_table,
++    uint32_t sparse_feature_size,
++    axd_user_preferences preference,
++    bool precompile,
++    bool with_tag)
++    : AxdimmBaseTensor(
++          weights,
++          type,
++          num_tables,
++          features_per_table,
++          sparse_feature_size,
++          preference),
++      precompile_(precompile),
++      with_tag_(with_tag) {
++  check_params(weights);
++  load(weights.data_ptr());
++}
++
++AxdimmSecureTensor::AxdimmSecureTensor(
++    const at::Tensor& weights,
++    AxdimmTensorType type,
++    axd_user_preferences preference,
++    bool precompile,
++    bool with_tag)
++    : AxdimmBaseTensor(
++          weights,
++          type,
++          weights.sizes()[0],
++          weights.sizes()[1],
++          weights.sizes()[2],
++          preference),
++      precompile_(precompile),
++      with_tag_(with_tag) {
++  check_params(weights);
++  load(weights.data_ptr());
++}
++
++void AxdimmSecureTensor::check_params(const at::Tensor& weights) const {
++  TORCH_CHECK(
++      type_ == AxdimmTensorType::AXDIMM_SECURE ||
++          type_ == AxdimmTensorType::AXDIMM_SECURE_SGX,
++      "Secure tensor type must be AXDIMM_SECURE or AXDIMM_SECURE_SGX");
++}
++
++void AxdimmSecureTensor::load(const void* weights_data) {
++  TORCH_INTERNAL_ASSERT(weights_data, "Weights data can't be null");
++  if (type_ == AxdimmTensorType::AXDIMM_SECURE) {
++    if (scalar_type_ == torch::kFloat32) {
++      runner_ = ::axdimm::secure::make_runner(
++          ::axdimm::secure::SecureRunnerType::FLOAT);
++    } else {
++      runner_ = ::axdimm::secure::make_runner(
++          ::axdimm::secure::SecureRunnerType::INT);
++    }
++  } else if (type_ == AxdimmTensorType::AXDIMM_SECURE_SGX) {
++    if (scalar_type_ == torch::kFloat32) {
++      runner_ = ::axdimm::secure::make_runner(
++          ::axdimm::secure::SecureRunnerType::FLOAT_SGX);
++    } else {
++      runner_ = ::axdimm::secure::make_runner(
++          ::axdimm::secure::SecureRunnerType::INT_SGX);
++    }
++  }
++
++  // [TODO AXDIMM-477: refactor secure part to use uint32_t tables length]
++  rows_.insert(rows_.begin(), tables_rows_num_.begin(), tables_rows_num_.end());
++  const auto& rows_view = ::axdimm::make_view(std::cref(rows_).get());
++
++  ::axdimm::secure::DeviceArguments args(
++      ::axdimm::secure::UntrustedAxdimmDeviceParams{
++          .rows = rows_view,
++          .sparse_feature_size = sparse_feature_size_,
++          .with_tag = with_tag_,
++          .preference = static_cast<axd_user_preferences>(preference_),
++          .cache_exec_context = precompile_});
++  runner_->init(&args);
++
++  if (scalar_type_ == torch::kFloat32) {
++    auto tensor_data_ptr = static_cast<const float*>(weights_data);
++    const auto& weights_view =
++        ::axdimm::make_view(tensor_data_ptr, tensor_data_ptr + tables_size_);
++    const auto& scaled_data = apply_scale<float>(weights_view);
++    runner_->load_tables(
++        scaled_data.data(), rows_view, sparse_feature_size_, with_tag_);
++  } else {
++    runner_->load_tables(
++        weights_data, rows_view, sparse_feature_size_, with_tag_);
++  }
++}
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+new file mode 100644
+index 00000000..98776725
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+@@ -0,0 +1,84 @@
++#ifndef __AXDIMM_SECURE_TENSOR__
++#define __AXDIMM_SECURE_TENSOR__
++
++#include "ai/api/axdimm.h"
++#include "secure/common/axdimm_secure_runners_factory.h"
++
++#include <ATen/ATen.h>
++#include <ATen/native/axdimm/AxdimmBaseTensor.h>
++#include <ATen/native/axdimm/AxdimmTypeHelpers.h>
++
++#include <algorithm>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++//! This class represents internal at::Tensor handle, for device specific logic
++//! implementation
++class AxdimmSecureTensor : public AxdimmBaseTensor {
++ public:
++  AxdimmSecureTensor(
++      const std::string& weights_path,
++      const c10::ScalarType& scalar_type,
++      const at::Tensor& tables_rows_num,
++      AxdimmTensorType tensor_type,
++      uint32_t num_tables,
++      uint32_t sparse_feature_size,
++      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
++      bool precompile = true,
++      bool with_tag = false);
++  AxdimmSecureTensor(
++      const at::Tensor& tables,
++      AxdimmTensorType type,
++      uint32_t num_tables,
++      uint32_t features_per_table,
++      uint32_t sparse_feature_size,
++      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
++      bool precompile = true,
++      bool with_tag = false);
++
++  AxdimmSecureTensor(
++      const at::Tensor& weights,
++      AxdimmTensorType type,
++      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
++      bool precompile = true,
++      bool with_tag = false);
++
++  bool with_tag() const {
++    return with_tag_;
++  }
++
++  ::axdimm::secure::ISecureRunner& get_runner() const {
++    return *runner_;
++  }
++
++ private:
++  template <typename T>
++  auto apply_scale(::axdimm::common_view<const T> src) {
++    using secure_core_value_type =
++        typename SecureTypeTraits<T>::secure_engine_value_t;
++    std::vector<secure_core_value_type> output;
++    output.reserve(src.size());
++    std::transform(src.begin(), src.end(), output.begin(), [](const auto v) {
++      return static_cast<secure_core_value_type>(
++          v * SecureTypeTraits<T>::SCALE_FACTOR);
++    });
++    return output;
++  }
++
++  void check_params(const at::Tensor& weights) const;
++  void load(const void* weights_data);
++
++  std::shared_ptr<::axdimm::secure::ISecureRunner> runner_;
++  // [TODO AXDIMM-477: refactor secure part to use uint32_t tables length]
++  std::vector<uint64_t> rows_;
++  bool precompile_;
++  bool with_tag_;
++};
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
++
++#endif
+-- 
+2.34.1
+

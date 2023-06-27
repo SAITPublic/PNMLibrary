@@ -1,0 +1,171 @@
+From f0937b179395513afb5647f284270fecafa2326e Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 20 Dec 2021 12:59:22 +0900
+Subject: [PATCH 016/161] [drivers/dax/axdimm] Setup caching flags in mmap
+ handler
+
+Use PAT (Documentation/x86/pat.rst) to setup caching flags for memory regions
+instead of legacy MTRR method.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm-private.h |  2 -
+ drivers/dax/axdimm.c         | 79 ++++++++++++------------------------
+ drivers/dax/device.c         |  1 -
+ 3 files changed, 27 insertions(+), 55 deletions(-)
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index f0116f207..a8effb744 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -30,8 +30,6 @@ void init_axdimm_device(struct dev_dax *dev_dax);
+ 
+ void cleanup_axdimm_device(void);
+ 
+-void remap_axdimm_ranges(struct dev_dax *dev_dax);
+-
+ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma);
+ 
+ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index bb03a6984..9160c2155 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -19,10 +19,10 @@ typedef struct axdmem_info axdmem_info;
+ 
+ /* Helper structure containing auxiliary info for AXDIMM device */
+ static struct axdimm_dev {
+-	struct semaphore sem_axdimm;     /* semaphore */
+-	struct axdmem_info mem_info;     /* memory info */
++	struct semaphore sem_axdimm; /* semaphore */
++	struct axdmem_info mem_info; /* memory info */
+ 	struct cdev axdimm_meminfo_cdev; /* char device for AXDIMM meminfo */
+-	dev_t axdimm_meminfo_dev_no;     /* char device number for AXDIMM meminfo */
++	dev_t axdimm_meminfo_dev_no; /* char device number for AXDIMM meminfo */
+ } axdimm_device;
+ 
+ /* A custom class for meminfo char devices */
+@@ -176,44 +176,19 @@ static void axdimm_setmeminfo(struct axdmem_info *mem_info)
+ }
+ 
+ /*
+- * Set Offset, Size and flags for memremap
++ * Set offsets for AXDIMM blocks with different caching policies
+  */
+-static int axdimm_set_ioremap_info(ulong *offset, ulong *remap_size,
+-				   uint *permission)
++static void axdimm_set_ioremap_info(ulong *offset)
+ {
+ 	/* Set offset(iomem resource start address) */
+ 	offset[AXDIMM_BASE_CS0] =
+-		AXDIMM_BASE_ADDR +
+ 		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_BASE];
+ 	offset[AXDIMM_PSUM_CS0] =
+-		AXDIMM_BASE_ADDR +
+ 		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_PSUM];
+ 	offset[AXDIMM_BASE_CS1] =
+-		AXDIMM_BASE_ADDR +
+ 		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_BASE];
+ 	offset[AXDIMM_PSUM_CS1] =
+-		AXDIMM_BASE_ADDR +
+ 		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_PSUM];
+-
+-	/* Set remap_size (size for remap) */
+-	remap_size[AXDIMM_BASE_CS0] =
+-		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_PSUM] -
+-		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_BASE];
+-	remap_size[AXDIMM_PSUM_CS0] =
+-		axdimm_device.mem_info.mem_size[0][AXDIMM_BLOCK_PSUM];
+-	remap_size[AXDIMM_BASE_CS1] =
+-		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_PSUM] -
+-		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_BASE];
+-	remap_size[AXDIMM_PSUM_CS1] =
+-		axdimm_device.mem_info.mem_size[1][AXDIMM_BLOCK_PSUM];
+-
+-	/* Set flags(MEMREMAP_WB or MEMREMAP_WT or MEMREMAP_WC) */
+-	permission[AXDIMM_BASE_CS0] = MEMREMAP_WC; // 1 << 2;
+-	permission[AXDIMM_PSUM_CS0] = MEMREMAP_WB; // 1 << 0;
+-	permission[AXDIMM_BASE_CS1] = MEMREMAP_WC; // 1 << 2;
+-	permission[AXDIMM_PSUM_CS1] = MEMREMAP_WB; // 1 << 0;
+-
+-	return 0;
+ }
+ 
+ static int setup_axdimm_ranges(struct dev_dax *dev_dax)
+@@ -267,29 +242,26 @@ static int setup_axdimm_ranges(struct dev_dax *dev_dax)
+ 	return rc;
+ }
+ 
+-void remap_axdimm_ranges(struct dev_dax *dev_dax)
++static pgprot_t get_page_prot(struct vm_area_struct *vma)
+ {
+-	unsigned int permission[NUM_OF_MEM_REGION];
+ 	unsigned long offset[NUM_OF_MEM_REGION];
+-	unsigned long remap_size[NUM_OF_MEM_REGION];
+-	int r;
+-	void *addr;
+-	struct device *dev = &dev_dax->dev;
+-
+-	/* set offset, size & permission */
+-	axdimm_set_ioremap_info(offset, remap_size, permission);
+-
+-	for (r = 0; r < NUM_OF_MEM_REGION; r++) {
+-		printk(KERN_INFO "[DAX_AXDIMM_DD] Initializing %d/%d block\n",
+-		       r + 1, NUM_OF_MEM_REGION);
+-		printk(KERN_INFO "[DAX_AXDIMM_DD] Address: %lx, size: %lu\n",
+-		       offset[r], remap_size[r]);
+-		addr = devm_memremap(dev, offset[r], remap_size[r],
+-				     permission[r]);
+-		printk(KERN_INFO
+-		       "[DAX_AXDIMM_DD] Mapped block %d at address %p\n",
+-		       r, addr);
++	int i;
++	unsigned long phys_offset;
++
++	/* set physical offsets for AXDIMM blocks with different caching policies */
++	axdimm_set_ioremap_info(offset);
++	phys_offset = vma->vm_pgoff << PAGE_SHIFT;
++
++	for (i = 0; i < NUM_OF_MEM_REGION - 1; ++i) {
++		if (phys_offset >= offset[i] && phys_offset < offset[i + 1]) {
++			if (i % 2 == 0)
++				return pgprot_writecombine(vma->vm_page_prot);
++			return vma->vm_page_prot;
++		}
+ 	}
++
++	/* last region corresponds to cs1 PSUM which is write-back */
++	return vma->vm_page_prot;
+ }
+ 
+ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+@@ -300,9 +272,12 @@ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+ 	page_offset = gpio_addr >> PAGE_SHIFT;
+ 	page_addr = page_offset + vma->vm_pgoff;
+ 
++	vma->vm_page_prot = get_page_prot(vma);
++
+ 	printk(KERN_INFO
+-	       "[DAX_AXDIMM_DD] Device mmap Offset 0x%lx, Size 0x%lx\n",
+-	       vma->vm_pgoff, (vma->vm_end - vma->vm_start));
++	       "[DAX_AXDIMM_DD] Device mmap Offset 0x%lx, Size 0x%lx, page prot 0x%lx\n",
++	       vma->vm_pgoff, (vma->vm_end - vma->vm_start),
++	       vma->vm_page_prot.pgprot);
+ 
+ 	if (remap_pfn_range(vma, vma->vm_start, page_addr,
+ 			    vma->vm_end - vma->vm_start, vma->vm_page_prot)) {
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 609875ffe..51b0d9ecd 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -424,7 +424,6 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 
+ 	if (is_axdimm_device) {
+ 		init_axdimm_device(dev_dax);
+-		remap_axdimm_ranges(dev_dax);
+ 	}
+ 
+ 	pgmap = dev_dax->pgmap;
+-- 
+2.34.1
+

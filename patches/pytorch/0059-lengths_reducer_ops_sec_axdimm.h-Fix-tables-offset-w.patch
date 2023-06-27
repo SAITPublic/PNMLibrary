@@ -1,0 +1,39 @@
+From c41f429a140cc7a0c296c090682345fc040a2535 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Thu, 7 Jul 2022 18:13:49 +0300
+Subject: [PATCH 059/128] [lengths_reducer_ops_sec_axdimm.h] Fix tables offset
+ with tag for axdimm
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+
+Resolves: AXDIMM-255
+---
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 53bd1234..7a0c265a 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -188,12 +188,16 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       axdimm::common_view<const secure_core_value_type> data) {
+     if constexpr (std::is_same_v<Context, AXDIMMContext>) {
+       // [TODO: AXDIMM-256] remove rank_offsets after rank allocator is ready
++      size_t tables_size_bytes = tables_size_ * sizeof(T);
++      if (with_tag_) {
++        tables_size_bytes += (tables_size_ / sparse_feature_size_) * sizeof(axdimm::uint128_t);
++      }
+       std::vector<uint64_t> rank_offsets(
+           NUM_OF_RANK,
+-          engine_id_ * tables_size_ * sizeof(secure_core_value_type));
++          engine_id_ * tables_size_bytes);
+       LOG(INFO) << "Operator " << engine_id_
+                 << " using rank offset: " << rank_offsets.back()
+-                << " tables_size: " << tables_size_;
++                << " tables size in bytes: " << tables_size_bytes;
+       axdimm::secure::DeviceArguments args(
+           axdimm::secure::UntrustedAxdimmDeviceParams{
+               .rows = rows,
+-- 
+2.34.1
+

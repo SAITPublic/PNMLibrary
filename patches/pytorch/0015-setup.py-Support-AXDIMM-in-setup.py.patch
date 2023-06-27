@@ -1,0 +1,79 @@
+From f0ca5e9c111a5a4c4bb5449c3bba46522c235eae Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 2 Nov 2021 10:25:32 +0900
+Subject: [PATCH 015/128] [setup.py] Support AXDIMM in setup.py
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ setup.py                     | 21 +++++++++++++++++++++
+ tools/setup_helpers/cmake.py |  1 +
+ 2 files changed, 22 insertions(+)
+
+diff --git a/setup.py b/setup.py
+index 34b28547..a3de2171 100644
+--- a/setup.py
++++ b/setup.py
+@@ -14,6 +14,12 @@
+ #   USE_CUDA=0
+ #     disables CUDA build
+ #
++#   USE_AXDIMM=1
++#     enable AXDIMM build
++#
++#   CMAKE_AXDIMM_ROOT_PATH=<path>
++#     path to AXDIMM library root directectory
++#
+ #   CFLAGS
+ #     flags to apply to both C and C++ files to be compiled (a quirk of setup.py
+ #     which we have faithfully adhered to in our build system is that CFLAGS
+@@ -506,6 +512,14 @@ class build_ext(setuptools.command.build_ext.build_ext):
+             report('-- Detected CUDA at ' + cmake_cache_vars['CUDA_TOOLKIT_ROOT_DIR'])
+         else:
+             report('-- Not using CUDA')
++        if cmake_cache_vars['USE_AXDIMM']:
++            report('-- Using AXDIMM build')
++        else:
++            report('-- Not using AXDIMM')
++        if cmake_cache_vars['CMAKE_AXDIMM_ROOT_PATH']:
++            report('-- Detected AXDIMM root dir at {}'.format(cmake_cache_vars['CMAKE_AXDIMM_ROOT_PATH']))
++        else:
++            report('-- Not using CMAKE_AXDIMM_ROOT_PATH')
+         if cmake_cache_vars['USE_MKLDNN']:
+             report('-- Using MKLDNN')
+             if cmake_cache_vars['USE_MKLDNN_ACL']:
+@@ -598,6 +612,7 @@ class build_ext(setuptools.command.build_ext.build_ext):
+         # We only make this copy for Caffe2's pybind extensions
+         caffe2_pybind_exts = [
+             'caffe2.python.caffe2_pybind11_state',
++            'caffe2.python.caffe2_pybind11_state_axdimm',
+             'caffe2.python.caffe2_pybind11_state_gpu',
+             'caffe2.python.caffe2_pybind11_state_hip',
+         ]
+@@ -958,6 +973,12 @@ def configure_extension_build():
+                     name=str('caffe2.python.caffe2_pybind11_state_gpu'),
+                     sources=[]),
+             )
++        if cmake_cache_vars['USE_AXDIMM']:
++            extensions.append(
++                Extension(
++                    name=str('caffe2.python.caffe2_pybind11_state_axdimm'),
++                    sources=[]),
++            )
+         if cmake_cache_vars['USE_ROCM']:
+             extensions.append(
+                 Extension(
+diff --git a/tools/setup_helpers/cmake.py b/tools/setup_helpers/cmake.py
+index 22bf2308..16d66136 100644
+--- a/tools/setup_helpers/cmake.py
++++ b/tools/setup_helpers/cmake.py
+@@ -212,6 +212,7 @@ class CMake:
+                     "CUDNN_LIBRARY",
+                     "CUDNN_INCLUDE_DIR",
+                     "CUDNN_ROOT",
++                    "AXDIMM_ROOT_DIR",
+                     "EXPERIMENTAL_SINGLE_THREAD_POOL",
+                     "INSTALL_TEST",
+                     "JAVA_HOME",
+-- 
+2.34.1
+

@@ -1,0 +1,51 @@
+From fbeb8e8e48c2fd33592022c32b4a81262c24eeee Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Fri, 12 May 2023 16:12:05 +0300
+Subject: [PATCH 28/33] Rename exporting libs
+
+- Rename libAxdimmAI.so to LibPnmAI.so
+- Rename libAxdimmSecure.so to LibPnmAISecure.so
+- Rename COMMON_LIBS in benchmarks to BENCHMARK_LIBS
+- Rename LIB_AXDIMM_ROOT_DIR to LIB_AXDIMM_PNM_DIR
+
+Resolves: MCS23-1020
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ debug/axdimm-gdb.py | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/debug/axdimm-gdb.py b/debug/axdimm-gdb.py
+index 3ff2ed4..bbf123a 100644
+--- a/debug/axdimm-gdb.py
++++ b/debug/axdimm-gdb.py
+@@ -37,7 +37,7 @@ def continue_inferior(inferior):
+   gdb.execute('continue &')
+ 
+ def find_library(library_name):
+-  """Find full library path given its filename (e.g. libAxdimmAI.so).
++  """Find full library path given its filename (e.g. libPnmAI.so).
+   We assume that the libraries are found in the directory with a
+   hard-coded relative path (based on the project layout), which can be
+   overridden by an environment variable.
+@@ -45,7 +45,7 @@ def find_library(library_name):
+   search_path = Path(os.getenv('AXDIMM_LIBS_PATH', '../../driver/build'))
+ 
+   # In the build directory, the libraries are likely to be in different
+-  # subdirectories (e.g. `build/ai/libAxdimmAI.so`, `build/secure/libAxdimmSecure.so`).
++  # subdirectories (e.g. `build/ai/libPnmAI.so`, `build/secure/libPnmAISecure.so`).
+   # This might not be the case in general, because `make install` or `ninja install`
+   # install them flat into one directory.
+   #
+@@ -77,7 +77,7 @@ gdb.events.new_inferior.connect(inferior_handler.new_inferior_handler)
+ gdb.events.exited.connect(inferior_handler.exited_handler)
+ 
+ # Preload symbols from AXDIMM libraries.
+-libraries_to_load = ['libAxdimmAI.so', 'libAxdimmSecure.so']
++libraries_to_load = ['libPnmAI.so', 'libPnmAISecure.so']
+ for lib in libraries_to_load:
+   load_symbols_by_library_name(lib)
+ 
+-- 
+2.34.1
+

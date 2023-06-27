@@ -1,0 +1,47 @@
+From 209bc2378bd77edf5f8e2a5a7eff81af81e3e5c0 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 23 Nov 2021 09:21:57 +0900
+Subject: [PATCH 032/128] [caffe2/python] Support 'workspace.AxdimmCloser()'
+
+Support AXDIMM closer in Caffe2, this allows us to get rid of python
+bindings in AXDIMM library.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/python/pybind_state_axdimm.cc | 3 +++
+ caffe2/python/workspace.py           | 2 ++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 235d99bb..c6db7553 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -35,6 +35,9 @@ void addAXDIMMGlobalMethods(py::module& m) {
+   m.def("axdimm_starter", [](unsigned num_inference_engines) {
+     return static_cast<int>(axdimm::axdimm_starter(num_inference_engines));
+   });
++  m.def("axdimm_closer", []() {
++    return static_cast<int>(axdimm::axdimm_closer());
++  });
+ }
+ 
+ PYBIND11_MODULE(caffe2_pybind11_state_axdimm, m) {
+diff --git a/caffe2/python/workspace.py b/caffe2/python/workspace.py
+index 72e543f9..4bd6ea35 100644
+--- a/caffe2/python/workspace.py
++++ b/caffe2/python/workspace.py
+@@ -97,9 +97,11 @@ if not has_gpu_support:
+ if has_axdimm_support:
+     AXDIMMDeviceType = caffe2_pb2.AXDIMM
+     AxdimmStarter = C.axdimm_starter
++    AxdimmCloser = C.axdimm_closer
+ 
+ if not has_axdimm_support:
+     AxdimmStarter = lambda: 0 # noqa
++    AxdimmCloser = lambda: 0 # noqa
+ 
+ IsNUMAEnabled = C.is_numa_enabled
+ GetNumNUMANodes = C.get_num_numa_nodes
+-- 
+2.34.1
+

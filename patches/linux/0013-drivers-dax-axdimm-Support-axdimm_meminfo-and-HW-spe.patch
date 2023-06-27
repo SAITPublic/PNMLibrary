@@ -1,0 +1,392 @@
+From 1f020112a4fd0ce591d8f152ff36fc7fe1bb8f5c Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 7 Dec 2021 10:35:46 +0900
+Subject: [PATCH 013/161] [drivers/dax/axdimm] Support 'axdimm_meminfo' and HW
+ specifics export to userspace
+
+* setup '/dev/axdimm_meminfo' device to provide calculated axdimm_meminfo to
+  userspace
+* introcude 'include/uapi/linux/libaxdimm.h' header that gets exported to
+  userspace. Now, libAxdimm.so can detect whether current kernel supports
+  "AXDIMM as DAX" and enable "AXDIMM-DAX" build path. In this case, userspace
+  will depend on 'include/uapi/linux/libaxdimm.h' and rely on
+  kernel/kernel-headers to provide correct HW and AXDIMM memory info.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm-private.h   |  56 +-------------
+ drivers/dax/axdimm.c           | 129 +++++++++++++++++++++++++++------
+ drivers/dax/device.c           |   1 +
+ include/uapi/linux/libaxdimm.h |  95 ++++++++++++++++++++++++
+ 4 files changed, 204 insertions(+), 77 deletions(-)
+ create mode 100644 include/uapi/linux/libaxdimm.h
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index b4767d5d4..f0116f207 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -2,47 +2,9 @@
+ /* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+ 
+ #include <linux/fs.h>
++#include <linux/libaxdimm.h>
+ #include "dax-private.h"
+ 
+-/*
+- *  AXDIMM System Memory Specification
+- */
+-/* Total Memory size for AXDIMM */
+-#define AXDIMM_MEMORY_SIZE 0x1000000000
+-
+-/* Start address of AXDIMM */
+-#define AXDIMM_BASE_ADDR 0x100000000
+-
+-/* Base offset for each CS */
+-#define EMBT_BASE_CS0_OFFSET 0x0
+-#define EMBT_BASE_CS1_OFFSET 0x800000000
+-
+-/* number of CS(# of rank connected to one CH) */
+-#define NUM_OF_CS 2
+-
+-/* channel ID used by axdimm */
+-#define AXDIMM_CH_ID 0
+-
+-/* Number of mapped blocks */
+-#define NUM_BLOCKS 4
+-
+-/*
+- * Ioctl definitions
+- */
+-
+-/* Use 'k' as magic number */
+-#define AXDIMM_IOC_MAGIC 'T'
+-
+-#define DEVICE_IOCRESET _IO(AXDIMM_IOC_MAGIC, 0)
+-#define SET_FIRST_BUFFER _IO(AXDIMM_IOC_MAGIC, 1)
+-#define SET_SECOND_BUFFER _IO(AXDIMM_IOC_MAGIC, 2)
+-#define WHICH_BUFFER _IOR(AXDIMM_IOC_MAGIC, 3, int)
+-#define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
+-#define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
+-#define GET_RANK _IOR(AXDIMM_IOC_MAGIC, 6, int)
+-
+-#define AXDIMM_IOC_MAXNR (6)
+-
+ /* The enumeration of axdimm memory addresses */
+ typedef enum _axd_mem_regions_e {
+ 	AXDIMM_BASE_CS0 = 0,
+@@ -52,20 +14,6 @@ typedef enum _axd_mem_regions_e {
+ 	NUM_OF_MEM_REGION = 4 /* Number of index for memory mapping region */
+ } axd_mem_regions_e;
+ 
+-/* The enumeration of axdimm blocks addresses */
+-typedef enum _axd_mem_blocks_e {
+-	AXDIMM_BLOCK_BASE = 0,
+-	AXDIMM_BLOCK_INST = 1,
+-	AXDIMM_BLOCK_CFGR = 2,
+-	AXDIMM_BLOCK_PSUM = 3,
+-	AXDIMM_BLOCK_MAX = 4
+-} axd_mem_blocks_e;
+-
+-struct axdmem_info {
+-	uint64_t mem_offset[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+-	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+-};
+-
+ struct axdimm_device_data {
+ 	int rank;
+ 	int region;
+@@ -80,6 +28,8 @@ static inline int is_axdimm_range(u64 start, u64 end)
+ 
+ void init_axdimm_device(struct dev_dax *dev_dax);
+ 
++void cleanup_axdimm_device(void);
++
+ void remap_axdimm_ranges(struct dev_dax *dev_dax);
+ 
+ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma);
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index ecba4699e..f9ac0828e 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -15,12 +15,85 @@
+ #include <linux/io.h>
+ #include "axdimm-private.h"
+ 
++typedef struct axdmem_info axdmem_info;
++
+ /* Helper structure containing auxiliary info for AXDIMM device */
+ static struct axdimm_dev {
+-	struct semaphore sem_axdimm; /* semaphore */
+-	struct axdmem_info mem_info; /* memory info */
++	struct semaphore sem_axdimm;     /* semaphore */
++	struct axdmem_info mem_info;     /* memory info */
++	struct cdev axdimm_meminfo_cdev; /* char device for AXDIMM meminfo */
++	dev_t axdimm_meminfo_dev_no;     /* char device number for AXDIMM meminfo */
+ } axdimm_device;
+ 
++/* A custom class for meminfo char devices */
++static struct class *axdimm_meminfo_class = NULL;
++
++ssize_t axdimm_meminfo_read(struct file *filp, char __user *buf, size_t count,
++			    loff_t *f_pos)
++{
++	ssize_t retval = 0;
++
++	if (*f_pos != 0) {
++		printk(KERN_WARNING
++		       "[DAX_AXDIMM_DD]: Wrong file offset. Operation aborted\n");
++		return -EINVAL;
++	}
++
++	if (count != sizeof(axdmem_info)) {
++		printk(KERN_WARNING
++		       "[DAX_AXDIMM_DD]: Truncating axdimm read meminfo parameters: "
++		       "requested: %lu, read: %lu.\n",
++		       count, sizeof(axdmem_info));
++	}
++
++	if (copy_to_user(buf, (void *)(&axdimm_device.mem_info),
++			 sizeof(axdmem_info))) {
++		printk(KERN_WARNING
++		       "[DAX_AXDIMM_DD]: can't use copy_to_user.\n");
++		retval = -EPERM;
++	} else {
++		printk(KERN_WARNING "[DAX_AXDIMM_DD]: Read axdimm mem_info.\n");
++		retval = sizeof(axdmem_info);
++	}
++	return retval;
++}
++
++struct file_operations axdimm_info_fops = {
++	.owner = THIS_MODULE,
++	.read = axdimm_meminfo_read,
++};
++
++static void axdimm_setup_meminfo_cdev(struct axdimm_dev *dev)
++{
++	dev_t dev_num;
++	int N_MINORS = 1;
++
++	/* Request the kernel for N_MINOR devices */
++	alloc_chrdev_region(&dev_num, 0, N_MINORS, "axdimm_meminfo");
++
++	/* Create a class : appears at /sys/class */
++	axdimm_meminfo_class = class_create(THIS_MODULE, "axdimm_meminfo");
++
++	/* Initialize and create each of the device(cdev) */
++	/* Associate the cdev with a set of file_operations */
++	cdev_init(&dev->axdimm_meminfo_cdev, &axdimm_info_fops);
++
++	/* Build up the current device number. To be used further */
++	dev->axdimm_meminfo_dev_no = MKDEV(MAJOR(dev_num), MINOR(dev_num));
++
++	/* Create a device node for this device. Look, the class is
++	 * being used here. The same class is associated with N_MINOR
++	 * devices. Once the function returns, device nodes will be
++	 * created as /dev/my_dev0, /dev/my_dev1,... You can also view
++	 * the devices under /sys/class/my_driver_class.
++	 */
++	device_create(axdimm_meminfo_class, NULL, dev->axdimm_meminfo_dev_no,
++		      NULL, "%s", "axdimm_meminfo");
++
++	/* Now make the device live for the users to access */
++	cdev_add(&dev->axdimm_meminfo_cdev, dev->axdimm_meminfo_dev_no, 1);
++}
++
+ static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+ 				     int bank, int row, int column)
+ {
+@@ -194,23 +267,6 @@ static int setup_axdimm_ranges(struct dev_dax *dev_dax)
+ 	return rc;
+ }
+ 
+-void init_axdimm_device(struct dev_dax *dev_dax)
+-{
+-	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
+-	dev_dax->is_axdimm_device = 1;
+-
+-	/* semaphore initialization */
+-	sema_init(&axdimm_device.sem_axdimm, 1);
+-
+-	/* initialize device meminfo */
+-	axdimm_setmeminfo(&axdimm_device.mem_info);
+-
+-	/* Setup dev_dax ranges for AXDIMM, this is needed for proper
+-	 * devdax <-> system-ram transitions (devdax <-> kmem).
+-	 */
+-	setup_axdimm_ranges(dev_dax);
+-}
+-
+ void remap_axdimm_ranges(struct dev_dax *dev_dax)
+ {
+ 	unsigned int permission[NUM_OF_MEM_REGION];
+@@ -223,9 +279,9 @@ void remap_axdimm_ranges(struct dev_dax *dev_dax)
+ 	/* set offset, size & permission */
+ 	axdimm_set_ioremap_info(offset, remap_size, permission);
+ 
+-	for (r = 0; r < NUM_BLOCKS; r++) {
++	for (r = 0; r < NUM_OF_MEM_REGION; r++) {
+ 		printk(KERN_INFO "[DAX_AXDIMM_DD] Initializing %d/%d block\n",
+-		       r + 1, NUM_BLOCKS);
++		       r + 1, NUM_OF_MEM_REGION);
+ 		printk(KERN_INFO "[DAX_AXDIMM_DD] Address: %lx, size: %lu\n",
+ 		       offset[r], remap_size[r]);
+ 		addr = devm_memremap(dev, offset[r], remap_size[r],
+@@ -264,9 +320,9 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	int retval = 0;
+ 
+ 	/*
+-          * extract the type and number bitfields, and don't decode
+-          * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
+-          */
++	 * extract the type and number bitfields, and don't decode
++	 * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
++	 */
+ 	if (_IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC) {
+ 		printk(KERN_INFO " _IOC_TYPE(cmd) :      %u\n", _IOC_TYPE(cmd));
+ 		printk(KERN_INFO " AXDIMM_IOC_MAGIC:   %u\n", AXDIMM_IOC_MAGIC);
+@@ -312,3 +368,28 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	return retval;
+ }
+ 
++void init_axdimm_device(struct dev_dax *dev_dax)
++{
++	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
++	dev_dax->is_axdimm_device = 1;
++
++	/* semaphore initialization */
++	sema_init(&axdimm_device.sem_axdimm, 1);
++
++	/* Initialize device meminfo */
++	axdimm_setmeminfo(&axdimm_device.mem_info);
++
++	/* Setup meminfo char device */
++	axdimm_setup_meminfo_cdev(&axdimm_device);
++
++	/* Setup dev_dax ranges for AXDIMM, this is needed for proper
++	 * devdax <-> system-ram transitions (devdax <-> kmem).
++	 */
++	setup_axdimm_ranges(dev_dax);
++}
++
++void cleanup_axdimm_device()
++{
++	/* Destroy device class for meminfo cdev */
++	class_destroy(axdimm_meminfo_class);
++}
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 6fdf40cec..47824802e 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -510,6 +510,7 @@ static int __init dax_init(void)
+ 
+ static void __exit dax_exit(void)
+ {
++	cleanup_axdimm_device();
+ 	dax_driver_unregister(&device_dax_driver);
+ }
+ 
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+new file mode 100644
+index 000000000..20121f305
+--- /dev/null
++++ b/include/uapi/linux/libaxdimm.h
+@@ -0,0 +1,95 @@
++/*
++ * Copyright (C) 2021 Samsung Electronics Co. LTD
++ *
++ * This software is proprietary of Samsung Electronics.
++ * No part of this software, either material or conceptual may be copied or distributed, transmitted,
++ * transcribed, stored in a retrieval system or translated into any human or computer language in any form
++ * by any means, electronic, mechanical, manual or otherwise, or disclosed
++ * to third parties without the express written permission of Samsung Electronics.
++ */
++#ifndef __LIBAXDIMM_H__
++#define __LIBAXDIMM_H__
++
++/* Total Memory size for AXDIMM */
++#define AXDIMM_MEMORY_SIZE 0x1000000000
++
++/* Start address of AXDIMM */
++#define AXDIMM_BASE_ADDR 0x100000000
++
++/* Interleaving Stride length : 128Bytes (0x80) */
++#define AXDIMM_STRIDE_LENGTH 0x80
++
++/* Offset at config reg */
++#define REG_SLS_EN 0x0
++#define REG_SLS_EXEC 0x40
++#define REG_POLLING 0x840
++
++/* Base offset for each CS */
++#define EMBT_BASE_CS0_OFFSET 0x0
++#define EMBT_BASE_CS1_OFFSET 0x800000000
++
++#define MEM_SEG_NUM 4
++
++/* number of Home Agent(# of MC at CPU) */
++#define NUM_OF_HA 2
++
++/* number of Channel(# of line can be connected at the same time in one MC) */
++#define NUM_OF_CH 2
++
++/* number of CS(# of rank connected to one CH) */
++#define NUM_OF_CS 2
++
++/* channel ID used by axdimm */
++#define AXDIMM_CH_ID 0
++
++/* total number of ranks for axdimm */
++#define NUM_OF_RANK 4
++
++/* number of Instruction & Psum buffers */
++#define NUM_OF_INST_BUF 1
++#define NUM_OF_PSUM_BUF 2
++
++/* Instruction Size (Bytes) */
++#define INSTRUCTON_SIZE 8
++
++/* Data Size (Bytes) */
++#define DATA_SIZE 4
++
++/* Instruction & Psum Buffer Size (Bytes) */
++#define INST_BUF_SIZE (256 * 1024)
++#define PSUM_BUF_SIZE (256 * 1024)
++
++/* Channel interleaving unit size (Bytes) */
++#define CHANNEL_INTERLEAVING_SIZE 0x20000
++
++/* Rank interleaving unit size (Bytes) */
++#define RANK_INTERLEAVING_SIZE 0x80
++
++/* The enumeration of axdimm blocks addresses */
++typedef enum _axd_mem_blocks_e {
++	AXDIMM_BLOCK_BASE = 0,
++	AXDIMM_BLOCK_INST = 1,
++	AXDIMM_BLOCK_CFGR = 2,
++	AXDIMM_BLOCK_PSUM = 3,
++	AXDIMM_BLOCK_MAX = 4
++} axd_mem_blocks_e;
++
++struct axdmem_info {
++	uint64_t mem_offset[NUM_OF_CS][AXDIMM_BLOCK_MAX];
++	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
++};
++
++/* Use 'k' as magic number */
++#define AXDIMM_IOC_MAGIC 'T'
++
++#define DEVICE_IOCRESET _IO(AXDIMM_IOC_MAGIC, 0)
++#define SET_FIRST_BUFFER _IO(AXDIMM_IOC_MAGIC, 1)
++#define SET_SECOND_BUFFER _IO(AXDIMM_IOC_MAGIC, 2)
++#define WHICH_BUFFER _IOR(AXDIMM_IOC_MAGIC, 3, int)
++#define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
++#define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
++#define GET_RANK _IOR(AXDIMM_IOC_MAGIC, 6, int)
++
++#define AXDIMM_IOC_MAXNR (6)
++
++#endif
+-- 
+2.34.1
+

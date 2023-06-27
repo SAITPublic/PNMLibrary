@@ -1,0 +1,242 @@
+From 339b6ce6a9d7588cf56fef11018e5e75d1eaba83 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 27 May 2022 17:07:18 +0900
+Subject: [PATCH 042/128] [caffe2] Support shared tables layout for AXDIMM SLS
+
+* add "shared_tables_uuid" parameter to AXDIMMSparseLengthsReductionOpVec
+  to be able to get shared tables from application.
+  Non-shared tables layout is not yet supported.
+* modify other API calls to reflect recent AXDIMM library changes.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops.cc       |  3 ++
+ .../operators/lengths_reducer_ops_axdimm.cc   | 45 ++++++++++-------
+ caffe2/python/pybind_state_axdimm.cc          | 49 +++++++++++--------
+ 3 files changed, 59 insertions(+), 38 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops.cc b/caffe2/operators/lengths_reducer_ops.cc
+index de9b86fd..857e287f 100644
+--- a/caffe2/operators/lengths_reducer_ops.cc
++++ b/caffe2/operators/lengths_reducer_ops.cc
+@@ -103,6 +103,9 @@ OPERATOR_SCHEMA(SparseLengthsSumVec)
+         SparseLengthsSumOp::INDICES,
+         SparseLengthsSumOp::LENGTHS)
+     .SetDoc(FormatDoc<SparseLengthsSumDef>())
++    .Arg(
++        "shared_tables_uuid",
++        "string: an uuid to get shared embedding tables.")
+     .Input(
+         0,
+         "I1, ..., IN, L1, ..., LN",
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 4bb984c5..84df39da 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -1,14 +1,13 @@
+ #undef USE_FBGEMM
+-#include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/core/context.h"
+ #include "caffe2/core/operator.h"
+ #include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ #include "caffe2/utils/math.h"
+ 
+-#include "api/axdimm.h"
+ #include <algorithm>
+ #include <vector>
++#include "api/axdimm.h"
+ 
+ namespace caffe2 {
+ 
+@@ -136,6 +135,12 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     num_indices_per_lookup_.resize(block_size_);
+     std::fill(
+         num_indices_per_lookup_.begin(), num_indices_per_lookup_.end(), 0);
++
++    std::string uuid = this->template GetSingleArgument<std::string>(
++        "shared_tables_uuid", "None");
++    CAFFE_ENFORCE_NE(
++        uuid, "None", "Non-shared tables layout is not yet supported!");
++    tables_layout_ = axdimm_get_shared_tables_layout(uuid.c_str());
+   }
+ 
+   ~AXDIMMSparseLengthsReductionOpVec() {
+@@ -144,12 +149,14 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     indices_blocked_ = nullptr;
+     lengths_blocked_ = nullptr;
+ 
+-    axdimm::destroy_execution_context(exec_context_);
+-    axdimm::destroy_model_context(model_context_);
+-    axdimm::destroy_device_context(device_context_);
++    axdimm_destroy_execution_context(exec_context_);
++    axdimm_destroy_model_context(model_context_);
++    axdimm_destroy_system_device(device_);
++    axdimm_destroy_tables_layout(tables_layout_);
+     exec_context_ = nullptr;
+     model_context_ = nullptr;
+-    device_context_ = nullptr;
++    device_ = nullptr;
++    tables_layout_ = nullptr;
+   }
+ 
+   // Currently, we support float and at::Half inputs for input data type, and
+@@ -208,11 +215,12 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     }
+ 
+     // 2) Call axd_init if needed.
+-    if (!device_context_) {
+-      CAFFE_ENFORCE_EQ(nullptr, model_context_, "model_context_ must be nullptr");
++    if (!device_) {
++      CAFFE_ENFORCE_EQ(
++          nullptr, model_context_, "model_context_ must be nullptr");
+       CAFFE_ENFORCE_EQ(nullptr, exec_context_, "exec_context_ must be nullptr");
+ 
+-      device_context_ = axdimm::create_device_context();
++      device_ = axdimm_create_system_device();
+ 
+       // Minibatch size.
+       const int64_t M = Input(lengths_vec_start_idx_).size(0);
+@@ -223,15 +231,14 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       for (int i = 0; i < block_size_; ++i) {
+         table_entry_list[i] = Input(tables_vec_start_idx_ + i).size(0);
+       }
+-      model_context_ = axdimm::create_model_context(
++      model_context_ = axdimm_create_model_context(
+           M,
+           D,
+           block_size_,
+           table_entry_list.data(),
+           num_indices_per_lookup_.data());
+ 
+-      exec_context_ =
+-          axdimm::create_execution_context(model_context_, device_context_);
++      exec_context_ = axdimm_create_execution_context(model_context_, device_);
+     }
+ 
+     // 3.1) If new operator invocation consumes more memory for indices,
+@@ -288,10 +295,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     T* output_buf = output->template data<T>();
+ 
+     // 6) And finally run the operator.
+-    int status = axdimm::axdimm_run(
++    int status = axdimm_run(
+         model_context_,
+-        device_context_,
++        device_,
+         exec_context_,
++        tables_layout_,
+         (uint32_t*)lengths_blocked_,
+         (uint32_t*)indices_blocked_,
+         output_buf /* psum buffer */
+@@ -326,12 +334,13 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked indices buffer
+   uint64_t lengths_total_size_in_bytes_ =
+       0; // Size of currently allocated blocked lengths buffer
+-  axdimm::DeviceContext* device_context_ =
+-      nullptr; // AXDIMM device context. TODO: move into AXDIMMContext
+-  axdimm::ModelContext* model_context_ =
++  AxdimmSystemDevice* device_ =
++      nullptr; // AXDIMM device. TODO: move into AXDIMMContext
++  AxdimmModelContext* model_context_ =
+       nullptr; // AXDIMM model context. TODO: move into AXDIMMContext
+-  axdimm::ExecutionContext* exec_context_ =
++  AxdimmExecutionContext* exec_context_ =
+       nullptr; // AXDIMM exec context. TODO: move into AXDIMMContext
++  AxdimmTablesLayout* tables_layout_ = nullptr;
+ };
+ 
+ using SparseLengthsSumOp =
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index bc027ef1..4ba2b735 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -17,28 +17,31 @@
+ #include "api/axdimm.h"
+ 
+ #include <fcntl.h>
+-#include <unistd.h>
+ #include <sys/mman.h>
++#include <unistd.h>
+ 
+ namespace {
+-static axdimm::DeviceContext* device_context = nullptr;
++static AxdimmSystemDevice* system_device = nullptr;
++static AxdimmTablesLayout* tables_layout = nullptr;
+ 
+-int load_tables(
+-    axdimm::DeviceContext& device_context,
++std::string load_shared_tables(
++    AxdimmSystemDevice* device,
++    AxdimmTablesLayout* layout,
+     const std::string& weight_file) {
+   int fd = ::open(weight_file.c_str(), O_RDONLY);
+ 
+   if (fd < 0) {
+     std::cerr << "Error opening " << weight_file << std::endl;
+-    return -1;
++    exit(1);
+   }
+ 
+   auto file_size = lseek(fd, 0, SEEK_END);
++
+   void* addr =
+       mmap(nullptr, file_size, PROT_READ, MAP_FILE | MAP_SHARED, fd, 0);
+ 
+-  axdimm::axdimm_write_rank_data(device_context, addr, file_size, 0xf);
+-  return munmap(addr, file_size);
++  axdimm_write_rank_data(device, addr, file_size, layout);
++  return axdimm_share_tables_layout(layout);
+ }
+ } // namespace
+ 
+@@ -46,9 +49,7 @@ namespace caffe2 {
+ namespace python {
+ 
+ REGISTER_AXDIMM_OPERATOR(Python, AXDIMMFallbackOp);
+-REGISTER_AXDIMM_OPERATOR(
+-    PythonGradient,
+-    AXDIMMFallbackOp);
++REGISTER_AXDIMM_OPERATOR(PythonGradient, AXDIMMFallbackOp);
+ 
+ REGISTER_AXDIMM_OPERATOR(PythonDLPack, AXDIMMFallbackOp);
+ REGISTER_AXDIMM_OPERATOR(PythonDLPackGradient, AXDIMMFallbackOp);
+@@ -58,17 +59,25 @@ REGISTER_BLOB_FEEDER(AXDIMM, TensorFeeder<AXDIMMContext>);
+ namespace py = pybind11;
+ 
+ void addAXDIMMGlobalMethods(py::module& m) {
+-  m.def("axdimm_starter", [](const std::string& weight_file) {
+-    CAFFE_ENFORCE_EQ(
+-        nullptr,
+-        device_context,
+-        "Multiple AXDIMM device contexts are not supported.");
+-    device_context = axdimm::create_device_context();
+-    return static_cast<int>(load_tables(*device_context, weight_file));
+-  });
++  m.def(
++      "axdimm_starter",
++      [](const std::string& weight_file,
++         const std::vector<uint32_t>& table_entry,
++         uint32_t row_size) {
++        CAFFE_ENFORCE_EQ(
++            nullptr,
++            system_device,
++            "Multiple AXDIMM devices are not supported.");
++        system_device = axdimm_create_system_device();
++        tables_layout = axdimm_create_tables_layout(
++            table_entry.data(), table_entry.size(), row_size, 0xf);
++        return load_shared_tables(system_device, tables_layout, weight_file);
++      });
+   m.def("axdimm_closer", []() {
+-    axdimm::destroy_device_context(device_context);
+-    device_context = nullptr;
++    axdimm_destroy_system_device(system_device);
++    axdimm_destroy_tables_layout(tables_layout);
++    system_device = nullptr;
++    tables_layout = nullptr;
+     return 0;
+   });
+ }
+-- 
+2.34.1
+

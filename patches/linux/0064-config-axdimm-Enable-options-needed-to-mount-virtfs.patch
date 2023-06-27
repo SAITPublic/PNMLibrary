@@ -1,0 +1,42 @@
+From c45100263c1a4e90345b0b975f6a3dd83aad7afd Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Fri, 18 Nov 2022 15:09:44 +0000
+Subject: [PATCH 064/161] [config-axdimm] Enable options needed to mount virtfs
+
+virtfs is a system for host-guest filesystem passthrough
+
+It works by using the virtio variant of plan9 filesystem module
+
+Related to: AXDIMM-455
+---
+ config-axdimm | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/config-axdimm b/config-axdimm
+index 9c4ed706a..76a826d14 100644
+--- a/config-axdimm
++++ b/config-axdimm
+@@ -2000,9 +2000,9 @@ CONFIG_RFKILL=y
+ CONFIG_RFKILL_LEDS=y
+ CONFIG_RFKILL_INPUT=y
+ CONFIG_RFKILL_GPIO=m
+-CONFIG_NET_9P=m
++CONFIG_NET_9P=y
+ CONFIG_NET_9P_FD=m
+-CONFIG_NET_9P_VIRTIO=m
++CONFIG_NET_9P_VIRTIO=y
+ CONFIG_NET_9P_XEN=m
+ CONFIG_NET_9P_RDMA=m
+ # CONFIG_NET_9P_DEBUG is not set
+@@ -10391,7 +10391,7 @@ CONFIG_AFS_FS=m
+ # CONFIG_AFS_DEBUG is not set
+ CONFIG_AFS_FSCACHE=y
+ # CONFIG_AFS_DEBUG_CURSOR is not set
+-CONFIG_9P_FS=m
++CONFIG_9P_FS=y
+ CONFIG_9P_FSCACHE=y
+ CONFIG_9P_FS_POSIX_ACL=y
+ CONFIG_9P_FS_SECURITY=y
+-- 
+2.34.1
+

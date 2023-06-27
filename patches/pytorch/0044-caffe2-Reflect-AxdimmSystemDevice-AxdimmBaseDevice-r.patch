@@ -1,0 +1,88 @@
+From 29c14e63ea934a94f8e3eee9d85d6c677f93a737 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 8 Jun 2022 13:55:39 +0900
+Subject: [PATCH 044/128] [caffe2] Reflect AxdimmSystemDevice ->
+ AxdimmBaseDevice renaming in control library
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc |  6 +++---
+ caffe2/python/pybind_state_axdimm.cc           | 16 +++++++---------
+ 2 files changed, 10 insertions(+), 12 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 3e7a4eed..19ac3766 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -152,7 +152,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     axdimm_destroy_execution_context(exec_context_);
+     axdimm_destroy_model_context(model_context_);
+-    axdimm_destroy_system_device(device_);
++    axdimm_destroy_base_device(device_);
+     axdimm_destroy_tables_layout(tables_layout_);
+     exec_context_ = nullptr;
+     model_context_ = nullptr;
+@@ -221,7 +221,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+           nullptr, model_context_, "model_context_ must be nullptr");
+       CAFFE_ENFORCE_EQ(nullptr, exec_context_, "exec_context_ must be nullptr");
+ 
+-      device_ = axdimm_create_system_device();
++      device_ = axdimm_create_base_device();
+ 
+       // Minibatch size.
+       const int64_t M = Input(lengths_vec_start_idx_).size(0);
+@@ -335,7 +335,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked indices buffer
+   uint64_t lengths_total_size_in_bytes_ =
+       0; // Size of currently allocated blocked lengths buffer
+-  AxdimmSystemDevice* device_ =
++  AxdimmBaseDevice* device_ =
+       nullptr; // AXDIMM device. TODO: move into AXDIMMContext
+   AxdimmModelContext* model_context_ =
+       nullptr; // AXDIMM model context. TODO: move into AXDIMMContext
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index cf5ec54c..099af5c8 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -21,11 +21,11 @@
+ #include <unistd.h>
+ 
+ namespace {
+-static AxdimmSystemDevice* system_device = nullptr;
++static AxdimmBaseDevice* base_device = nullptr;
+ static AxdimmTablesLayout* tables_layout = nullptr;
+ 
+ std::string load_shared_tables(
+-    AxdimmSystemDevice* device,
++    AxdimmBaseDevice* device,
+     AxdimmTablesLayout* layout,
+     const std::string& weight_file) {
+   int fd = ::open(weight_file.c_str(), O_RDONLY);
+@@ -65,18 +65,16 @@ void addAXDIMMGlobalMethods(py::module& m) {
+          const std::vector<uint32_t>& table_entry,
+          uint32_t row_size) {
+         CAFFE_ENFORCE_EQ(
+-            nullptr,
+-            system_device,
+-            "Multiple AXDIMM devices are not supported.");
+-        system_device = axdimm_create_system_device();
++            nullptr, base_device, "Multiple AXDIMM devices are not supported.");
++        base_device = axdimm_create_base_device();
+         tables_layout = axdimm_create_tables_layout(
+             table_entry.data(), table_entry.size(), row_size, 0xf);
+-        return load_shared_tables(system_device, tables_layout, weight_file);
++        return load_shared_tables(base_device, tables_layout, weight_file);
+       });
+   m.def("axdimm_closer", []() {
+-    axdimm_destroy_system_device(system_device);
++    axdimm_destroy_base_device(base_device);
+     axdimm_destroy_tables_layout(tables_layout);
+-    system_device = nullptr;
++    base_device = nullptr;
+     tables_layout = nullptr;
+     return 0;
+   });
+-- 
+2.34.1
+

@@ -1,0 +1,244 @@
+From 58252cd5968505af073ade5d83e02a9a3a826d8f Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 21 Nov 2022 15:46:04 +0300
+Subject: [PATCH 095/128] [caffe2, sgx] Remove AXDIMM SGX support.
+
+This commit removes SGX-related configuration and operators from PyTorch,
+because SGX support is being removed from the driver.
+
+References: AXDIMM-429
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ CMakeLists.txt                                |  1 -
+ .../src/ATen/native/axdimm/AxdimmBaseTensor.h |  2 +-
+ .../ATen/native/axdimm/AxdimmSecureTensor.cpp | 13 +-----
+ .../ATen/native/axdimm/AxdimmTensorConvert.h  |  3 +-
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   |  3 +-
+ aten/src/ATen/native/axdimm/ops/Factory.cpp   |  6 +--
+ caffe2/CMakeLists.txt                         |  4 --
+ .../lengths_reducer_ops_sec_axdimm.cc         | 44 -------------------
+ setup.py                                      |  7 ---
+ 9 files changed, 6 insertions(+), 77 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4508cf57..36a3c36a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -193,7 +193,6 @@ option(USE_ASAN "Use Address+Undefined Sanitizers" OFF)
+ option(USE_TSAN "Use Thread Sanitizer" OFF)
+ option(USE_AXDIMM "Use AXDIMM" OFF)
+ option(CMAKE_AXDIMM_ROOT_PATH "A path to AXDIMM library root directory" "")
+-cmake_dependent_option(USE_AXDIMM_SGX "Use SGX for secure SLS" OFF USE_AXDIMM OFF)
+ option(USE_CUDA "Use CUDA" ON)
+ cmake_dependent_option(
+      BUILD_LAZY_CUDA_LINALG "Build cuda linalg ops as separate library" ON "USE_CUDA AND LINUX AND BUILD_PYTHON" OFF)
+diff --git a/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+index b091b441..68139071 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+@@ -36,7 +36,7 @@ inline void verify(const at::TensorOptions& options) {
+       "'memory_format' tensor option is not yet supported under Axdimm!");
+ }
+ 
+-enum class AxdimmTensorType { AXDIMM_SIMPLE, AXDIMM_SECURE, AXDIMM_SECURE_SGX };
++enum class AxdimmTensorType { AXDIMM_SIMPLE, AXDIMM_SECURE };
+ 
+ class AxdimmBaseTensor {
+  public:
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+index 92deb726..7970bf76 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+@@ -71,9 +71,8 @@ AxdimmSecureTensor::AxdimmSecureTensor(
+ 
+ void AxdimmSecureTensor::check_params(const at::Tensor& weights) const {
+   TORCH_CHECK(
+-      type_ == AxdimmTensorType::AXDIMM_SECURE ||
+-          type_ == AxdimmTensorType::AXDIMM_SECURE_SGX,
+-      "Secure tensor type must be AXDIMM_SECURE or AXDIMM_SECURE_SGX");
++      type_ == AxdimmTensorType::AXDIMM_SECURE,
++      "Secure tensor type must be AXDIMM_SECURE");
+ }
+ 
+ void AxdimmSecureTensor::load(const void* weights_data) {
+@@ -86,14 +85,6 @@ void AxdimmSecureTensor::load(const void* weights_data) {
+       runner_ = ::axdimm::secure::make_runner(
+           ::axdimm::secure::SecureRunnerType::INT);
+     }
+-  } else if (type_ == AxdimmTensorType::AXDIMM_SECURE_SGX) {
+-    if (scalar_type_ == torch::kFloat32) {
+-      runner_ = ::axdimm::secure::make_runner(
+-          ::axdimm::secure::SecureRunnerType::FLOAT_SGX);
+-    } else {
+-      runner_ = ::axdimm::secure::make_runner(
+-          ::axdimm::secure::SecureRunnerType::INT_SGX);
+-    }
+   }
+ 
+   // [TODO AXDIMM-477: refactor secure part to use uint32_t tables length]
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensorConvert.h b/aten/src/ATen/native/axdimm/AxdimmTensorConvert.h
+index c98430fe..ce540833 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensorConvert.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensorConvert.h
+@@ -17,8 +17,7 @@ const T& convert(const at::Tensor& tensor) {
+   const auto tensor_type = tensor_ptr->get_tensor_type();
+   TORCH_INTERNAL_ASSERT(
+       tensor_type == AxdimmTensorType::AXDIMM_SIMPLE ||
+-          tensor_type == AxdimmTensorType::AXDIMM_SECURE ||
+-          tensor_type == AxdimmTensorType::AXDIMM_SECURE_SGX,
++          tensor_type == AxdimmTensorType::AXDIMM_SECURE,
+       "Unsuported tensor type");
+ 
+   const T* res = dynamic_cast<const T*>(tensor_ptr);
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index ba9ed544..915e4249 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -143,8 +143,7 @@ at::Tensor embedding_bag_forward_only_axdimm(
+   transform_offsets(offsets, axdimm_lengths);
+   auto lengths_view = ::axdimm::make_view(std::cref(axdimm_lengths).get());
+ 
+-  if (base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SECURE ||
+-      base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SECURE_SGX) {
++  if (base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SECURE) {
+     return embedding_bag_forward_secure_impl(
+         weights, indices, lengths_view, output_view, minibatch_size);
+   } else if (base_ten.get_tensor_type() == AxdimmTensorType::AXDIMM_SIMPLE) {
+diff --git a/aten/src/ATen/native/axdimm/ops/Factory.cpp b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+index 8c7e5931..64426dff 100644
+--- a/aten/src/ATen/native/axdimm/ops/Factory.cpp
++++ b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+@@ -44,12 +44,10 @@ TORCH_LIBRARY_IMPL(aten, AXDIMM, m) {
+ 
+ const std::string gkSimpleTensor = "simple";
+ const std::string gkSecureTensor = "secure";
+-const std::string gkSecureSgxTensor = "secure_sgx";
+ 
+ std::unordered_map<std::string, AxdimmTensorType> gkAxdimmTensorTypeMap{
+     {gkSimpleTensor, AxdimmTensorType::AXDIMM_SIMPLE},
+-    {gkSecureTensor, AxdimmTensorType::AXDIMM_SECURE},
+-    {gkSecureSgxTensor, AxdimmTensorType::AXDIMM_SECURE_SGX}};
++    {gkSecureTensor, AxdimmTensorType::AXDIMM_SECURE}};
+ 
+ at::Tensor create_tensor_helper(
+     std::shared_ptr<AxdimmBaseTensor>&& tensor,
+@@ -96,7 +94,6 @@ at::Tensor create_tensor_from_weights(
+           static_cast<axd_user_preferences>(allocation_preference));
+       break;
+     case AxdimmTensorType::AXDIMM_SECURE:
+-    case AxdimmTensorType::AXDIMM_SECURE_SGX:
+       tensor = std::make_shared<AxdimmSecureTensor>(
+           weights,
+           tensor_type,
+@@ -137,7 +134,6 @@ at::Tensor create_tensor_from_file(
+           static_cast<axd_user_preferences>(allocation_preference));
+       break;
+     case AxdimmTensorType::AXDIMM_SECURE:
+-    case AxdimmTensorType::AXDIMM_SECURE_SGX:
+       tensor = std::make_shared<AxdimmSecureTensor>(
+           weights_file_path.data(),
+           scalar_type,
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 9caa1f15..5babb37b 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1375,10 +1375,6 @@ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE
+ if (USE_AXDIMM)
+   target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+ 
+-  if (USE_AXDIMM_SGX)
+-    target_compile_definitions(torch_axdimm PUBLIC -DSGX_ENABLE)
+-  endif ()
+-
+   target_include_directories(torch_axdimm PRIVATE ${Caffe2_AXDIMM_INCLUDE})
+ endif ()
+ 
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index d585eaf4..76d11ef4 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -4,10 +4,6 @@
+ 
+ #include "secure/plain/axdimm_secure.h"
+ 
+-#ifdef SGX_ENABLE
+-#include "secure/intel_sgx/axdimm_secure_sgx.h"
+-#endif
+-
+ namespace caffe2 {
+ //-------------------FLOAT OPERATORS---------------------------------
+ REGISTER_AXDIMM_OPERATOR(
+@@ -69,44 +65,4 @@ REGISTER_CPU_OPERATOR(
+ REGISTER_OPERATOR_SCHEMA(SecureSparseLengthsSumVec);
+ REGISTER_OPERATOR_SCHEMA(SecureSparseLengthsSumIntVec);
+ 
+-#ifdef SGX_ENABLE
+-//-------------------FLOAT OPERATORS---------------------------------
+-REGISTER_AXDIMM_OPERATOR(
+-    SgxSecureSparseLengthsSumVec,
+-    AXDIMMSecureSparseLengthsReductionOpVec<
+-        float,
+-        TensorTypes<float, at::Half>,
+-        axdimm::secure::sgx::SgxSecureAxdimmRunnerASync,
+-        AXDIMMContext>);
+-
+-REGISTER_CPU_OPERATOR(
+-    SgxSecureSparseLengthsSumVec,
+-    AXDIMMSecureSparseLengthsReductionOpVec<
+-        float,
+-        TensorTypes<float, at::Half>,
+-        axdimm::secure::sgx::SgxSecureRunnerASync,
+-        CPUContext>);
+-
+-//-------------------UINT32_T OPERATORS---------------------------------
+-REGISTER_AXDIMM_OPERATOR(
+-    SgxSecureSparseLengthsSumIntVec,
+-    AXDIMMSecureSparseLengthsReductionOpVec<
+-        int32_t,
+-        TensorTypes<int32_t>,
+-        axdimm::secure::sgx::SgxSecureAxdimmRunnerASync,
+-        AXDIMMContext>);
+-
+-REGISTER_CPU_OPERATOR(
+-    SgxSecureSparseLengthsSumIntVec,
+-    AXDIMMSecureSparseLengthsReductionOpVec<
+-        int32_t,
+-        TensorTypes<int32_t>,
+-        axdimm::secure::sgx::SgxSecureRunnerASync,
+-        CPUContext>);
+-
+-//-------------------SGX OPERATORS SCHEMA---------------------------------
+-REGISTER_OPERATOR_SCHEMA(SgxSecureSparseLengthsSumVec);
+-REGISTER_OPERATOR_SCHEMA(SgxSecureSparseLengthsSumIntVec);
+-#endif
+-
+ } // namespace caffe2
+diff --git a/setup.py b/setup.py
+index 623ad2ea..a3de2171 100644
+--- a/setup.py
++++ b/setup.py
+@@ -17,9 +17,6 @@
+ #   USE_AXDIMM=1
+ #     enable AXDIMM build
+ #
+-#   USE_AXDIMM_SGX=1
+-#     enable Axdimm with IntelSgx build
+-#
+ #   CMAKE_AXDIMM_ROOT_PATH=<path>
+ #     path to AXDIMM library root directectory
+ #
+@@ -517,10 +514,6 @@ class build_ext(setuptools.command.build_ext.build_ext):
+             report('-- Not using CUDA')
+         if cmake_cache_vars['USE_AXDIMM']:
+             report('-- Using AXDIMM build')
+-            if cmake_cache_vars['USE_AXDIMM_SGX']:
+-                report('-- Using IntelSGX build')
+-            else:
+-                report('-- Not using IntelSGX build')
+         else:
+             report('-- Not using AXDIMM')
+         if cmake_cache_vars['CMAKE_AXDIMM_ROOT_PATH']:
+-- 
+2.34.1
+

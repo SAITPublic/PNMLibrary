@@ -1,0 +1,236 @@
+From 145e032a10c8bcf76a03efdd44ad511e3a24943d Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Mon, 19 Sep 2022 16:21:00 +0300
+Subject: [PATCH 068/128] [caffe2] Add private IE tables for unsecure mode
+
+Also do some minor cleanup:
+
+- Fix a warning
+- Remember to close an fd
+- Remove unused arguments
+
+Related to: AXDIMM-319
+---
+ .../operators/lengths_reducer_ops_axdimm.cc   | 86 ++++++++++++++++++-
+ .../lengths_reducer_ops_sec_axdimm.h          |  1 +
+ caffe2/python/pybind_state_axdimm.cc          | 39 ++++++---
+ 3 files changed, 108 insertions(+), 18 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 152d6fef..c006f922 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -11,6 +11,9 @@
+ #include <algorithm>
+ #include <vector>
+ 
++#include <fcntl.h>
++#include <sys/mman.h>
++
+ namespace caffe2 {
+ 
+ // A templated class that implements SparseLengths[Sum,WeightedSum,Mean] for
+@@ -138,11 +141,17 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     std::fill(
+         num_indices_per_lookup_.begin(), num_indices_per_lookup_.end(), 0);
+ 
+-    uint64_t tables_descriptor = this->template GetSingleArgument<uint64_t>(
++    tables_descriptor_ = this->template GetSingleArgument<uint64_t>(
+         "tables_layout_descriptor", 0);
+-    CAFFE_ENFORCE_NE(tables_descriptor, 0, "Non-shared tables layout are not yet supported!");
+     device_ = axdimm_create_base_device();
+-    tables_layout_ = axdimm_get_tables_layout(device_, tables_descriptor);
++
++    if (!tables_descriptor_) {
++      private_tables_ = true;
++      LoadTables();
++    } else {
++      private_tables_ = false;
++      tables_layout_ = axdimm_get_tables_layout(device_, tables_descriptor_);
++    }
+   }
+ 
+   ~AXDIMMSparseLengthsReductionOpVec() {
+@@ -153,6 +162,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     axdimm_destroy_op(sls_op_);
+     axdimm_destroy_tables_layout(tables_layout_);
++
++    if (private_tables_) {
++      axdimm_deallocate_tables(device_, tables_descriptor_);
++    }
++
+     axdimm_destroy_base_device(device_);
+     sls_op_ = nullptr;
+     device_ = nullptr;
+@@ -204,7 +218,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
+       (void)dataInput;
+ 
+-      const int* lengths = lengthsInput.template data<int>();
++      static_assert(sizeof(uint32_t) == sizeof(int), "int must have 32 bits");
++
++      const uint32_t* lengths =
++          reinterpret_cast<uint32_t*>(lengthsInput.template data<int>());
++
+       if (lengths[0] != num_indices_per_lookup_[i]) {
+         CAFFE_ENFORCE_EQ(
+             num_indices_per_lookup_[i],
+@@ -313,6 +331,63 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+                               // 3 in SparseLengthsWeightedSum
+   };
+ 
++ private:
++  void LoadTables() {
++    CAFFE_ENFORCE_NE(
++        block_size_, 0, "The number of tables should be greater than 0");
++
++    auto sparse_feature_size =
++        this->template GetSingleArgument<uint64_t>("sparse_feature_size", 0);
++    CAFFE_ENFORCE_NE(
++        sparse_feature_size,
++        0,
++        "The sparse feature size should be greater than 0");
++
++    auto path = this->template GetSingleArgument<std::string>("path", "");
++    CAFFE_ENFORCE(!path.empty(), "Empty file path");
++
++    // NOTE: There is no GetRepeatedArgument<uint32_t>
++    auto rows_64 = this->template GetRepeatedArgument<uint64_t>("rows", {});
++    CAFFE_ENFORCE_NE(rows_64.size(), 0, "Empty rows array");
++
++    std::vector<uint32_t> rows;
++    rows.insert(rows.end(), rows_64.begin(), rows_64.end());
++
++    auto fd = open(path.c_str(), O_RDONLY);
++    CAFFE_ENFORCE_NE(fd, -1, "Fail to open embedded tables file");
++
++    auto tables_size = std::accumulate(rows_64.begin(), rows_64.end(), 0ULL) *
++        sparse_feature_size;
++
++    auto data =
++        mmap(nullptr, tables_size * sizeof(T), PROT_READ, MAP_PRIVATE, fd, 0);
++    CAFFE_ENFORCE_NE(data, MAP_FAILED, "Fail to map embedded tables file");
++
++    auto memory_preference = this->template GetSingleArgument<int>(
++        "mem_preference", AXDIMM_ALLOC_AUTO);
++
++    tables_descriptor_ = axdimm_allocate_tables(
++        device_,
++        rows.data(),
++        block_size_,
++        sparse_feature_size * sizeof(T),
++        static_cast<axd_user_preferences>(memory_preference));
++
++    CAFFE_ENFORCE_NE(0, tables_descriptor_, "AXDIMM memory allocation failure");
++
++    LOG(INFO) << "Allocated private tables with descriptor: "
++              << tables_descriptor_;
++
++    tables_layout_ = axdimm_get_tables_layout(device_, tables_descriptor_);
++
++    axdimm_write_rank_data(device_, data, tables_layout_);
++
++    CAFFE_ENFORCE_EQ(
++        munmap(data, tables_size * sizeof(T)), 0, "Fail to unmap file");
++
++    close(fd);
++  }
++
+  private:
+   char* indices_blocked_ = nullptr; // Concatenated indices arrays
+   char* lengths_blocked_ = nullptr; // Concatenated lengths arrays
+@@ -334,6 +409,9 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       nullptr; // AXDIMM device. TODO: move into AXDIMMContext
+   AxdimmOperation* sls_op_ = nullptr; // AXDIMM sls operation handle.
+   AxdimmTablesLayout* tables_layout_ = nullptr;
++
++  bool private_tables_;
++  uint64_t tables_descriptor_ = 0;
+ };
+ 
+ using SparseLengthsSumOp =
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index ce8c3433..cc5f1203 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -303,6 +303,7 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+ 
+   CAFFE_ENFORCE_EQ(
+       munmap(data, tables_size_ * sizeof(T)), 0, "Fail to unmap file");
++  close(fd);
+ }
+ 
+ template <
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 47124921..f00d49d3 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -69,30 +69,42 @@ void addAXDIMMGlobalMethods(py::module& m) {
+       [](const std::string& weight_file,
+          const std::vector<uint32_t>& table_entry,
+          uint32_t row_size_in_bytes,
+-         uint32_t mem_preference) {
++         uint32_t mem_preference,
++         bool use_shared_tables) {
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+         base_device = axdimm_create_base_device();
+         // reset for testing purposes
+         axdimm_reset_device(base_device);
+ 
+-        LOG(INFO) << "Allocate tables with memory preference id: "
+-                  << mem_preference;
++        if (use_shared_tables) {
++          LOG(INFO) << "Allocated tables with memory preference id: "
++                    << mem_preference;
+ 
+-        descriptor = axdimm_allocate_tables(
+-            base_device,
+-            table_entry.data(),
+-            table_entry.size(),
+-            row_size_in_bytes,
+-            static_cast<axd_user_preferences>(mem_preference));
++          descriptor = axdimm_allocate_tables(
++              base_device,
++              table_entry.data(),
++              table_entry.size(),
++              row_size_in_bytes,
++              static_cast<axd_user_preferences>(mem_preference));
+ 
+-        CAFFE_ENFORCE_NE(0, descriptor, "AXDIMM memory allocation failure");
++          CAFFE_ENFORCE_NE(0, descriptor, "AXDIMM memory allocation failure");
++
++          load_tables(base_device, weight_file, descriptor);
++        } else {
++          descriptor = 0;
++
++          LOG(INFO) << "Running in private tables mode";
++        }
+ 
+-        load_tables(base_device, weight_file, descriptor);
+         return descriptor;
+       });
+   m.def("axdimm_closer", []() {
+-    axdimm_deallocate_tables(base_device, descriptor);
++    if (descriptor) {
++      axdimm_deallocate_tables(base_device, descriptor);
++    }
++    // otherwise we are not using shared tables
++
+     axdimm_destroy_base_device(base_device);
+     base_device = nullptr;
+     return 0;
+@@ -104,8 +116,7 @@ void addSecureAXDIMMGlobalMethods(py::module& m) {
+       "secure_axdimm_starter",
+       [](const std::string& weight_file,
+          const std::vector<uint32_t>& table_entry,
+-         uint32_t row_size_in_bytes,
+-         [[maybe_unused]] uint32_t mem_preference) { // Extra args for consistence with
++         uint32_t row_size_in_bytes) { // Extra args for consistence with
+                                     // non-secure version
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+-- 
+2.34.1
+

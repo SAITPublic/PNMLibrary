@@ -1,0 +1,47 @@
+From 2819e4477187618bd017ecd1fb569a14045cd12d Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Thu, 29 Sep 2022 17:45:10 +0300
+Subject: [PATCH 041/161] [axdimm][sysfs][hotfix] Fix error loop and UB for
+ invalid acq_timeout
+
+This commit fixes three very closely related things.
+
+First, if an invalid numeric value was written in `<sysfs>/ranks/acq_timeout`,
+the kernel module would loop forever trying to read a number from this file
+and printing an error message. This was due to an incorrect return value from
+`acq_timeout_store()` and was fixed in this commit.
+
+Second, the error message included the value of the `acq_timeout` variable,
+which remained uninitialized if `kstrtoull` failed, causing UB when printing
+the message. This was fixed by printing the string value received from
+userspace instead.
+
+Third, the message itself was incorrect: it told that the conversion of
+the timeout value to string failed, while in fact it was the other way round.
+The wording was also corrected.
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ drivers/dax/axdimm_sysfs.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index edd1f7b2e..547872c7d 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -39,9 +39,9 @@ static ssize_t acq_timeout_store(struct device *device,
+ 
+ 	if (kstrtoull(buf, 10, &acq_timeout)) {
+ 		AXDIMM_ERR(
+-			"Failed to convert rank acquisition timeout [%llu] to string.\n",
+-			acq_timeout);
+-		return 0;
++			"Failed to convert rank acquisition timeout string ('%s') to integer.\n",
++			buf);
++		return -EINVAL;
+ 	}
+ 	atomic64_set(&axdimm_rank_sched.retry_timeout_ns, acq_timeout);
+ 	return count;
+-- 
+2.34.1
+

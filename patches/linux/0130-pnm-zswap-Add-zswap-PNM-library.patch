@@ -1,0 +1,315 @@
+From bfad265dfbc65d2ea33e99f0cb6c6444a1477b9e Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Mon, 10 Jul 2023 21:33:27 -0400
+Subject: [PATCH 130/161] [pnm][zswap] Add zswap PNM library
+
+The library for zswap operation on cxl-zswap device was added.
+
+Related to: MCS23-1322
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ lib/Makefile            |   3 +
+ lib/pnm/Makefile        |   4 +
+ lib/pnm/pnm_zswap_lib.c | 264 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 271 insertions(+)
+ create mode 100644 lib/pnm/Makefile
+ create mode 100644 lib/pnm/pnm_zswap_lib.c
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 59bd7c2f7..7d984e520 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -367,6 +367,9 @@ obj-$(CONFIG_OBJAGG) += objagg.o
+ # pldmfw library
+ obj-$(CONFIG_PLDMFW) += pldmfw/
+ 
++# pnm zswap
++obj-$(CONFIG_PNM_ZSWAP) += pnm/
++
+ # KUnit tests
+ CFLAGS_bitfield_kunit.o := $(DISABLE_STRUCTLEAK_PLUGIN)
+ obj-$(CONFIG_BITFIELD_KUNIT) += bitfield_kunit.o
+diff --git a/lib/pnm/Makefile b/lib/pnm/Makefile
+new file mode 100644
+index 000000000..5f061253c
+--- /dev/null
++++ b/lib/pnm/Makefile
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: GPL-2.0
++obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap_lib.o
++
++pnm_zswap_lib-y := pnm_zswap_lib.o
+diff --git a/lib/pnm/pnm_zswap_lib.c b/lib/pnm/pnm_zswap_lib.c
+new file mode 100644
+index 000000000..eab8d983a
+--- /dev/null
++++ b/lib/pnm/pnm_zswap_lib.c
+@@ -0,0 +1,264 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include <asm/page.h> /* PAGE_SIZE */
++#include <linux/cdev.h> /* cdev definition */
++#include <linux/dma-mapping.h>
++#include <linux/dmaengine.h>
++#include <linux/errno.h>
++#include <linux/fs.h> /* needed for register_chrdev_region, file_operations */
++#include <linux/init.h> /* needed for module_init and exit */
++#include <linux/io.h>
++#include <linux/kdev_t.h> /* needed for macros MAJOR, MINOR, MKDEV... */
++#include <linux/kernel.h> /* needed for printk */
++#include <linux/list.h>
++#include <linux/math.h> /* DIV_ROUND_UP() */
++#include <linux/mm.h>
++#include <linux/module.h> /* needed for EXPORT_SYMBOL */
++#include <linux/moduleparam.h> /* needed for module_param */
++#include <linux/pnm/cxl_zswap.h>
++#include <linux/slab.h> /* kmalloc(), kfree() */
++#include <linux/spinlock.h>
++#include <linux/types.h> /* needed for size_t, gfp_t type */
++#include <linux/uaccess.h> /* copy_to copy_from _user */
++#include <linux/version.h>
++
++#define access_ok_compat(a, b, c) access_ok(b, c)
++
++/*dma channel to move page */
++struct dma_chan *chan;
++// #define IOAT_DMA
++
++struct cxl_pnm {
++	struct pnm_driver *driver;
++	// [TODO:] Need to add more?
++};
++
++/*********************************
++ * cxl pnm driver
++ *********************************/
++/* Register/Unregister zswap cxl pnm driver */
++static LIST_HEAD(drivers_head);
++static DEFINE_SPINLOCK(drivers_lock);
++
++/**
++ * pnm_register_driver() - register a pnm implementation.
++ * @driver:	driver to register
++ */
++void pnm_register_driver(struct pnm_driver *driver)
++{
++	spin_lock(&drivers_lock);
++	atomic_set(&driver->refcount, 0);
++	list_add(&driver->list, &drivers_head);
++	spin_unlock(&drivers_lock);
++}
++EXPORT_SYMBOL(pnm_register_driver);
++
++/**
++ * pnm_unregister_driver() - unregister a pnm implementation.
++ * @driver:	driver to unregister.
++ *
++ * Module usage counting is used to prevent using a driver
++ * while/after unloading, so if this is called from module
++ * exit function, this should never fail; if called from
++ * other than the module exit function, and this returns
++ * failure, the driver is in use and must remain available.
++ */
++int pnm_unregister_driver(struct pnm_driver *driver)
++{
++	int ret = 0, refcount;
++
++	spin_lock(&drivers_lock);
++	refcount = atomic_read(&driver->refcount);
++	WARN_ON(refcount < 0);
++	if (refcount > 0)
++		ret = -EBUSY;
++	else
++		list_del(&driver->list);
++	spin_unlock(&drivers_lock);
++
++	return ret;
++}
++EXPORT_SYMBOL(pnm_unregister_driver);
++
++static struct pnm_driver *pnm_get_driver(const char *type)
++{
++	struct pnm_driver *driver;
++
++	spin_lock(&drivers_lock);
++	list_for_each_entry(driver, &drivers_head, list) {
++		if (!strcmp(driver->type, type)) {
++			bool got = try_module_get(driver->owner);
++
++			if (got)
++				atomic_inc(&driver->refcount);
++			spin_unlock(&drivers_lock);
++			return got ? driver : NULL;
++		}
++	}
++	spin_unlock(&drivers_lock);
++	return NULL;
++}
++
++static void pnm_put_driver(struct pnm_driver *driver)
++{
++	atomic_dec(&driver->refcount);
++	module_put(driver->owner);
++}
++
++/* @ brief: Generate instruction to execute CXL-PNM. this instruction
++ * will be written at the instructino buffer in the CXL-PNM.
++ * IN : inst - pointer of instruction.
++ * IN : opcode - opcode of PNM
++ * IN : page_addr - physical address of page
++ * (Store: Page address to compress and store
++ * (Load: Page address to load and decompress)
++ * IN : offset - offset to find page at the tree
++ * IN : new_chunk - if this value is 1, new chunk memory has been allocated by
++ * host
++ * IN : chunk_size - size of new chunk memory which is allocated
++ * IN : invalid_area - if this value is 1, frees all zswap entries and zpool
++ */
++static void pnm_instruction_gen(struct instruction *instbuf,
++				enum cxl_pnm_op_e opcode,
++				const unsigned char *in, size_t in_len,
++				unsigned char *out, pgoff_t offset, pid_t pid)
++{
++	/* Instruction packet */
++	/* TODO: translate V.A to P.A */
++	instbuf->opcode = opcode;
++	instbuf->src_addr = in;
++	instbuf->src_size = in_len;
++	instbuf->dst_addr = out;
++	instbuf->offset = offset;
++	instbuf->tid = pid;
++}
++
++int pnm_run(const char *type, enum cxl_pnm_op_e opcode, const unsigned char *in,
++	    size_t in_len, unsigned char *out, size_t *out_len,
++	    struct instruction *instbuf, pgoff_t offset)
++{
++	int ret;
++	struct pnm_driver *driver;
++
++	driver = pnm_get_driver(type);
++	if (!driver) {
++		request_module("zcxl-%s", type);
++		driver = pnm_get_driver(type);
++	}
++	if (!driver) {
++		pr_err("no driver for type %s\n", type);
++		return -1;
++	}
++
++	/* instruction generation */
++	pnm_instruction_gen(instbuf, opcode, in, in_len, out, offset,
++			    current->pid);
++
++	/* submit instruction */
++	driver->set_buf_inst((unsigned long)instbuf, sizeof(unsigned long));
++
++	/* execute operation and get results */
++	ret = driver->pnm_driver_run(instbuf, out_len);
++
++	/* TODO: to get result of PNM */
++	// driver->get_buf_res((unsigned long)output, sizeof(output));
++
++	/* initialize the buffer for next instruction */
++	memset(instbuf, 0, sizeof(struct instruction));
++
++	pnm_put_driver(driver);
++
++	return ret;
++}
++EXPORT_SYMBOL(pnm_run);
++
++#ifdef IOAT_DMA
++int dma_request_chann(void)
++{
++	dma_cap_mask_t mask;
++
++	dma_cap_zero(mask);
++	dma_cap_set(DMA_MEMCPY, mask);
++	chan = dma_request_channel(mask, NULL, NULL);
++	if (chan == NULL) {
++		pr_err("[host]err: failed dma_request_channel. %s:%d\n",
++		       __FILE__, __LINE__);
++		return -1;
++	}
++
++	pr_info("[pnm_lib] request chan got channel %d! %s:%d\n", chan->chan_id,
++		__FILE__, __LINE__);
++	return 0;
++}
++
++int dma_release_chann(void)
++{
++	if (chan) {
++		dma_release_channel(chan);
++		chan = NULL;
++	}
++	return 0;
++}
++
++int dma_copy_page(struct page *src_page, struct page *dst_page)
++{
++	struct dma_async_tx_descriptor *tx;
++	dma_cookie_t cookie;
++	dma_addr_t dma_src;
++	dma_addr_t dma_dst;
++	int ret = 0;
++
++	if (!chan) {
++		pr_err("[host]err: no dma channel, %s:%d\n", __FILE__,
++		       __LINE__);
++		return -1;
++	}
++	dma_src = dma_map_page(chan->device->dev, src_page, 0, PAGE_SIZE,
++			       DMA_TO_DEVICE);
++	if (dma_mapping_error(chan->device->dev, dma_src)) {
++		pr_err("[host]dma map err:%s:%d\n", __FILE__, __LINE__);
++		return -1;
++	}
++
++	dma_dst = dma_map_page(chan->device->dev, dst_page, 0, PAGE_SIZE,
++			       DMA_FROM_DEVICE);
++	if (dma_mapping_error(chan->device->dev, dma_dst)) {
++		pr_err("[host]dma map err:%s:%d\n", __FILE__, __LINE__);
++		dma_unmap_page(chan->device->dev, dma_src, PAGE_SIZE,
++			       DMA_TO_DEVICE);
++		return -1;
++	}
++
++	tx = dmaengine_prep_dma_memcpy(chan, dma_dst, dma_src, PAGE_SIZE,
++				       DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
++
++	if (!tx) {
++		pr_err("[host] err:Failed to prepare DMA memcpy, %s:%d\n",
++		       __FILE__, __LINE__);
++		ret = -1;
++		goto out;
++	}
++
++	cookie = dmaengine_submit(tx);
++
++	if (dma_submit_error(cookie)) {
++		pr_err("[host] err: Failed to do DMA tx_submit, %s:%d\n",
++		       __FILE__, __LINE__);
++		ret = -1;
++		goto out;
++	}
++
++	if (dma_sync_wait(chan, cookie) != DMA_COMPLETE) {
++		pr_err("[host] err: Failed to complete transaction, %s:%d\n",
++		       __FILE__, __LINE__);
++		ret = -1;
++		goto out;
++	}
++
++out:
++	dma_unmap_page(chan->device->dev, dma_src, PAGE_SIZE, DMA_TO_DEVICE);
++	dma_unmap_page(chan->device->dev, dma_dst, PAGE_SIZE, DMA_FROM_DEVICE);
++	return ret;
++}
++#endif
+-- 
+2.34.1
+

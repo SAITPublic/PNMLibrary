@@ -1,0 +1,76 @@
+From 36e2effa39b1e08683a60d99f45217510601a0b0 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Wed, 5 Apr 2023 16:44:31 +0300
+Subject: [PATCH 100/161] [axdimm_resource] Add install_axdimm_resource.sh.
+
+The script installs the axdimm_resource driver compiled in-tree
+and `modprobe`s it.
+
+References: MCS23-693
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ install_axdimm_headers.sh  |  8 ++++++++
+ install_axdimm_resource.sh | 12 ++++++++++++
+ install_dax_drivers.sh     |  8 ++++++--
+ 3 files changed, 26 insertions(+), 2 deletions(-)
+ create mode 100755 install_axdimm_headers.sh
+ create mode 100755 install_axdimm_resource.sh
+
+diff --git a/install_axdimm_headers.sh b/install_axdimm_headers.sh
+new file mode 100755
+index 000000000..96de4ba22
+--- /dev/null
++++ b/install_axdimm_headers.sh
+@@ -0,0 +1,8 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++# Copyright(c) 2023 Samsung LTD. All rights reserved.
++
++set -e
++
++sudo cp -v include/uapi/linux/libaxdimm.h /usr/include/linux
++sudo cp -v include/uapi/linux/libaxdimm.h /usr/src/linux-headers-`uname -r`/include/uapi/linux/libaxdimm.h
+diff --git a/install_axdimm_resource.sh b/install_axdimm_resource.sh
+new file mode 100755
+index 000000000..4d71d4c05
+--- /dev/null
++++ b/install_axdimm_resource.sh
+@@ -0,0 +1,12 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++# Copyright(c) 2023 Samsung LTD. All rights reserved.
++
++set -e
++
++script_dir="`dirname "$0"`"
++
++sudo cp -v drivers/axdimm_resource/*.ko /lib/modules/`uname -r`/kernel/drivers/axdimm_resource/
++sudo modprobe axdimm_resource "$@"
++
++sh "$script_dir/install_axdimm_headers.sh"
+diff --git a/install_dax_drivers.sh b/install_dax_drivers.sh
+index ce3ab7c98..32a75d71d 100755
+--- a/install_dax_drivers.sh
++++ b/install_dax_drivers.sh
+@@ -1,11 +1,15 @@
+ #!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++# Copyright(c) 2023 Samsung LTD. All rights reserved.
+ 
+ set -e
+ 
++script_dir="`dirname "$0"`"
++
+ sudo cp -v drivers/dax/*.ko /lib/modules/`uname -r`/kernel/drivers/dax/
+ sudo cp -v drivers/dax/hmem/*.ko /lib/modules/`uname -r`/kernel/drivers/dax/hmem
+-sudo cp -v include/uapi/linux/libaxdimm.h /usr/include/linux
+-sudo cp -v include/uapi/linux/libaxdimm.h /usr/src/linux-headers-`uname -r`/include/uapi/linux/libaxdimm.h
++
++sh "$script_dir/install_axdimm_headers.sh"
+ 
+ lsmod | grep device_dax > /dev/null && sudo rmmod device_dax
+ sudo modprobe -v device_dax "$@"
+-- 
+2.34.1
+

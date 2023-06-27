@@ -1,0 +1,185 @@
+From c22ef085a8cb3505c0ef3caa7803804a5e234cf1 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 5 Apr 2023 18:25:04 +0300
+Subject: [PATCH 093/161] [dba] dba_resource ioctl refactor
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/dba_resource/dba_allocator.c   | 46 +++++++++++++++++++--
+ drivers/pnm/dba_resource/dba_allocator.h   |  3 +-
+ drivers/pnm/dba_resource/resource_device.c | 48 +++-------------------
+ 3 files changed, 50 insertions(+), 47 deletions(-)
+
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+index 2a8dfead6..b7697921f 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/dba_resource/dba_allocator.c
+@@ -4,7 +4,10 @@
+ #include "dba_allocator.h"
+ #include "dba_log.h"
+ 
+-#include <linux/mutex.h>
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/uaccess.h>
++#include <linux/dba_resources.h>
+ 
+ static struct MemoryAllocator general_alloc;
+ 
+@@ -54,7 +57,7 @@ static int destroy_memory_pool(struct MemoryAllocator *alloc)
+ 	return 0;
+ }
+ 
+-int allocate_memory(struct dba_allocation *req)
++static int allocate_memory(struct dba_allocation *req)
+ {
+ 	int result = 0;
+ 	mutex_lock(&allocator_lock);
+@@ -69,13 +72,48 @@ int allocate_memory(struct dba_allocation *req)
+ 	return result;
+ }
+ 
+-void deallocate_memory(struct dba_allocation *req)
++static void deallocate_memory(struct dba_allocation *req)
+ {
+ 	mutex_lock(&allocator_lock);
+ 	gen_pool_free(general_alloc.pool, req->address, req->size);
+ 	mutex_unlock(&allocator_lock);
+ }
+ 
++int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
++{
++	struct dba_allocation request;
++	int rc = 0;
++
++	rc = !!copy_from_user(&request, (void __user *)arg, sizeof(request));
++
++	if (rc)
++		return -EFAULT;
++
++	switch (cmd) {
++	case DBA_IOCTL_ALLOCATE: {
++		rc = allocate_memory(&request);
++		break;
++	}
++	case DBA_IOCTL_DEALLOCATE: {
++		deallocate_memory(&request);
++		break;
++	}
++	default:
++		DBA_ERR("ioctl dispatching error");
++		BUG();
++	}
++
++	if (rc)
++		return rc;
++
++	rc = !!copy_to_user((void __user*)arg, &request, sizeof(request));
++
++	if (rc)
++		return -EFAULT;
++
++	return rc;
++}
++
+ int initialize_memory_allocator(void)
+ {
+ 	int result = 0;
+@@ -100,6 +138,8 @@ void destroy_memory_allocator(void)
+ int reset_memory_allocator(void)
+ {
+ 	int result = 0;
++
++	DBA_INF("Reset allocator");
+ 	mutex_lock(&allocator_lock);
+ 
+ 	destroy_memory_pool(&general_alloc);
+diff --git a/drivers/pnm/dba_resource/dba_allocator.h b/drivers/pnm/dba_resource/dba_allocator.h
+index 16a8ead90..6bee68605 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.h
++++ b/drivers/pnm/dba_resource/dba_allocator.h
+@@ -16,7 +16,6 @@ int initialize_memory_allocator(void);
+ void destroy_memory_allocator(void);
+ int reset_memory_allocator(void);
+ 
+-int allocate_memory(struct dba_allocation *req);
+-void deallocate_memory(struct dba_allocation *req);
++int allocator_ioctl(unsigned int cmd, unsigned long __user arg);
+ 
+ #endif
+diff --git a/drivers/pnm/dba_resource/resource_device.c b/drivers/pnm/dba_resource/resource_device.c
+index f74494289..0000d2e51 100644
+--- a/drivers/pnm/dba_resource/resource_device.c
++++ b/drivers/pnm/dba_resource/resource_device.c
+@@ -15,7 +15,6 @@
+ long dba_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
+ {
+ 	int result = 0;
+-	struct dba_allocation req;
+ 
+ 	if (_IOC_TYPE(cmd) != DBA_RESOURCE_IOC_MAGIC) {
+ 		DBA_ERR("Wrong ioctl request: %d", cmd);
+@@ -25,54 +24,19 @@ long dba_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
+ 	switch (cmd) {
+ 	case DBA_IOCTL_RESET:
+ 		result = reset_memory_allocator();
+-		if (result < 0) {
++		if (result)
+ 			DBA_ERR("DBA Resource Manager reset failed");
+-		}
+-		return result;
+-
++		break;
+ 	case DBA_IOCTL_ALLOCATE:
+-		result = copy_from_user(&req,
+-					(const struct dba_allocation __user *)arg,
+-					sizeof(struct dba_allocation));
+-
+-		if (result < 0) {
+-			DBA_ERR("Failed copy from user");
+-			return -EFAULT;
+-		}
+-
+-		result = allocate_memory(&req);
+-		if (result < 0) {
+-			return result;
+-		}
+-
+-		result = copy_to_user((const struct dba_allocation __user *)arg, &req,
+-				      sizeof(struct dba_allocation));
+-		if (result < 0) {
+-			DBA_ERR("Failed copy to user");
+-			return -EFAULT;
+-		}
+-
+-		return 0;
+-
+ 	case DBA_IOCTL_DEALLOCATE:
+-		result = copy_from_user(&req,
+-					(const struct dba_allocation __user *)arg,
+-					sizeof(struct dba_allocation));
+-
+-		if (result < 0) {
+-			DBA_ERR("Failed copy from user");
+-			return -EFAULT;
+-		} else {
+-			deallocate_memory(&req);
+-			return 0;
+-		}
+-
++		result = allocator_ioctl(cmd, arg);
++		break;
+ 	default:
++		result = -ENOTTY;
+ 		DBA_ERR("Unknown ioctl: %d", cmd);
+-		return -ENOTTY;
+ 	}
+ 
+-	return 0;
++	return result;
+ }
+ 
+ static const struct file_operations dba_resource_operation = {
+-- 
+2.34.1
+

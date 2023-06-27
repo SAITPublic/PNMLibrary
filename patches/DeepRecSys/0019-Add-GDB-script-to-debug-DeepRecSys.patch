@@ -1,0 +1,212 @@
+From db65bc96bd50bf4abcb43a058fa3013a36fdca97 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 19 Sep 2022 15:55:48 +0300
+Subject: [PATCH 19/33] Add GDB script to debug DeepRecSys.
+
+Write a script for GDB to properly handle child processes in DeepRecSys
+and simplify debugging the multi-process application.
+
+Wiki page: https://wiki.itplatform.samsungds.net:8090/pages/viewpage.action?pageId=185463699
+
+Resolves: AXDIMM-282
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ debug/axdimm-gdb.py      | 100 +++++++++++++++++++++++++++++++++++++++
+ debug/init.gdb           |  23 +++++++++
+ run_DeepRecSys_axdimm.sh |  31 +++++++++++-
+ 3 files changed, 153 insertions(+), 1 deletion(-)
+ create mode 100644 debug/axdimm-gdb.py
+ create mode 100644 debug/init.gdb
+
+diff --git a/debug/axdimm-gdb.py b/debug/axdimm-gdb.py
+new file mode 100644
+index 0000000..3ff2ed4
+--- /dev/null
++++ b/debug/axdimm-gdb.py
+@@ -0,0 +1,100 @@
++import gdb
++import os
++import subprocess
++from pathlib import Path
++
++class InferiorHandler:
++  """Stateful class to handle inferior events."""
++  def __init__(self):
++    self._inferior_parents = {}
++
++  def new_inferior_handler(self, event):
++    """Event: new inferior has been created.
++    Action: remember the parent process of this inferior.
++    """
++    self._inferior_parents[event.inferior] = gdb.selected_inferior()
++
++  def exited_handler(self, event):
++    """Event: an inferior has finished execution.
++    Action: switch to its parent and continue it in the background,
++    unless the user is exiting GDB.
++    """
++    if gdb.convenience_variable('axdimm_gdb_quit_flag') is None:
++      gdb.post_event(lambda: self._continue_parent(event.inferior))
++
++  def _continue_parent(self, inferior):
++    """Continue the closest valid parent of an inferior."""
++    while inferior in self._inferior_parents:
++      parent = self._inferior_parents[inferior]
++      if parent.is_valid():
++        continue_inferior(parent)
++        break
++      inferior = parent
++
++def continue_inferior(inferior):
++  """Switch to an inferior and continue its execution in the background."""
++  gdb.execute(f'inferior {inferior.num}')
++  gdb.execute('continue &')
++
++def find_library(library_name):
++  """Find full library path given its filename (e.g. libAxdimmAI.so).
++  We assume that the libraries are found in the directory with a
++  hard-coded relative path (based on the project layout), which can be
++  overridden by an environment variable.
++  """
++  search_path = Path(os.getenv('AXDIMM_LIBS_PATH', '../../driver/build'))
++
++  # In the build directory, the libraries are likely to be in different
++  # subdirectories (e.g. `build/ai/libAxdimmAI.so`, `build/secure/libAxdimmSecure.so`).
++  # This might not be the case in general, because `make install` or `ninja install`
++  # install them flat into one directory.
++  #
++  # The empty string means no subdirectory and is correctly handled by
++  # `Path.__truediv__`.
++  allowed_subdirs = ['', 'ai', 'secure']
++
++  for subdir in allowed_subdirs:
++    library_path = search_path / subdir / library_name
++    if library_path.exists():
++      return os.path.normpath(library_path)
++
++  raise ValueError('Library not found')
++
++def load_symbols_from_file(file_path):
++  """Load symbols from a file specified by full path."""
++  gdb.execute(f'add-symbol-file {file_path}')
++
++def load_symbols_by_library_name(library_name):
++  """Load symbols from a library specified by its filename."""
++  try:
++    load_symbols_from_file(find_library(library_name))
++  except Exception as e:
++    print(f'Warning: failed to load symbols from library {library_name}: {e}')
++
++# Connect event handlers.
++inferior_handler = InferiorHandler()
++gdb.events.new_inferior.connect(inferior_handler.new_inferior_handler)
++gdb.events.exited.connect(inferior_handler.exited_handler)
++
++# Preload symbols from AXDIMM libraries.
++libraries_to_load = ['libAxdimmAI.so', 'libAxdimmSecure.so']
++for lib in libraries_to_load:
++  load_symbols_by_library_name(lib)
++
++welcome_message = '''
++==========
++GDB has been set up to debug AXDIMM libraries in the DeepRecSys application.
++It will trace the main Python process and all its children as separate
++inferiors. All inferiors will run in the background and only stop in
++breakpoints, watchpoints, catchpoints and similar places. If desired, they
++can be interrupted manually with the `interrupt` command, although their
++output may appear intermixed with the command you are typing.
++
++Type `continue`  to continue execution in the foreground.
++Type `continue&` to continue execution in the background.
++
++Type `run` to start DeepRecSys.
++==========
++'''.strip()
++
++print(welcome_message)
+diff --git a/debug/init.gdb b/debug/init.gdb
+new file mode 100644
+index 0000000..724211f
+--- /dev/null
++++ b/debug/init.gdb
+@@ -0,0 +1,23 @@
++# Select parent inferior on forks.
++set follow-fork-mode parent
++
++# Attach to both processes on forks.
++set detach-on-fork off
++
++# Enable loading Python scripts based on file extension.
++set script-extension soft
++
++# Allow multiple inferiors to run simultaneously.
++set schedule-multiple on
++
++# Disable pagination (cosmetic, can optionally be re-enabled).
++set pagination off
++
++# The script that keeps child processes running.
++source debug/axdimm-gdb.py
++
++# Set a flag on quit so that the script doesn't cause GDB to crash.
++# Yes, GDB is a bit fragile.
++define hook-quit
++  set $axdimm_gdb_quit_flag = 1
++end
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index bd40ea7..c314f60 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -82,6 +82,8 @@ SLS_DEVICE="axdimm"
+ SLS_DTYPE='float32'
+ # shared by default
+ TABLES_SHARING_STRATEGY=""
++DEBUGGER=''
++DEBUG_STDIO=''
+ while [ "$#" -ne 0 ]
+ do
+   case "$1" in
+@@ -113,6 +115,20 @@ do
+           shift
+           inference_engines=$1
+           ;;
++  "--debug")
++          # Debug with gdb.
++          DEBUGGER=gdb
++          ;;
++  "--debug-with")
++          # Debug with another compatible debugger.
++          # E.g. `--debug-with cgdb` will run the debug session in `cgdb`.
++          shift
++          DEBUGGER="$1"
++          ;;
++  "--debug-stdio")
++          # Connect stdin, stdout and stderr of DeepRecSys to another terminal device.
++          shift
++          DEBUG_STDIO="$1"
+   esac
+   shift
+ done
+@@ -138,4 +154,17 @@ avg_arrival_args="--avg_arrival_rate $avg_arrival_rate"
+ profiling_args=""
+ 
+ # python DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/wide_and_deep.json" --tune_batch_qps --tune_accel_qps
+-python3 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_axdimm.json" $axdimm_args $avg_arrival_args $profiling_args
++cmd=(python3 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_axdimm.json" $axdimm_args $avg_arrival_args $profiling_args)
++if [[ -n "$DEBUGGER" ]]; then
++  debug_args=()
++  if [[ -n "$DEBUG_STDIO" ]]; then
++    # Create output file if it does not exist.
++    if ! [[ -e "$DEBUG_STDIO" ]]; then
++      touch -- "$DEBUG_STDIO"
++    fi
++    debug_args+=(--tty "$DEBUG_STDIO")
++  fi
++  "$DEBUGGER" "${debug_args[@]}" -x debug/init.gdb --args "${cmd[@]}"
++else
++  "${cmd[@]}"
++fi
+-- 
+2.34.1
+

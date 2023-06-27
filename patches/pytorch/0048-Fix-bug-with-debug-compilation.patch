@@ -1,0 +1,40 @@
+From 715ecd4c03827c020d46d9cfb2c41174be5b59c3 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Wed, 22 Jun 2022 16:10:07 +0300
+Subject: [PATCH 048/128] Fix bug with debug compilation
+
+ * Downgrade overall standard to c++14
+ * Upgrade pytorch_axdimm standard to c++17
+---
+ caffe2/CMakeLists.txt                              | 1 +
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.cc | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index e1f5aadd..8e1ee443 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -990,6 +990,7 @@ elseif(USE_CUDA)
+   endif()
+ elseif(USE_AXDIMM)
+   add_library(torch_axdimm ${Caffe2_AXDIMM_SRCS})
++  set_property(TARGET torch_axdimm PROPERTY CXX_STANDARD 17)
+ endif()
+ 
+ if(NOT MSVC AND USE_XNNPACK)
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index c23ec764..702a657c 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -349,7 +349,7 @@ OPERATOR_SCHEMA(SecureSparseLengthsSumVec)
+         "*(type: Tensor`<int>`)* List of input tensors: lengths and indices.")
+     .Output(0, "OUTPUT", "Aggregated tensor");
+ 
+-OPERATOR_SCHEMA(SecureSparseLengthsSumUIntVec)
++OPERATOR_SCHEMA(SecureSparseLengthsSumIntVec)
+     .NumInputs(2, INT_MAX)
+     .NumOutputs(1)
+     .SetDoc(R"(Unsigned int32_t operator for Secure AXDIMM)")
+-- 
+2.34.1
+

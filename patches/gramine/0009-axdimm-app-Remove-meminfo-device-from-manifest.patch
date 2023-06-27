@@ -1,0 +1,32 @@
+From 827c3c63e91cdee4a826f0adc3ec86cd1e911eab Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Tue, 11 Oct 2022 16:44:50 +0300
+Subject: [PATCH 09/27] [axdimm][app] Remove meminfo device from manifest
+
+Remove meminfo from mount path in manifest file.
+---
+ application/axdimm_secndp_test/secndp.manifest.template | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/axdimm_secndp_test/secndp.manifest.template
+index e8508b67..76853f65 100644
+--- a/application/axdimm_secndp_test/secndp.manifest.template
++++ b/application/axdimm_secndp_test/secndp.manifest.template
+@@ -19,7 +19,6 @@ fs.mounts = [
+   { uri = "file:/usr", path = "/usr" },
+   { uri = "file:/etc", path = "/etc" },
+   { uri = "dev:/dev/axdimm_device0", path = "/dev/axdimm_device0" },
+-  { uri = "dev:/dev/axdimm_meminfo", path = "/dev/axdimm_meminfo" },
+   { uri = "file:{{ axdimm_driver }}/build/test", path = "{{ axdimm_driver }}/build/test" },
+   { uri = "file:{{ axdimm_driver }}/build/ai", path = "{{ axdimm_driver }}/build/ai" },
+   { uri = "file:{{ axdimm_driver }}/build/secure", path = "{{ axdimm_driver }}/build/secure" },
+@@ -46,4 +45,4 @@ sgx.trusted_files = [
+   "file:/usr/{{ arch_libdir }}/",
+   "file:{{ axdimm_driver }}/build/ai/",
+   "file:{{ axdimm_driver }}/build/secure/",
+-]
+\ No newline at end of file
++]
+-- 
+2.34.1
+

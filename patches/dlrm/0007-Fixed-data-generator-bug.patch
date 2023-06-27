@@ -1,0 +1,53 @@
+From d12f7307901717afd9d63cb9b799f56a66e14f42 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Tue, 25 Oct 2022 00:11:46 +0300
+Subject: [PATCH 07/23] Fixed data generator bug
+
+Fixed bug in data generator where sometimes,
+with fixed lookups flag specified, lookups were  not fixed.
+
+Resolves: AXDIMM-452
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ dlrm_data_pytorch.py | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/dlrm_data_pytorch.py b/dlrm_data_pytorch.py
+index 852c577..b667af5 100644
+--- a/dlrm_data_pytorch.py
++++ b/dlrm_data_pytorch.py
+@@ -934,6 +934,9 @@ def generate_dist_input_batch(
+             # num of sparse indices to be used per embedding (between
+             if num_indices_per_lookup_fixed:
+                 sparse_group_size = np.int64(num_indices_per_lookup)
++                if rand_data_dist != "uniform":
++                    raise ValueError("%s distribuiton is not supported for fixed number of lookups. "
++                                     "Please select uniform" % rand_data_dist)
+             else:
+                 # random between [1,num_indices_per_lookup])
+                 r = ra.random(1)
+@@ -948,12 +951,18 @@ def generate_dist_input_batch(
+                 sparse_group = np.clip(r, rand_data_min, rand_data_max)
+                 sparse_group = np.unique(sparse_group).astype(np.int64)
+             elif rand_data_dist == "uniform":
+-                r = ra.random(sparse_group_size)
+-                sparse_group = np.unique(np.round(r * (size - 1)).astype(np.int64))
++                sparse_group = []
++                while len(sparse_group) != sparse_group_size:
++                    r = ra.random(sparse_group_size)
++                    sparse_group = np.unique(np.round(r * (size - 1)).astype(np.int64))
+             else:
+                 raise(rand_data_dist, "distribution is not supported. \
+                      please select uniform or gaussian")
+ 
++            assert sparse_group_size == sparse_group.size or not num_indices_per_lookup_fixed, \
++                   "Sparse group indices lengths must be equal to requested size " \
++                   "for fixed number of lookups"
++
+             # reset sparse_group_size in case some index duplicates were removed
+             sparse_group_size = np.int64(sparse_group.size)
+             # store lengths and indices
+-- 
+2.34.1
+

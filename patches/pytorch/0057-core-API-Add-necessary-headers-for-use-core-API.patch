@@ -1,0 +1,40 @@
+From 3ff42a227f41bc5d757951320c5b3e43d4c27ec6 Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Tue, 5 Jul 2022 12:38:54 +0300
+Subject: [PATCH 057/128] [core API] Add necessary headers for use core API
+
+Refers to AXDIMM-258
+
+Signed-off-by: Nataliia Cherepanova nataly.cher@partner.samsung.com
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 1 +
+ caffe2/python/pybind_state_axdimm.cc           | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index d5b61af7..9735f467 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -6,6 +6,7 @@
+ #include "caffe2/utils/math.h"
+ 
+ #include "ai/api/axdimm.h"
++#include "core/api/axdimm_device.h"
+ 
+ #include <algorithm>
+ #include <vector>
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 3d6dd226..d344218e 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -15,6 +15,7 @@
+ #include "caffe2/python/pybind_state_registry.h"
+ 
+ #include "ai/api/axdimm.h"
++#include "core/api/axdimm_device.h"
+ #include "core/api/axdimm_memory.h"
+ 
+ #include <fcntl.h>
+-- 
+2.34.1
+

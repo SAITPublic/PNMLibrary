@@ -1,0 +1,107 @@
+From 08f05df9dfb7c5ad22cfa5897b66fbc89780f25e Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Tue, 1 Aug 2023 22:34:08 -0400
+Subject: [PATCH 155/161] [pnm][zswap] Reject page if compressed size is larger
+ than PAGE_SIZE
+
+Here we fix the bug when the page is not rejected from zswap if the
+page's compressed size is larger that PAGE_SIZE. Also, we fix the error
+forwarding from functional simulator to pnm library.
+
+Resolve: MCS23-1438
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 24 ++++++++++++++++++------
+ mm/pnm/pnm_zswap.c      |  2 +-
+ 2 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 81bd743c0..abcadcd21 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -155,7 +155,8 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 					tid, pnm_id, *out_len);
+ 
+ 			WRITE_ONCE(pnm_ctrl->compress[pnm_id].done, false);
+-			return CXL_PNM_SUCCESS;
++			return READ_ONCE(
++				pnm_ctrl->compress[pnm_id].commit.status);
+ 		}
+ 	} while (ktime_before(ktime_get(), kdeadline));
+ 
+@@ -239,7 +240,8 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 					tid, pnm_id, *out_len);
+ 
+ 			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].done, false);
+-			return CXL_PNM_SUCCESS;
++			return READ_ONCE(
++				pnm_ctrl->compress[pnm_id].commit.status);
+ 		}
+ 	} while (ktime_before(ktime_get(), kdeadline));
+ 
+@@ -377,9 +379,14 @@ int pnm_compress_unit(void *p)
+ 			commit_out->tid = unit->inst.tid;
+ 			commit_out->dst_size = unit->dst_size;
+ 			commit_out->offset = unit->inst.offset;
+-			commit_out->status = CXL_PNM_SUCCESS;
+ 
+ 			/* update the state of pnm unit */
++			if (status == 0) {
++				WRITE_ONCE(commit_out->status, CXL_PNM_SUCCESS);
++			} else {
++				WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
++			}
++
+ 			WRITE_ONCE(unit->state, DONE);
+ 			WRITE_ONCE(unit->done, true);
+ 
+@@ -428,7 +435,7 @@ int pnm_compress_unit(void *p)
+ 			commit_out->tid = 0;
+ 			commit_out->dst_size = 0;
+ 			commit_out->offset = 0;
+-			commit_out->status = CXL_PNM_FAILURE;
++			WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
+ 
+ 			/* update the state of pnm unit */
+ 			WRITE_ONCE(unit->state, IDLE);
+@@ -508,9 +515,14 @@ int pnm_decompress_unit(void *p)
+ 			commit_out->tid = unit->inst.tid;
+ 			commit_out->dst_size = unit->dst_size;
+ 			commit_out->offset = unit->inst.offset;
+-			commit_out->status = CXL_PNM_SUCCESS;
+ 
+ 			/* update the state of pnm unit */
++			if (status == 0) {
++				WRITE_ONCE(commit_out->status, CXL_PNM_SUCCESS);
++			} else {
++				WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
++			}
++
+ 			WRITE_ONCE(unit->state, DONE);
+ 			WRITE_ONCE(unit->done, true);
+ 
+@@ -559,7 +571,7 @@ int pnm_decompress_unit(void *p)
+ 			commit_out->tid = 0;
+ 			commit_out->dst_size = 0;
+ 			commit_out->offset = 0;
+-			commit_out->status = 0;
++			WRITE_ONCE(commit_out->status, 0);
+ 
+ 			/* update the state of pnm unit */
+ 			WRITE_ONCE(unit->state, IDLE);
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index ec006a468..c20e62672 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1498,7 +1498,7 @@ static int cxl_zswap_frontswap_store(unsigned int type, pgoff_t offset,
+ 	atomic_inc(&cxl_zpool_stored_pages);
+ 	cxl_zswap_update_total_size();
+ 
+-	return 0;
++	return ret;
+ }
+ 
+ /*
+-- 
+2.34.1
+

@@ -1,0 +1,16 @@
+# Everything build-related
+build/*
+install/*
+CMakeUserPresets.json
+
+# Editors
+*.swp
+*/.ycm_extra_conf.py
+tags
+.vscode
+.cache
+.idea
+
+# Other
+*.log
+__pycache__

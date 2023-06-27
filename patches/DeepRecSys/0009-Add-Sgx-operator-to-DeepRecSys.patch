@@ -1,0 +1,111 @@
+From 12da198b9d8e04ba275b44bc74d4ffb521169aab Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Fri, 1 Jul 2022 12:54:04 +0300
+Subject: [PATCH 09/33] Add Sgx* operator to DeepRecSys
+
+Add Sgx version of SLS operator to DeepRecSys.
+
+And two new options for run script:
+ * The new operator can be enabled by --sgx option.
+ * The SLS with MAC verification can be enabled by --tag option.
+ * Flag --device in DeepRecSys run script can be used to set device type for SLS
+   The available devices are: axdimm and cpu
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ models/dlrm_s_caffe2.py  | 19 ++++++++++++++-----
+ run_DeepRecSys_axdimm.sh | 20 +++++++++++++++++++-
+ utils/utils.py           |  3 +++
+ 3 files changed, 36 insertions(+), 6 deletions(-)
+
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index 2c61451..3b90636 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -348,13 +348,22 @@ class DLRM_Net(object):
+             emb_l.append(EE)
+ 
+         if self.use_axdimm_caffe2_backend:
+-            with core.DeviceScope(core.DeviceOption(caffe2_pb2.AXDIMM, 0)):
++            if self.args.sls_device == "axdimm":
++                dev_type = caffe2_pb2.AXDIMM
++            elif self.args.sls_device == "cpu":
++                dev_type = caffe2_pb2.CPU
++            else:
++                raise ValueError("Wrong device type: {}".format(self.args.sls_device))
++
++            with core.DeviceScope(core.DeviceOption(dev_type, 0)):
+                 if self.args.use_secndp_algo:
+                     rows = [int(v) for v in self.args.arch_embedding_size.split("-")]
+-                    EE = model.net.SecureSparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+-                                                             [sls_s_combined],
+-                                                             from_file=True, path=self.args.table_weight_path,
+-                                                             num_tables=len(rows), sparse_feature_size=m, rows=rows)
++                    op_constructor = model.net.SecureSparseLengthsSumVec if not self.args.use_sgx else model.net.SgxSecureSparseLengthsSumVec
++                    EE = op_constructor([*tbl_s_combined, *ind_s_combined, *len_s_combined],
++                                        [sls_s_combined],
++                                        from_file=True, path=self.args.table_weight_path,
++                                        num_tables=len(rows), sparse_feature_size=m, rows=rows,
++                                        with_tag=self.args.use_tags)
+                 else:
+                     EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+                                                        [sls_s_combined],
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index 8f71bf3..5e2c711 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -80,6 +80,7 @@ accel_args=""
+ table_weight_path="./tables/embedded.bin"
+ 
+ USE_SECURE_ALGO=''
++SLS_DEVICE="axdimm"
+ while [ "$#" -ne 0 ]
+ do
+   case "$1" in
+@@ -89,11 +90,28 @@ do
+   "--tables")
+             shift
+             table_weight_path=$1
++	        ;;
++  "--sgx")
++	        USE_SGX="--use_sgx"
++	        ;;
++  "--tag")
++	        TAG_VERIFICATION="--use_tags"
++	        ;;
++  "--device")
++            shift
++            SLS_DEVICE=$1
++            ;;
+   esac
+   shift
+ done
+ 
+-axdimm_args="--use_axdimm_caffe2_backend --table_weight_path $table_weight_path $USE_SECURE_ALGO"
++if [ "$USE_SGX" ] && [ -z "${SECNDP_ENCLAVE_PATH}"  ]
++then
++  echo "Set path to enclave file *.signed.so in env. variable SECNDP_ENCLAVE_PATH"
++  echo "Example: export SECNDP_ENCLAVE_PATH=/home/yalavrinenko/git/axdimm_lib/driver/build/secure/AxdimmSecureEnclave.signed.so"
++fi
++
++axdimm_args="--use_axdimm_caffe2_backend --table_weight_path $table_weight_path $USE_SECURE_ALGO $USE_SGX $TAG_VERIFICATION --sls_device $SLS_DEVICE"
+ # axdimm_args=""
+ 
+ avg_arrival_rate=1
+diff --git a/utils/utils.py b/utils/utils.py
+index 0ab8dc2..78da75d 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -133,6 +133,9 @@ def cli():
+     parser.add_argument('--use_axdimm_caffe2_backend', action="store_true", default=False)
+     parser.add_argument("--table_weight_path", type=str, default="./pretrained/real_0.5M_120table")
+     parser.add_argument("--use_secndp_algo", action="store_true", default=False)
++    parser.add_argument("--use_sgx", action="store_true", default=False)
++    parser.add_argument("--use_tags", action="store_true", default=False)
++    parser.add_argument("--sls_device", type=str, default="axdimm")
+ 
+     args = parser.parse_args()
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,257 @@
+@startuml
+
+package "Common part"{
+
+    class ProducerConsumer{
+        Model to perform single async SLS run on device
+        +run(...)
+    }
+
+    ProducerConsumer *--Manager
+
+    class Manager{
+        Create thread for producer/consumer model.
+        Thread acquire an ActionQueue and start listening it
+        +void create(..)
+    }
+    Manager *-- Storage
+
+    class Storage {
+        threads storage
+        +void add_worker(Worker worker_func)
+    }
+
+
+    package "Actions queues"{
+        class ActionQueue{
+            Actions queue for execution
+            +push(...)
+            +pop(...)
+            +close(...)
+        }
+
+        ActionQueue --o ProducerConsumer
+
+
+        class ActionConsumer{
+            Pop action from queue and execute it
+            +start(...)
+        }
+        ActionConsumer o-- ActionQueue
+    }
+
+}
+
+package "Secure environment"{
+    package "Encryption and Verification Core"{
+        class AES_Engine{
+            Simple AES encryption
+            +encrypt(....)
+        }
+
+        package EncryptionBackeds{
+         class AES_NI_Backend{
+            AES-NI via pure asm
+            +encrypt(....)
+         }
+         class AES_OpenSSL_Backend{
+            AES-NI via OpenSSL lib
+            +encrypt(....)
+         }
+        }
+
+        AES_Engine <|.. EncryptionBackeds : Implementation (one of)
+
+        package "Arithmetic encryption and verification"{
+            class CommonCryptoEngine{
+                Handle encryption backend
+                and provide some helper func
+                +create_aes_key();
+            }
+
+            CommonCryptoEngine *-- AES_Engine
+
+            class EncryptionEngine{
+               Plain text encryption/decryption.
+               Plain text is an array of any type.
+               +encrypt(....)
+               +decrypt_psum(...)
+               +offset_transform_reduce(...)
+            }
+
+            class VerificationEngine{
+                MAC generation and verification for plain text
+                Plain text is an array of any type
+                +generate_mac(...)
+                +validate_psum(...)
+                +offset_transform_reduce(...)
+            }
+
+            EncryptionEngine <|-- CommonCryptoEngine
+            VerificationEngine <|-- CommonCryptoEngine
+        }
+    }
+
+    package "IO related classes"{
+        class TrivialMemoryReader{
+            Read data from contiguous memory
+            +read(...)
+        }
+
+        class TrivialMemoryWriter{
+            Write data to contiguous memory
+            +write(...)
+        }
+    }
+
+    package "Device related classes"{
+
+        package "SLS Devices"{
+            abstract class IDevice #palegreen{
+                Interface for SLS devices
+                +init(const DeviceArguments *args)
+                +load(const void *src, uint64_t size_bytes)
+                +operator()(...)
+            }
+            class TrivialCPU{
+                SLS on CPU
+                +void run(...)
+                +void run_sls(...)
+                +void run_sls_with_tag(...)
+            }
+
+            class UntrustedAxdimmDevice {
+                SLS on AXDIMM. An entry point into AXDIMM
+                control library
+            }
+
+            TrivialCPU <|-- IDevice
+            UntrustedAxdimmDevice <|-- IDevice
+            TrivialCPU <.. TrivialMemoryWriter
+            UntrustedAxdimmDevice <.. TrivialMemoryWriter
+        }
+
+        package "Device arguments"{
+            class DeviceArguments #palegreen{
+                 A container which stores arguments for
+                 various devices.
+                 +template <typename T> explicit DeviceArguments(T value)
+                 +template <typename T> const T &get() const
+                 +template <typename T> T &get()
+            }
+
+            class UntrustedDeviceParams #palegreen{
+                 A simple container for necessary parameters to
+                 AXDIMM device.
+            }
+
+            class TrivialCPUArgs{
+                 A simple container for necessary parameters to
+                 CPU device.
+            }
+
+            DeviceArguments *-- TrivialCPUArgs
+            DeviceArguments *-- UntrustedDeviceParams
+        }
+
+        IDevice <.. DeviceArguments: takes as a parameter
+    }
+
+    package "Embedded tables encryption and verification classes"{
+        abstract class IPreprocessor{
+            Interface for embedded table preprocessor
+            +std::unique_ptr<IPostprocessor<T>> load(...);
+            +encrypted_buffer_size(...);
+        }
+
+        abstract class IPostprocessor{
+            Interface for result postprocessing.
+            Decrypt and validate psum.
+            +perform_sls(...)
+            +decrypt_psum(...)
+        }
+        IPostprocessor <.. DLRMPreprocessor: load
+
+        class DLRMPreprocessor{
+            Implementation for DLRM tables
+        }
+        DLRMPreprocessor <|-- IPreprocessor
+
+        class DLRMPostprocessor{
+            Implementation for DLRM tables
+        }
+        DLRMPostprocessor <|-- IPostprocessor
+
+        DLRMPreprocessor <.. EncryptionEngine
+        DLRMPreprocessor <.. VerificationEngine
+
+        DLRMPostprocessor *-- EncryptionEngine
+        DLRMPostprocessor *-- VerificationEngine
+
+        DLRMPreprocessor o-- TrivialMemoryReader
+        DLRMPreprocessor <.. TrivialMemoryWriter
+    }
+
+    package "SLS work offload models"{
+        class SLSSync{
+            Run task in same thread in sync. mode
+            +run(...)
+        }
+
+        class SLSProducerConsumer{
+            renaming of ProducerConsumer
+            Run task in separate thread in async. mode
+            with producer/consumer pattern aka thread pool
+        }
+
+        SLSProducerConsumer <|-- ProducerConsumer
+
+    }
+
+    package "Runner related classes"{
+        class OperationExecutor{
+            Perform secure SLS
+            +load_tables(...)
+            +device_init(...)
+            +run_sls(...)
+        }
+
+        OperationExecutor <.. DLRMPreprocessor
+        OperationExecutor *--  IPostprocessor
+        OperationExecutor *-- "SLS Devices" : 'SLS on Device'\nrun strategy
+        OperationExecutor <.. RunnerType
+        OperationExecutor *-- "SLS work offload models": Strategy\n'How to run SLS over OTPs'
+
+        enum RunnerType #palegreen{
+            Enum class for argument type
+        }
+
+        abstract class IRunner #palegreen{
+            Interface for secure runner
+            Entry point for secure API
+            +init(...)
+            +load_tables(...)
+            +run(...)
+        }
+
+        Runner <|-- IRunner
+
+        class Runner {
+            Manage OperationExecutor lifetime
+        }
+
+        Runner *-- OperationExecutor: instantiation\nof OperationExecutor
+        Runner <.. SLSOffloadingStrategyFactory : strategy
+
+        class SLSOffloadingStrategyFactory{
+            Creates 'SLS over OTP run model' model e.g.
+            sync, async, producer/consumer
+            +create_strategy(...)
+        }
+
+        SLSOffloadingStrategyFactory <.. "SLS work offload models": create
+    }
+}
+
+
+@enduml

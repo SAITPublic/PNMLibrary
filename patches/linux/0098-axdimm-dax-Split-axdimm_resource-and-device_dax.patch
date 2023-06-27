@@ -1,0 +1,1710 @@
+From b5b0b3b7db8bec19fcfaf2455aa0cdc6186357c6 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Wed, 22 Mar 2023 19:27:19 +0300
+Subject: [PATCH 098/161] [axdimm, dax] Split axdimm_resource and device_dax
+
+Previously, `device_dax` contained all AXDIMM-related kernel code
+including resource management and sysfs exports. This commit
+puts everything but the DAX code into a separate module,
+`axdimm_resource`.
+
+Overview of changes:
+
+- New kernel module: `axdimm_resource`.
+  - Guarded by new config item: `CONFIG_AXDIMM_RESOURCE` (tristate, default: m).
+- Files `axdimm_{log,sysfs,allocator,process_manager,rank_scheduler}.[ch]`,
+  were moved to `axdimm_resource` and were not changed materially.
+- `axdimm-private.h` was largely moved to `axdimm_resource`, but parts of it were
+  moved elsewhere, e.g. to common headers.
+- Files `axdimm.[ch]` were moved to `axdimm_resource` and were stripped down and
+  had new code added to become the entry point for the `axdimm_resource` module.
+- Files `axdimm_dax.[ch]` were created in `device_dax` to contain only the
+  DAX-related AXDIMM code.
+- Common meminfo-related parts were put into `include/linux` to be usable
+  both from DAX and `axdimm_resource`.
+- AXDIMM log facilities were removed from `device_dax`, and log messages were
+  rewritten using `pr_<level>` functions.
+
+Resolves: MCS23-693
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ config-axdimm                                 |   1 +
+ drivers/Makefile                              |   2 +-
+ drivers/dax/Makefile                          |   7 +-
+ drivers/dax/axdimm-private.h                  |  99 -----
+ drivers/dax/axdimm.c                          | 381 ------------------
+ drivers/dax/axdimm_dax.c                      | 155 +++++++
+ drivers/dax/axdimm_dax.h                      |  26 ++
+ drivers/dax/axdimm_sysfs.h                    |  12 -
+ drivers/dax/device.c                          |  37 +-
+ drivers/pnm/Kconfig                           |   7 +
+ drivers/pnm/Makefile                          |   4 +-
+ drivers/pnm/axdimm_resource/Makefile          |   9 +
+ drivers/pnm/axdimm_resource/axdimm.c          | 248 ++++++++++++
+ drivers/pnm/axdimm_resource/axdimm.h          |  10 +
+ .../axdimm_resource}/axdimm_allocator.c       |  28 +-
+ .../axdimm_resource}/axdimm_allocator.h       |   0
+ .../{dax => pnm/axdimm_resource}/axdimm_log.h |   2 +-
+ drivers/pnm/axdimm_resource/axdimm_private.h  |  62 +++
+ .../axdimm_resource}/axdimm_process_manager.c |   2 +-
+ .../axdimm_resource}/axdimm_process_manager.h |   0
+ .../axdimm_resource}/axdimm_rank_scheduler.c  |   0
+ .../axdimm_resource}/axdimm_rank_scheduler.h  |   0
+ .../axdimm_resource}/axdimm_sysfs.c           |  12 +-
+ drivers/pnm/axdimm_resource/axdimm_sysfs.h    |  13 +
+ drivers/pnm/axdimm_resource/resource.c        |  21 +
+ include/linux/axdimm_common.h                 |  44 ++
+ include/linux/axdimm_set_mem_info.h           | 128 ++++++
+ 27 files changed, 759 insertions(+), 551 deletions(-)
+ delete mode 100644 drivers/dax/axdimm-private.h
+ delete mode 100644 drivers/dax/axdimm.c
+ create mode 100644 drivers/dax/axdimm_dax.c
+ create mode 100644 drivers/dax/axdimm_dax.h
+ delete mode 100644 drivers/dax/axdimm_sysfs.h
+ create mode 100644 drivers/pnm/axdimm_resource/Makefile
+ create mode 100644 drivers/pnm/axdimm_resource/axdimm.c
+ create mode 100644 drivers/pnm/axdimm_resource/axdimm.h
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_allocator.c (97%)
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_allocator.h (100%)
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_log.h (91%)
+ create mode 100644 drivers/pnm/axdimm_resource/axdimm_private.h
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_process_manager.c (99%)
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_process_manager.h (100%)
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_rank_scheduler.c (100%)
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_rank_scheduler.h (100%)
+ rename drivers/{dax => pnm/axdimm_resource}/axdimm_sysfs.c (97%)
+ create mode 100644 drivers/pnm/axdimm_resource/axdimm_sysfs.h
+ create mode 100644 drivers/pnm/axdimm_resource/resource.c
+ create mode 100644 include/linux/axdimm_common.h
+ create mode 100644 include/linux/axdimm_set_mem_info.h
+
+diff --git a/config-axdimm b/config-axdimm
+index d9dd96194..fc1fdc572 100644
+--- a/config-axdimm
++++ b/config-axdimm
+@@ -10013,6 +10013,7 @@ CONFIG_DEV_DAX_HMEM_DEVICES=y
+ CONFIG_DEV_DAX_KMEM=m
+ # CONFIG_DEV_DAX_PMEM_COMPAT is not set
+ CONFIG_AXDIMM=y
++CONFIG_AXDIMM_RESOURCE=m
+ CONFIG_DBA=y
+ CONFIG_DBA_RESOURCE=m
+ CONFIG_NVMEM=y
+diff --git a/drivers/Makefile b/drivers/Makefile
+index 78a1a953f..49582024e 100644
+--- a/drivers/Makefile
++++ b/drivers/Makefile
+@@ -189,4 +189,4 @@ obj-$(CONFIG_COUNTER)		+= counter/
+ obj-$(CONFIG_MOST)		+= most/
+ obj-$(CONFIG_PECI)		+= peci/
+ obj-$(CONFIG_HTE)		+= hte/
+-obj-$(CONFIG_DBA_RESOURCE) += pnm/
++obj-y				+= pnm/
+diff --git a/drivers/dax/Makefile b/drivers/dax/Makefile
+index 2abf690d8..6355c15d2 100644
+--- a/drivers/dax/Makefile
++++ b/drivers/dax/Makefile
+@@ -7,12 +7,7 @@ obj-$(CONFIG_DEV_DAX_PMEM) += dax_pmem.o
+ dax-y := super.o
+ dax-y += bus.o
+ device_dax-y := device.o
+-CFLAGS_axdimm.o += -DAXDIMM_DRIVER_VERSION=\"$(shell git describe --first-parent --abbrev=0 --dirty --always)\"
+-device_dax-$(CONFIG_AXDIMM) += axdimm.o
+-device_dax-$(CONFIG_AXDIMM) += axdimm_allocator.o
+-device_dax-$(CONFIG_AXDIMM) += axdimm_rank_scheduler.o
+-device_dax-$(CONFIG_AXDIMM) += axdimm_sysfs.o
+-device_dax-$(CONFIG_AXDIMM) += axdimm_process_manager.o
++device_dax-$(CONFIG_AXDIMM) += axdimm_dax.o
+ dax_pmem-y := pmem.o
+ 
+ obj-y += hmem/
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+deleted file mode 100644
+index d4aeb3ccf..000000000
+--- a/drivers/dax/axdimm-private.h
++++ /dev/null
+@@ -1,99 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+-
+-#ifndef __AXDIMM_PRIVATE_H__
+-#define __AXDIMM_PRIVATE_H__
+-
+-/* For normal inclusion dax-private.h requires this header */
+-/* Put the header here not to change origin dax-private.h */
+-#include <linux/pgtable.h>
+-#include "dax-private.h"
+-#include "axdimm_log.h"
+-
+-#include <linux/cdev.h>
+-#include <linux/compiler.h>
+-#include <linux/fs.h>
+-#include <linux/libaxdimm.h>
+-#include <linux/semaphore.h>
+-#include <linux/types.h>
+-#include <linux/kobject.h>
+-
+-#define AXDIMM_COPY_FROM_TO_USER(func, error, dst, src, size)                  \
+-	do {                                                                   \
+-		error = func(dst, src, size) ? -EFAULT : 0;                    \
+-		if (unlikely(error)) {                                         \
+-			AXDIMM_ERR("Can't copy '" #src "' to '" #dst           \
+-				   "' in '" #func "'\n");                      \
+-		}                                                              \
+-	} while (0)
+-#define AXDIMM_COPY_FROM_USER(error, dst, src, size)                           \
+-	AXDIMM_COPY_FROM_TO_USER(copy_from_user, error, dst, src, size)
+-#define AXDIMM_COPY_TO_USER(error, dst, src, size)                             \
+-	AXDIMM_COPY_FROM_TO_USER(copy_to_user, error, dst, src, size)
+-
+-/* Just sizeof(array) with static array check */
+-#define SIZEOF_ARRAY(arr) (sizeof(arr) + __must_be_array(arr))
+-
+-/* A scale of AXDIMM memory range */
+-#define AXDIMM_MEMORY_SCALE ((uint64_t)CONFIG_AXDIMM_MEMORY_SCALE)
+-
+-/* Base offset for each CS */
+-#define EMBT_BASE_CS0_OFFSET ((uint64_t)0x0)
+-#define EMBT_BASE_CS1_OFFSET ((uint64_t)(0x800000000 >> AXDIMM_MEMORY_SCALE))
+-
+-/* Total Memory size for AXDIMM */
+-#define AXDIMM_MEMORY_SIZE ((uint64_t)(0x1000000000 >> AXDIMM_MEMORY_SCALE))
+-
+-/* Start address of AXDIMM */
+-#define AXDIMM_BASE_ADDR ((uint64_t)CONFIG_AXDIMM_BASE_ADDR << 30)
+-
+-/* The enumeration of axdimm memory addresses */
+-typedef enum _axd_mem_regions_e {
+-	AXDIMM_BASE_CS0 = 0,
+-	AXDIMM_TAGS_CS0 = 1,
+-	AXDIMM_PSUM_CS0 = 2,
+-	AXDIMM_BASE_CS1 = 3,
+-	AXDIMM_TAGS_CS1 = 4,
+-	AXDIMM_PSUM_CS1 = 5,
+-	NUM_OF_MEM_REGION = 6 /* Number of index for memory mapping region */
+-} axd_mem_regions_e;
+-
+-struct axdimm_device_data {
+-	int rank;
+-	int region;
+-	int channel;
+-};
+-
+-struct axdmem_info {
+-	uint64_t mem_offset[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+-	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+-};
+-
+-struct axdimm_allocator;
+-
+-struct axdimm_dev {
+-	struct axdmem_info mem_info; /* memory info */
+-	struct axdimm_allocator *allocator;
+-	struct kobject *kobject;
+-};
+-
+-static inline int is_axdimm_range(u64 start, u64 end)
+-{
+-	return start >= AXDIMM_BASE_ADDR &&
+-	       end < AXDIMM_BASE_ADDR + AXDIMM_MEMORY_SIZE;
+-}
+-
+-int init_axdimm_device(struct dev_dax *dev_dax);
+-
+-void cleanup_axdimm_device(void);
+-
+-int axdimm_mmap(struct file *filep, struct vm_area_struct *vma);
+-
+-long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+-
+-int axdimm_release(struct inode *node, struct file *f);
+-int axdimm_open(struct inode *inode, struct file *filp);
+-
+-#endif
+-
+-/* __AXDIMM_PRIVATE_H__ */
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+deleted file mode 100644
+index 64d340a5f..000000000
+--- a/drivers/dax/axdimm.c
++++ /dev/null
+@@ -1,381 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+-
+-#include "axdimm_process_manager.h"
+-#include "axdimm-private.h"
+-#include "axdimm_sysfs.h"
+-#include "axdimm_log.h"
+-
+-#include <linux/memremap.h>
+-#include <linux/pagemap.h>
+-#include <linux/module.h>
+-#include <linux/pfn_t.h>
+-#include <linux/slab.h>
+-#include <linux/dax.h>
+-#include <linux/fs.h>
+-#include <linux/mm.h>
+-#include <linux/mman.h>
+-#include <linux/io.h>
+-
+-#ifdef AXDIMM_DRIVER_VERSION
+-MODULE_VERSION(AXDIMM_DRIVER_VERSION);
+-#endif
+-
+-struct axdimm_rank_scheduler axdimm_rank_sched;
+-struct axdimm_dev axdimm_device;
+-struct axdimm_process_manager axdimm_proc_mgr;
+-
+-int axdimm_release(struct inode *node, struct file *f)
+-{
+-	return release_axdimm_process(&axdimm_proc_mgr, axdimm_device.allocator,
+-				      &axdimm_rank_sched);
+-}
+-
+-int axdimm_open(struct inode *inode, struct file *filp)
+-{
+-	return register_axdimm_process(&axdimm_proc_mgr);
+-}
+-
+-static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+-				     int bank, int row, int column)
+-{
+-	uint64_t addr = 0;
+-	uint64_t tmp_x = 0, tmp = 0, row_t = (uint64_t)row;
+-	addr += ((uint64_t)column & 0x7) << 3;
+-
+-	tmp_x = (row_t >> 3) & 0x1;
+-	tmp = bankgroup & 0x1;
+-	/* BG0 bit[6], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 6);
+-
+-	tmp_x = (row_t >> 2) & 0x1;
+-	tmp = (channel >> 1) & 0x1;
+-	/* HA bit[7], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 7);
+-
+-	/* Column bits[8:14], all 0 */
+-	addr += ((((uint64_t)column >> 3) & 0x7f) << 8);
+-
+-	/* Row R0-R2 bits[15:17], all 0 */
+-	addr += (((uint64_t)row_t & 0x7) << 15);
+-
+-	tmp_x = (row_t >> 5) & 0x1;
+-	tmp = (bankgroup >> 1) & 0x1;
+-	/* BG1 bit[18], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 18);
+-
+-	tmp_x = (row_t >> 6) & 0x1;
+-	tmp = bank & 0x1;
+-	/* BA0 bit[19], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 19);
+-
+-	tmp_x = (row_t >> 7) & 0x1;
+-	tmp = (bank >> 1) & 0x1;
+-	/* BA1 bit[20], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 20);
+-
+-	/* Row R3 bit[21], always 0 */
+-	addr += (((row_t >> 3) & 0x1) << 21);
+-	/*
+-	 * Row R5-R10 bit[22:27], different for INST/CFGR/PSUM,
+-	 * it's a shift of INST/CFGR/PSUM blocks relative to the end of BASE,
+-	 * this defines the start and indirectly the size of INST/CFGR/PSUM.
+-	 * We don't scale these blocks, because it contains specific fixed
+-	 * size buffers and registers.
+-	 * Now total (INST + CFGR + PSUM) blocks size = 1 GB.
+-	 */
+-	addr += (((row_t >> 5) & 0x7f) << 22);
+-	/* Row R4 bit[29], always 0 */
+-	addr += (((row_t >> 4) & 0x1) << 29);
+-	/*
+-	 * Row R12-R16 bit[30:34], same non-zero for INST/CFGR/PSUM,
+-	 * it's a common shift for INST/CONF/PSUM relative to the start of BASE,
+-	 * in other words it's a BASE block size.
+-	 */
+-	addr += ((row_t >> 12) & 0x1f) >> AXDIMM_MEMORY_SCALE << 30;
+-
+-	/*
+-	 * CS bit[35], Chip Select bit, it also scales to proper switch
+-	 * between CS when using scale on a simulator.
+-	 */
+-	addr += ((uint64_t)rank << 35) >> AXDIMM_MEMORY_SCALE;
+-	/* CH bit[36], always 0 */
+-	addr += (((uint64_t)channel & 0x1) << 36) >> AXDIMM_MEMORY_SCALE;
+-
+-	return addr;
+-}
+-
+-static void axdimm_setmeminfo(struct axdmem_info *mem_info)
+-{
+-	int cs;
+-
+-	/* Calculate system addr & size */
+-	for (cs = 0; cs < NUM_OF_CS; cs++) {
+-		/* init register address for each cs */
+-		mem_info->mem_offset[cs][AXDIMM_BLOCK_BASE] =
+-			(cs & 1) ?
+-				EMBT_BASE_CS1_OFFSET :
+-				EMBT_BASE_CS0_OFFSET; // CS0: rank 0,2	CS1: rank 1,3
+-		mem_info->mem_offset[cs][AXDIMM_BLOCK_INST] =
+-			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F000,
+-					     0);
+-		mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR] =
+-			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F100,
+-					     0);
+-		mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS] =
+-			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F200,
+-					     0);
+-		mem_info->mem_offset[cs][AXDIMM_BLOCK_PSUM] =
+-			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F400,
+-					     0);
+-
+-		/* init register size for each cs */
+-		mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] =
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_INST] -
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_BASE];
+-		mem_info->mem_size[cs][AXDIMM_BLOCK_INST] =
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR] -
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_INST];
+-		mem_info->mem_size[cs][AXDIMM_BLOCK_CFGR] =
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS] -
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR];
+-		mem_info->mem_size[cs][AXDIMM_BLOCK_TAGS] =
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_PSUM] -
+-			mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS];
+-		mem_info->mem_size[cs][AXDIMM_BLOCK_PSUM] =
+-			EMBT_BASE_CS1_OFFSET -
+-			mem_info->mem_offset
+-				[0]
+-				[AXDIMM_BLOCK_PSUM]; // Assume that all psum sizes are the same
+-	}
+-}
+-
+-/*
+- * Set offsets for AXDIMM blocks with different caching policies
+- */
+-static void axdimm_set_ioremap_info(ulong *offset)
+-{
+-	/* Set offset(iomem resource start address) */
+-	offset[AXDIMM_BASE_CS0] =
+-		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_BASE];
+-	offset[AXDIMM_TAGS_CS0] =
+-		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_TAGS];
+-	offset[AXDIMM_PSUM_CS0] =
+-		axdimm_device.mem_info.mem_offset[0][AXDIMM_BLOCK_PSUM];
+-	offset[AXDIMM_BASE_CS1] =
+-		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_BASE];
+-	offset[AXDIMM_TAGS_CS1] =
+-		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_TAGS];
+-	offset[AXDIMM_PSUM_CS1] =
+-		axdimm_device.mem_info.mem_offset[1][AXDIMM_BLOCK_PSUM];
+-}
+-
+-static int setup_axdimm_ranges(struct dev_dax *dev_dax)
+-{
+-	struct dev_dax_range *ranges;
+-	unsigned long pgoff = 0;
+-	unsigned long orig_range_start = dev_dax->ranges[0].range.start;
+-	int i, rc, cs, block;
+-	unsigned long start, end;
+-	rc = 0;
+-
+-	dev_dax->nr_range = AXDIMM_BLOCK_MAX * NUM_OF_CS;
+-	ranges = krealloc(dev_dax->ranges, sizeof(*ranges) * dev_dax->nr_range,
+-			  GFP_KERNEL);
+-
+-	dev_dax->ranges = ranges;
+-	for (i = 0; i < dev_dax->nr_range; ++i) {
+-		cs = i / AXDIMM_BLOCK_MAX;
+-		block = i % AXDIMM_BLOCK_MAX;
+-		/* The range[0].start, which is set up by devdax driver,
+-		 * has an offset from AXDIMM_BASE_ADDR because __dax_pmem_probe
+-		 * reserves memory space for 'struct page' list used for ZONE_DEVICE.
+-		 * See 'nd_pfn_init' from drivers/nvdimm/pfn_devs.c to understand how
+-		 * this offset is calculated.
+-		 * Yet for 'end' should be calculcated as if start equals to
+-		 * AXDIMM_BASE_ADDR.
+-		 */
+-		if (i == 0) {
+-			start = orig_range_start;
+-			end = AXDIMM_BASE_ADDR +
+-			      axdimm_device.mem_info.mem_size[cs][block] - 1;
+-		} else {
+-			start = axdimm_device.mem_info.mem_offset[cs][block] +
+-				AXDIMM_BASE_ADDR;
+-			end = start +
+-			      axdimm_device.mem_info.mem_size[cs][block] - 1;
+-		}
+-		ranges[i] = (struct dev_dax_range) {
+-		.pgoff = pgoff,
+-		.range = {
+-			.start = start,
+-			.end = end,
+-			},
+-		};
+-		pgoff += PHYS_PFN(range_len(&ranges[i].range));
+-		AXDIMM_INF(
+-			"Filling dev_dax range %d via addresses 0x%llx - 0x%llx\n",
+-			i, ranges[i].range.start, ranges[i].range.end);
+-	}
+-
+-	return rc;
+-}
+-
+-static bool is_writecombine_region(int region_no)
+-{
+-	return region_no == AXDIMM_BASE_CS0 || region_no == AXDIMM_BASE_CS1;
+-}
+-
+-static pgprot_t get_page_prot(struct vm_area_struct *vma)
+-{
+-	unsigned long offset[NUM_OF_MEM_REGION];
+-	int i;
+-	unsigned long phys_offset;
+-
+-	/* set physical offsets for AXDIMM blocks with different caching policies */
+-	axdimm_set_ioremap_info(offset);
+-	phys_offset = vma->vm_pgoff << PAGE_SHIFT;
+-
+-	for (i = 0; i < NUM_OF_MEM_REGION - 1; ++i) {
+-		if (phys_offset >= offset[i] && phys_offset < offset[i + 1]) {
+-			if (is_writecombine_region(i))
+-				return pgprot_writecombine(vma->vm_page_prot);
+-			return vma->vm_page_prot;
+-		}
+-	}
+-
+-	/* last region corresponds to cs1 PSUM which is write-back */
+-	return vma->vm_page_prot;
+-}
+-
+-int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+-{
+-	size_t page_addr, page_offset;
+-	off_t gpio_addr = AXDIMM_BASE_ADDR;
+-
+-	page_offset = gpio_addr >> PAGE_SHIFT;
+-	page_addr = page_offset + vma->vm_pgoff;
+-
+-	vma->vm_page_prot = get_page_prot(vma);
+-
+-	AXDIMM_INF("Device mmap Offset 0x%lx, Size 0x%lx, page prot 0x%lx\n",
+-		   vma->vm_pgoff, (vma->vm_end - vma->vm_start),
+-		   vma->vm_page_prot.pgprot);
+-
+-	if (remap_pfn_range(vma, vma->vm_start, page_addr,
+-			    vma->vm_end - vma->vm_start, vma->vm_page_prot)) {
+-		AXDIMM_ERR("Device mmap failed\n");
+-		return -EAGAIN;
+-	}
+-	AXDIMM_INF("Device mmap okay\n");
+-
+-	return 0;
+-}
+-
+-static void dump_ioctl_err(unsigned int cmd)
+-{
+-	AXDIMM_ERR(" ioctl cmd: magic %u, direction %u, size %u, number %u\n",
+-		   _IOC_TYPE(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd), _IOC_NR(cmd));
+-}
+-
+-long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+-{
+-	int retval = 0;
+-
+-	/*
+-	 * extract the type and number bitfields, and don't decode
+-	 * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
+-	 */
+-	if (_IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC) {
+-		AXDIMM_ERR("Wrong ioctl magic. Aborting ioctl:\n");
+-		dump_ioctl_err(cmd);
+-		AXDIMM_ERR(" expected magic: %u\n", AXDIMM_IOC_MAGIC);
+-		return -ENOTTY;
+-	}
+-	if (_IOC_NR(cmd) > AXDIMM_IOC_MAXNR) {
+-		AXDIMM_ERR("Ioctl number too large. Aborting ioctl:\n");
+-		dump_ioctl_err(cmd);
+-		AXDIMM_ERR(" maximum ioctl number: %u\n", AXDIMM_IOC_MAGIC);
+-		return -ENOTTY;
+-	}
+-
+-	AXDIMM_DBG("Handling AXDIMM ioctl %u with arg 0x%lx\n", _IOC_NR(cmd),
+-		   arg);
+-
+-	switch (cmd) {
+-	case DEVICE_IOCRESET:
+-		reset_axdimm_rank_scheduler(&axdimm_rank_sched);
+-		retval = reset_axdimm_allocator(axdimm_device.allocator,
+-						&axdimm_device.mem_info);
+-		reset_axdimm_process_manager(&axdimm_proc_mgr);
+-		break;
+-	case ALLOCATE_MEMORY:
+-	case GET_MEMORY_OBJECTS_NUM:
+-	case GET_MEMORY_ALLOCATION:
+-	case DEALLOCATE_MEMORY:
+-		retval = mem_process_ioctl(cmd, axdimm_device.allocator, arg);
+-		break;
+-	case GET_RANK_FOR_WRITE:
+-	case GET_RANK_FOR_READ:
+-		retval = get_axdimm_rank(&axdimm_rank_sched, cmd, arg);
+-		break;
+-	case RELEASE_READ_RANK:
+-	case RELEASE_WRITE_RANK:
+-		retval = release_axdimm_rank(&axdimm_rank_sched, cmd, arg);
+-		break;
+-	default:
+-		AXDIMM_ERR("Unknown ioctl command:\n");
+-		dump_ioctl_err(cmd);
+-		retval = -ENOTTY;
+-	}
+-
+-	AXDIMM_DBG("Returning %d from ioctl\n", retval);
+-	return retval;
+-}
+-
+-int init_axdimm_device(struct dev_dax *dev_dax)
+-{
+-	int err;
+-
+-	AXDIMM_DBG("Initializing AXDIMM device\n");
+-
+-	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
+-	dev_dax->is_axdimm_device = 1;
+-
+-	/* Initialize device meminfo */
+-	axdimm_setmeminfo(&axdimm_device.mem_info);
+-
+-	/* Initialize memory allocator */
+-	err = init_axdimm_allocator(&axdimm_device);
+-	if (err)
+-		return err;
+-
+-	/* Setup dev_dax ranges for AXDIMM, this is needed for proper
+-	 * devdax <-> system-ram transitions (devdax <-> kmem).
+-	 */
+-	setup_axdimm_ranges(dev_dax);
+-
+-	/* Initialize manager of processes which use AXDIMM resources */
+-	init_axdimm_process_manager(&axdimm_proc_mgr);
+-
+-	/* Reset ranks status and synchronization primitives */
+-	init_axdimm_rank_scheduler(&axdimm_rank_sched);
+-
+-	/* Create sysfs subsystem for the device */
+-	axdimm_device.kobject = &dev_dax->dev.kobj;
+-	return build_axdimm_sysfs(&axdimm_device);
+-}
+-
+-void cleanup_axdimm_device(void)
+-{
+-	AXDIMM_DBG("Cleaning up AXDIMM device\n");
+-
+-	/* Free allocated memory */
+-	cleanup_axdimm_allocator(&axdimm_device);
+-
+-	/* Free allocated memory if any user processes alive upon device remove*/
+-	cleanup_axdimm_process_manager(&axdimm_proc_mgr);
+-
+-	/* Remove test attribute */
+-	destroy_axdimm_sysfs();
+-}
+diff --git a/drivers/dax/axdimm_dax.c b/drivers/dax/axdimm_dax.c
+new file mode 100644
+index 000000000..b6a0cf939
+--- /dev/null
++++ b/drivers/dax/axdimm_dax.c
+@@ -0,0 +1,155 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include "axdimm_dax.h"
++
++#include <linux/axdimm_set_mem_info.h>
++#include <linux/pgtable.h>
++#include <linux/memremap.h>
++#include <linux/pagemap.h>
++#include <linux/pfn_t.h>
++
++#define LOG_PREFIX "[axdimm_dax] "
++
++static const struct axdmem_info *get_mem_info(void)
++{
++	static struct axdmem_info mem_info;
++	static bool mem_info_initialized;
++
++	if (!mem_info_initialized)
++		axdimm_set_mem_info(&mem_info);
++
++	return &mem_info;
++}
++
++/*
++ * Set offsets for AXDIMM blocks with different caching policies
++ */
++static void set_ioremap_info(ulong *offset)
++{
++	const struct axdmem_info *mem_info = get_mem_info();
++
++	/* Set offset(iomem resource start address) */
++	offset[AXDIMM_BASE_CS0] = mem_info->mem_offset[0][AXDIMM_BLOCK_BASE];
++	offset[AXDIMM_TAGS_CS0] = mem_info->mem_offset[0][AXDIMM_BLOCK_TAGS];
++	offset[AXDIMM_PSUM_CS0] = mem_info->mem_offset[0][AXDIMM_BLOCK_PSUM];
++	offset[AXDIMM_BASE_CS1] = mem_info->mem_offset[1][AXDIMM_BLOCK_BASE];
++	offset[AXDIMM_TAGS_CS1] = mem_info->mem_offset[1][AXDIMM_BLOCK_TAGS];
++	offset[AXDIMM_PSUM_CS1] = mem_info->mem_offset[1][AXDIMM_BLOCK_PSUM];
++}
++
++static bool is_writecombine_region(int region_no)
++{
++	return region_no == AXDIMM_BASE_CS0 || region_no == AXDIMM_BASE_CS1;
++}
++
++static pgprot_t get_page_prot(struct vm_area_struct *vma)
++{
++	unsigned long offset[NUM_OF_MEM_REGION];
++	int i;
++	unsigned long phys_offset;
++
++	/* set physical offsets for AXDIMM blocks with different caching policies */
++	set_ioremap_info(offset);
++	phys_offset = vma->vm_pgoff << PAGE_SHIFT;
++
++	for (i = 0; i < NUM_OF_MEM_REGION - 1; ++i) {
++		if (phys_offset >= offset[i] && phys_offset < offset[i + 1]) {
++			if (is_writecombine_region(i))
++				return pgprot_writecombine(vma->vm_page_prot);
++			return vma->vm_page_prot;
++		}
++	}
++
++	/* last region corresponds to cs1 PSUM which is write-back */
++	return vma->vm_page_prot;
++}
++
++int axdimm_dax_mmap(struct file *filep, struct vm_area_struct *vma)
++{
++	size_t page_addr, page_offset;
++	off_t gpio_addr = AXDIMM_BASE_ADDR;
++
++	page_offset = gpio_addr >> PAGE_SHIFT;
++	page_addr = page_offset + vma->vm_pgoff;
++
++	vma->vm_page_prot = get_page_prot(vma);
++
++	pr_info(LOG_PREFIX
++		"Device mmap Offset 0x%lx, Size 0x%lx, page prot 0x%lx\n",
++		vma->vm_pgoff, (vma->vm_end - vma->vm_start),
++		vma->vm_page_prot.pgprot);
++
++	if (remap_pfn_range(vma, vma->vm_start, page_addr,
++			    vma->vm_end - vma->vm_start, vma->vm_page_prot)) {
++		pr_err(LOG_PREFIX "Device mmap failed\n");
++		return -EAGAIN;
++	}
++	pr_info(LOG_PREFIX "Device mmap okay\n");
++
++	return 0;
++}
++
++static int setup_axdimm_ranges(struct dev_dax *dev_dax)
++{
++	struct dev_dax_range *ranges;
++	unsigned long pgoff = 0;
++	unsigned long orig_range_start = dev_dax->ranges[0].range.start;
++	int i, rc, cs, block;
++	unsigned long start, end;
++	const struct axdmem_info *mem_info = get_mem_info();
++
++	rc = 0;
++	dev_dax->nr_range = AXDIMM_BLOCK_MAX * NUM_OF_CS;
++	ranges = krealloc(dev_dax->ranges, sizeof(*ranges) * dev_dax->nr_range,
++			  GFP_KERNEL);
++
++	dev_dax->ranges = ranges;
++	for (i = 0; i < dev_dax->nr_range; ++i) {
++		cs = i / AXDIMM_BLOCK_MAX;
++		block = i % AXDIMM_BLOCK_MAX;
++		/* The range[0].start, which is set up by devdax driver,
++		 * has an offset from AXDIMM_BASE_ADDR because __dax_pmem_probe
++		 * reserves memory space for 'struct page' list used for ZONE_DEVICE.
++		 * See 'nd_pfn_init' from drivers/nvdimm/pfn_devs.c to understand how
++		 * this offset is calculated.
++		 * Yet for 'end' should be calculcated as if start equals to
++		 * AXDIMM_BASE_ADDR.
++		 */
++		if (i == 0) {
++			start = orig_range_start;
++			end = AXDIMM_BASE_ADDR + mem_info->mem_size[cs][block] -
++			      1;
++		} else {
++			start = mem_info->mem_offset[cs][block] +
++				AXDIMM_BASE_ADDR;
++			end = start + mem_info->mem_size[cs][block] - 1;
++		}
++		ranges[i] = (struct dev_dax_range) {
++		.pgoff = pgoff,
++		.range = {
++			.start = start,
++			.end = end,
++			},
++		};
++		pgoff += PHYS_PFN(range_len(&ranges[i].range));
++		pr_info(LOG_PREFIX
++			"Filling dev_dax range %d via addresses 0x%llx - 0x%llx\n",
++			i, ranges[i].range.start, ranges[i].range.end);
++	}
++
++	return rc;
++}
++
++int init_axdimm_dax_device(struct dev_dax *dev_dax)
++{
++	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
++	dev_dax->is_axdimm_device = 1;
++
++	/* Setup dev_dax ranges for AXDIMM, this is needed for proper
++	 * devdax <-> system-ram transitions (devdax <-> kmem).
++	 */
++	setup_axdimm_ranges(dev_dax);
++
++	return 0;
++}
+diff --git a/drivers/dax/axdimm_dax.h b/drivers/dax/axdimm_dax.h
+new file mode 100644
+index 000000000..676215889
+--- /dev/null
++++ b/drivers/dax/axdimm_dax.h
+@@ -0,0 +1,26 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM_DAX_H__
++#define __AXDIMM_DAX_H__
++
++/* For normal inclusion dax-private.h requires this header */
++/* Put the header here not to change origin dax-private.h */
++#include <linux/pgtable.h>
++#include "dax-private.h"
++
++#include <linux/axdimm_common.h>
++
++#include <linux/fs.h>
++#include <linux/mm_types.h>
++
++int axdimm_dax_mmap(struct file *filep, struct vm_area_struct *vma);
++int init_axdimm_dax_device(struct dev_dax *dev_dax);
++
++static inline bool is_axdimm_range(u64 start, u64 end)
++{
++	return start >= AXDIMM_BASE_ADDR &&
++	       end < AXDIMM_BASE_ADDR + AXDIMM_MEMORY_SIZE;
++}
++
++#endif /* __AXDIMM_DAX_H__ */
+diff --git a/drivers/dax/axdimm_sysfs.h b/drivers/dax/axdimm_sysfs.h
+deleted file mode 100644
+index 4340998ed..000000000
+--- a/drivers/dax/axdimm_sysfs.h
++++ /dev/null
+@@ -1,12 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+-
+-#ifndef __AXDIMM_SYSFS__
+-#define __AXDIMM_SYSFS__
+-
+-struct axdimm_dev;
+-
+-int build_axdimm_sysfs(struct axdimm_dev *dev);
+-void destroy_axdimm_sysfs(void);
+-
+-#endif /* __AXDIMM_SYSFS__ */
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 0ab8897ae..99d52ffe6 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -15,7 +15,7 @@
+ 
+ #include "dax-private.h"
+ #ifdef CONFIG_AXDIMM
+-#include "axdimm-private.h"
++#include "axdimm_dax.h"
+ #endif
+ #ifdef CONFIG_DBA
+ #include "dba-private.h"
+@@ -319,7 +319,7 @@ static int dax_mmap(struct file *filp, struct vm_area_struct *vma)
+ #ifdef CONFIG_AXDIMM
+ 	/* If DAX device is AXDIMM, do not support lazy mapping. */
+ 	if (dev_dax->is_axdimm_device)
+-		return axdimm_mmap(filp, vma);
++		return axdimm_dax_mmap(filp, vma);
+ #endif
+ 
+ 	return 0;
+@@ -377,10 +377,6 @@ static int dax_open(struct inode *inode, struct file *filp)
+ 	filp->f_sb_err = file_sample_sb_err(filp);
+ 	filp->private_data = dev_dax;
+ 	inode->i_flags = S_DAX;
+-#ifdef CONFIG_AXDIMM
+-        if (dev_dax->is_axdimm_device)
+-		return axdimm_open(inode, filp);
+-#endif
+ 	return 0;
+ }
+ 
+@@ -388,10 +384,6 @@ static int dax_release(struct inode *inode, struct file *filp)
+ {
+ 	struct dev_dax *dev_dax = filp->private_data;
+ 	dev_dbg(&dev_dax->dev, "trace\n");
+-#ifdef CONFIG_AXDIMM
+-	if (dev_dax->is_axdimm_device)
+-		axdimm_release(inode, filp);
+-#endif
+ 	return 0;
+ }
+ 
+@@ -399,9 +391,6 @@ static int dax_release(struct inode *inode, struct file *filp)
+ static const struct file_operations dax_fops = {
+ 	.llseek = noop_llseek,
+ 	.owner = THIS_MODULE,
+-#ifdef CONFIG_AXDIMM
+-	.unlocked_ioctl = axdimm_ioctl,
+-#endif
+ 	.open = dax_open,
+ 	.release = dax_release,
+ 	.get_unmapped_area = dax_get_unmapped_area,
+@@ -429,17 +418,18 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	void *addr;
+ 	int rc, i;
+ 	struct range *range = &dev_dax->ranges[0].range;
+-	int is_axdimm_device = 0;
++	bool is_axdimm_device = false;
+ 
+ #ifdef CONFIG_AXDIMM
++
+ 	/* Even though AXDIMM device has several ranges, we remap all of them at once */
+ 	is_axdimm_device = dev_dax->is_axdimm_device ||
+ 			   is_axdimm_range(range->start, range->end);
+ 
+ 	if (is_axdimm_device) {
+-		rc = init_axdimm_device(dev_dax);
++		rc = init_axdimm_dax_device(dev_dax);
+ 		if (rc) {
+-			dev_err(dev, "couldn't initialize axdimm device, error [%d]\n", rc);
++			dev_err(dev, "couldn't initialize AXDIMM DAX device, error [%d]\n", rc);
+ 			goto out_err;
+ 		}
+ 	}
+@@ -526,27 +516,12 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	return devm_add_action_or_reset(dev, dev_dax_kill, dev_dax);
+ 
+ out_err:
+-#ifdef CONFIG_AXDIMM
+-	if (is_axdimm_device)
+-		cleanup_axdimm_device();
+-#endif
+ 	return rc;
+ }
+ EXPORT_SYMBOL_GPL(dev_dax_probe);
+ 
+-#ifdef CONFIG_AXDIMM
+-void dev_dax_remove(struct dev_dax *dev_dax)
+-{
+-	cleanup_axdimm_device();
+-}
+-EXPORT_SYMBOL_GPL(dev_dax_remove);
+-#endif
+-
+ static struct dax_device_driver device_dax_driver = {
+ 	.probe = dev_dax_probe,
+-#ifdef CONFIG_AXDIMM
+-	.remove = dev_dax_remove,
+-#endif
+ 	.match_always = 1,
+ };
+ 
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index f78ce5874..7575d0982 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -1,4 +1,11 @@
+ # SPDX-License-Identifier: GPL-2.0-only
++config AXDIMM_RESOURCE
++  tristate "AXDIMM Resource Manager: manage AXDIMM device resources"
++  help
++    Create /dev/pnm/axdimm_resource device with ioctl and sysfs interfaces
++    for interaction with rank and memory allocator and other AXDIMM device
++    resources.
++
+ config DBA_RESOURCE
+ 	tristate "DBA Resource Manager: handle resource of CXL-DBA device"
+ 	help
+diff --git a/drivers/pnm/Makefile b/drivers/pnm/Makefile
+index 0d5f7eaff..1d56238e7 100644
+--- a/drivers/pnm/Makefile
++++ b/drivers/pnm/Makefile
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+-obj-y += dba_resource/
+-
++obj-$(CONFIG_AXDIMM_RESOURCE) += axdimm_resource/
++obj-$(CONFIG_DBA_RESOURCE) += dba_resource/
+diff --git a/drivers/pnm/axdimm_resource/Makefile b/drivers/pnm/axdimm_resource/Makefile
+new file mode 100644
+index 000000000..05050b19e
+--- /dev/null
++++ b/drivers/pnm/axdimm_resource/Makefile
+@@ -0,0 +1,9 @@
++obj-$(CONFIG_AXDIMM_RESOURCE) += axdimm_resource.o
++
++CFLAGS_axdimm.o += -DAXDIMM_DRIVER_VERSION=\"$(shell git describe --first-parent --abbrev=0 --dirty --always)\"
++axdimm_resource-y := resource.o
++axdimm_resource-y += axdimm.o
++axdimm_resource-y += axdimm_allocator.o
++axdimm_resource-y += axdimm_process_manager.o
++axdimm_resource-y += axdimm_rank_scheduler.o
++axdimm_resource-y += axdimm_sysfs.o
+diff --git a/drivers/pnm/axdimm_resource/axdimm.c b/drivers/pnm/axdimm_resource/axdimm.c
+new file mode 100644
+index 000000000..04b37d152
+--- /dev/null
++++ b/drivers/pnm/axdimm_resource/axdimm.c
+@@ -0,0 +1,248 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include "axdimm_process_manager.h"
++#include "axdimm_private.h"
++#include "axdimm_sysfs.h"
++#include "axdimm_log.h"
++
++#include <linux/axdimm_set_mem_info.h>
++#include <linux/cdev.h>
++#include <linux/dax.h>
++#include <linux/fs.h>
++#include <linux/io.h>
++#include <linux/libaxdimm.h>
++#include <linux/mm.h>
++#include <linux/mman.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++
++#ifdef AXDIMM_DRIVER_VERSION
++MODULE_VERSION(AXDIMM_DRIVER_VERSION);
++#endif
++
++#define AXDIMM_RESOURCE_BASE_MINOR 0
++#define AXDIMM_RESOURCE_DRIVER_NAME "axdimm_resource"
++#define AXDIMM_RESOURCE_REGION_NAME AXDIMM_RESOURCE_DRIVER_NAME
++#define AXDIMM_RESOURCE_CLASS_NAME AXDIMM_RESOURCE_DRIVER_NAME
++
++#define AXDIMM_RESOURCE_ACCESS_MODE 0666
++
++#define AXDIMM_RESOURCE_DEVICE_NAME AXDIMM_RESOURCE_PATH_INTERNAL
++struct axdimm_rank_scheduler axdimm_rank_sched;
++struct axdimm_process_manager axdimm_proc_mgr;
++
++static struct axdimm_dev axdimm_device;
++static struct class *axdimm_resource_class;
++static struct device *axdimm_resource_device;
++static struct cdev axdimm_resource_cdev;
++static dev_t axdimm_resource_device_number;
++
++int axdimm_release(struct inode *node, struct file *f)
++{
++	return release_axdimm_process(&axdimm_proc_mgr, axdimm_device.allocator,
++				      &axdimm_rank_sched);
++}
++
++int axdimm_open(struct inode *inode, struct file *filp)
++{
++	return register_axdimm_process(&axdimm_proc_mgr);
++}
++
++static void dump_ioctl_err(unsigned int cmd)
++{
++	AXDIMM_ERR(" ioctl cmd: magic %u, direction %u, size %u, number %u\n",
++		   _IOC_TYPE(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd), _IOC_NR(cmd));
++}
++
++long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
++{
++	int retval = 0;
++
++	/*
++	 * extract the type and number bitfields, and don't decode
++	 * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
++	 */
++	if (_IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC) {
++		AXDIMM_ERR("Wrong ioctl magic. Aborting ioctl:\n");
++		dump_ioctl_err(cmd);
++		AXDIMM_ERR(" expected magic: %u\n", AXDIMM_IOC_MAGIC);
++		return -ENOTTY;
++	}
++	if (_IOC_NR(cmd) > AXDIMM_IOC_MAXNR) {
++		AXDIMM_ERR("Ioctl number too large. Aborting ioctl:\n");
++		dump_ioctl_err(cmd);
++		AXDIMM_ERR(" maximum ioctl number: %u\n", AXDIMM_IOC_MAGIC);
++		return -ENOTTY;
++	}
++
++	AXDIMM_DBG("Handling AXDIMM ioctl %u with arg 0x%lx\n", _IOC_NR(cmd),
++		   arg);
++
++	switch (cmd) {
++	case DEVICE_IOCRESET:
++		reset_axdimm_rank_scheduler(&axdimm_rank_sched);
++		retval = reset_axdimm_allocator(axdimm_device.allocator,
++						&axdimm_device.mem_info);
++		reset_axdimm_process_manager(&axdimm_proc_mgr);
++		break;
++	case ALLOCATE_MEMORY:
++	case GET_MEMORY_OBJECTS_NUM:
++	case GET_MEMORY_ALLOCATION:
++	case DEALLOCATE_MEMORY:
++		retval = mem_process_ioctl(cmd, axdimm_device.allocator, arg);
++		break;
++	case GET_RANK_FOR_WRITE:
++	case GET_RANK_FOR_READ:
++		retval = get_axdimm_rank(&axdimm_rank_sched, cmd, arg);
++		break;
++	case RELEASE_READ_RANK:
++	case RELEASE_WRITE_RANK:
++		retval = release_axdimm_rank(&axdimm_rank_sched, cmd, arg);
++		break;
++	default:
++		AXDIMM_ERR("Unknown ioctl command:\n");
++		dump_ioctl_err(cmd);
++		retval = -ENOTTY;
++	}
++
++	AXDIMM_DBG("Returning %d from ioctl\n", retval);
++	return retval;
++}
++
++static const struct file_operations axdimm_resource_ops = {
++	.owner = THIS_MODULE,
++	.open = axdimm_open,
++	.release = axdimm_release,
++	.unlocked_ioctl = axdimm_ioctl,
++};
++
++static char *devnode_func(struct device *dev, umode_t *mode)
++{
++	if (!mode)
++		return NULL;
++
++	*mode = AXDIMM_RESOURCE_ACCESS_MODE;
++	return NULL;
++}
++
++static int init_axdimm_resource_dev(void)
++{
++	int err = 0;
++
++	err = alloc_chrdev_region(&axdimm_resource_device_number,
++				  AXDIMM_RESOURCE_BASE_MINOR, 1,
++				  AXDIMM_RESOURCE_REGION_NAME);
++	if (err) {
++		AXDIMM_ERR("Failed to allocate chrdev region\n");
++		goto fail;
++	}
++	AXDIMM_DBG("axdimm_resource chrdev region: major %d, minor %d\n",
++		   MAJOR(axdimm_resource_device_number),
++		   MINOR(axdimm_resource_device_number));
++
++	axdimm_resource_class =
++		class_create(THIS_MODULE, AXDIMM_RESOURCE_CLASS_NAME);
++	if (IS_ERR(axdimm_resource_class)) {
++		err = PTR_ERR(axdimm_resource_class);
++		AXDIMM_ERR("Failed to create device class\n");
++		goto fail_region;
++	}
++	AXDIMM_DBG("Created class %s\n", AXDIMM_RESOURCE_CLASS_NAME);
++
++	axdimm_resource_class->devnode = devnode_func;
++
++	axdimm_resource_device = device_create(axdimm_resource_class, NULL,
++					       axdimm_resource_device_number,
++					       NULL, "%s",
++					       AXDIMM_RESOURCE_DEVICE_NAME);
++	if (IS_ERR(axdimm_resource_device)) {
++		err = PTR_ERR(axdimm_resource_device);
++		AXDIMM_ERR("Failed to create %s device\n",
++			   AXDIMM_RESOURCE_DEVICE_NAME);
++		goto fail_class;
++	}
++
++	cdev_init(&axdimm_resource_cdev, &axdimm_resource_ops);
++	err = cdev_add(&axdimm_resource_cdev, axdimm_resource_device_number, 1);
++	if (err) {
++		AXDIMM_ERR("Failed to add %s cdev\n",
++			   AXDIMM_RESOURCE_DEVICE_NAME);
++		goto fail_device;
++	}
++
++	AXDIMM_INF("%s device is created\n", AXDIMM_RESOURCE_DEVICE_NAME);
++	return 0;
++
++fail_device:
++	device_destroy(axdimm_resource_class, axdimm_resource_device_number);
++fail_class:
++	class_destroy(axdimm_resource_class);
++fail_region:
++	unregister_chrdev_region(axdimm_resource_device_number, 1);
++fail:
++	return err;
++}
++
++static void destroy_axdimm_resource_dev(void)
++{
++	cdev_del(&axdimm_resource_cdev);
++	device_destroy(axdimm_resource_class, axdimm_resource_device_number);
++	class_destroy(axdimm_resource_class);
++	unregister_chrdev_region(axdimm_resource_device_number, 1);
++}
++
++int init_axdimm_device(void)
++{
++	int err;
++
++	AXDIMM_INF("Initializing AXDIMM device\n");
++
++	/* Initialize axdimm_resource device */
++	err = init_axdimm_resource_dev();
++	if (err)
++		goto out;
++
++	/* Initialize device mem_info */
++	axdimm_set_mem_info(&axdimm_device.mem_info);
++
++	/* Initialize memory allocator */
++	err = init_axdimm_allocator(&axdimm_device);
++	if (err)
++		goto out_resource_dev;
++
++	/* Initialize manager of processes which use AXDIMM resources */
++	init_axdimm_process_manager(&axdimm_proc_mgr);
++
++	/* Reset ranks status and synchronization primitives */
++	init_axdimm_rank_scheduler(&axdimm_rank_sched);
++
++	/* Create sysfs subsystem for the device */
++	err = build_axdimm_sysfs(&axdimm_device, axdimm_resource_device);
++	if (err)
++		goto out_resource_dev;
++
++	return 0;
++
++out_resource_dev:
++	destroy_axdimm_resource_dev();
++out:
++	return err;
++}
++
++void cleanup_axdimm_device(void)
++{
++	AXDIMM_INF("Cleaning up AXDIMM device\n");
++
++	/* Free allocated memory */
++	cleanup_axdimm_allocator(&axdimm_device);
++
++	/* Free allocated memory if any user processes alive upon device remove*/
++	cleanup_axdimm_process_manager(&axdimm_proc_mgr);
++
++	/* Remove test attribute */
++	destroy_axdimm_sysfs();
++
++	/* Destroy axdimm_resource device */
++	destroy_axdimm_resource_dev();
++}
+diff --git a/drivers/pnm/axdimm_resource/axdimm.h b/drivers/pnm/axdimm_resource/axdimm.h
+new file mode 100644
+index 000000000..9b9cccc0c
+--- /dev/null
++++ b/drivers/pnm/axdimm_resource/axdimm.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM__
++#define __AXDIMM__
++
++int init_axdimm_device(void);
++void cleanup_axdimm_device(void);
++
++#endif /* __AXDIMM__ */
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/pnm/axdimm_resource/axdimm_allocator.c
+similarity index 97%
+rename from drivers/dax/axdimm_allocator.c
+rename to drivers/pnm/axdimm_resource/axdimm_allocator.c
+index 95e641660..338e677b4 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/pnm/axdimm_resource/axdimm_allocator.c
+@@ -1,10 +1,11 @@
+ // SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "axdimm-private.h"
+-#include "axdimm_process_manager.h"
+ #include "axdimm_allocator.h"
++
+ #include "axdimm_log.h"
++#include "axdimm_private.h"
++#include "axdimm_process_manager.h"
+ 
+ #include <linux/genalloc.h>
+ #include <linux/log2.h>
+@@ -378,14 +379,15 @@ static int deallocate_objects(struct axdimm_allocator *alloc,
+ 	return err_code;
+ }
+ 
+-static uint8_t select_optimal_rank(struct axdimm_allocator *alloc){
++static uint8_t select_optimal_rank(struct axdimm_allocator *alloc)
++{
+ 	uint8_t rank;
+ 	uint8_t optimal_rank = 0;
+ 	size_t max_free_space = gen_pool_avail(alloc->mem_pools[0]);
+ 
+-	for (rank = 1; rank < NUM_OF_RANK; ++rank){
++	for (rank = 1; rank < NUM_OF_RANK; ++rank) {
+ 		size_t rank_free_space = gen_pool_avail(alloc->mem_pools[rank]);
+-		if (max_free_space < rank_free_space){
++		if (max_free_space < rank_free_space) {
+ 			max_free_space = rank_free_space;
+ 			optimal_rank = rank;
+ 		}
+@@ -394,19 +396,21 @@ static uint8_t select_optimal_rank(struct axdimm_allocator *alloc){
+ }
+ 
+ static int allocate_single_object(struct axdimm_allocator *alloc,
+-			     struct axd_memory_object *objects,
+-			     struct axd_memory_alloc_request *request,
+-			     uint64_t *actual_num)
++				  struct axd_memory_object *objects,
++				  struct axd_memory_alloc_request *request,
++				  uint64_t *actual_num)
+ {
+ 	int err_code = 0;
+-	int optimal_rank = GET_ALLOC_SINGLE_RANK_PREFERENCE(request->preference);
++	int optimal_rank =
++		GET_ALLOC_SINGLE_RANK_PREFERENCE(request->preference);
+ 
+ 	if (optimal_rank == 0)
+ 		optimal_rank = select_optimal_rank(alloc);
+-	else 
++	else
+ 		optimal_rank -= 1;
+ 
+-	err_code = pool_alloc_mem_obj(alloc, 0, optimal_rank, 1, objects, request);
++	err_code =
++		pool_alloc_mem_obj(alloc, 0, optimal_rank, 1, objects, request);
+ 	*actual_num = (err_code == 0);
+ 
+ 	return err_code;
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/pnm/axdimm_resource/axdimm_allocator.h
+similarity index 100%
+rename from drivers/dax/axdimm_allocator.h
+rename to drivers/pnm/axdimm_resource/axdimm_allocator.h
+diff --git a/drivers/dax/axdimm_log.h b/drivers/pnm/axdimm_resource/axdimm_log.h
+similarity index 91%
+rename from drivers/dax/axdimm_log.h
+rename to drivers/pnm/axdimm_resource/axdimm_log.h
+index 6bc791f13..99b9d0f44 100644
+--- a/drivers/dax/axdimm_log.h
++++ b/drivers/pnm/axdimm_resource/axdimm_log.h
+@@ -1,5 +1,5 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __AXDIMM_LOG_H__
+ #define __AXDIMM_LOG_H__
+diff --git a/drivers/pnm/axdimm_resource/axdimm_private.h b/drivers/pnm/axdimm_resource/axdimm_private.h
+new file mode 100644
+index 000000000..fc4ca75e5
+--- /dev/null
++++ b/drivers/pnm/axdimm_resource/axdimm_private.h
+@@ -0,0 +1,62 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM_PRIVATE_H__
++#define __AXDIMM_PRIVATE_H__
++
++#include "axdimm_log.h"
++
++#include <linux/axdimm_common.h>
++#include <linux/cdev.h>
++#include <linux/compiler.h>
++#include <linux/device.h>
++#include <linux/fs.h>
++#include <linux/semaphore.h>
++#include <linux/types.h>
++#include <linux/kobject.h>
++
++#define AXDIMM_COPY_FROM_TO_USER(func, error, dst, src, size)        \
++	do {                                                         \
++		error = func(dst, src, size) ? -EFAULT : 0;          \
++		if (unlikely(error)) {                               \
++			AXDIMM_ERR("Can't copy '" #src "' to '" #dst \
++				   "' in '" #func "'\n");            \
++		}                                                    \
++	} while (0)
++#define AXDIMM_COPY_FROM_USER(error, dst, src, size) \
++	AXDIMM_COPY_FROM_TO_USER(copy_from_user, error, dst, src, size)
++#define AXDIMM_COPY_TO_USER(error, dst, src, size) \
++	AXDIMM_COPY_FROM_TO_USER(copy_to_user, error, dst, src, size)
++
++/* Just sizeof(array) with static array check */
++#define SIZEOF_ARRAY(arr) (sizeof(arr) + __must_be_array(arr))
++
++struct axdimm_device_data {
++	int rank;
++	int region;
++	int channel;
++};
++
++struct axdimm_allocator;
++
++struct axdimm_dev {
++	struct axdmem_info mem_info; /* memory info */
++	struct axdimm_allocator *allocator;
++};
++
++static inline int is_axdimm_range(u64 start, u64 end)
++{
++	return start >= AXDIMM_BASE_ADDR &&
++	       end < AXDIMM_BASE_ADDR + AXDIMM_MEMORY_SIZE;
++}
++
++void cleanup_axdimm_device(void);
++
++long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
++
++int axdimm_release(struct inode *node, struct file *f);
++int axdimm_open(struct inode *inode, struct file *filp);
++
++#endif
++
++/* __AXDIMM_PRIVATE_H__ */
+diff --git a/drivers/dax/axdimm_process_manager.c b/drivers/pnm/axdimm_resource/axdimm_process_manager.c
+similarity index 99%
+rename from drivers/dax/axdimm_process_manager.c
+rename to drivers/pnm/axdimm_resource/axdimm_process_manager.c
+index 74c1745fd..2439be908 100644
+--- a/drivers/dax/axdimm_process_manager.c
++++ b/drivers/pnm/axdimm_resource/axdimm_process_manager.c
+@@ -361,7 +361,7 @@ int register_axdimm_process(struct axdimm_process_manager *mgr)
+ 			AXDIMM_ERR(
+ 				"Failed to register process, pid: %d, tid: %d\n",
+ 				pid, current->pid);
+-			err_code = -1;
++			err_code = -ENOMEM;
+ 			goto out;
+ 		}
+ 
+diff --git a/drivers/dax/axdimm_process_manager.h b/drivers/pnm/axdimm_resource/axdimm_process_manager.h
+similarity index 100%
+rename from drivers/dax/axdimm_process_manager.h
+rename to drivers/pnm/axdimm_resource/axdimm_process_manager.h
+diff --git a/drivers/dax/axdimm_rank_scheduler.c b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
+similarity index 100%
+rename from drivers/dax/axdimm_rank_scheduler.c
+rename to drivers/pnm/axdimm_resource/axdimm_rank_scheduler.c
+diff --git a/drivers/dax/axdimm_rank_scheduler.h b/drivers/pnm/axdimm_resource/axdimm_rank_scheduler.h
+similarity index 100%
+rename from drivers/dax/axdimm_rank_scheduler.h
+rename to drivers/pnm/axdimm_resource/axdimm_rank_scheduler.h
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/pnm/axdimm_resource/axdimm_sysfs.c
+similarity index 97%
+rename from drivers/dax/axdimm_sysfs.c
+rename to drivers/pnm/axdimm_resource/axdimm_sysfs.c
+index c9f2cdbb8..a4bb34bd4 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/pnm/axdimm_resource/axdimm_sysfs.c
+@@ -6,7 +6,7 @@
+ #include "axdimm_log.h"
+ #include "axdimm_rank_scheduler.h"
+ #include "axdimm_process_manager.h"
+-#include "axdimm-private.h"
++#include "axdimm_private.h"
+ 
+ #include <linux/device.h>
+ #include <linux/genalloc.h>
+@@ -196,7 +196,8 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 	if (strcmp(attr->attr.name, rank_attr_name[3]) == 0) {
+ 		struct axdimm_rank_stat_t *axd_rs =
+ 			axdimm_rank_sched.axd_rank_stats;
+-		wr_acq_count = atomic64_read(&axd_rs[attr->rank].wr_acquisition_count);
++		wr_acq_count =
++			atomic64_read(&axd_rs[attr->rank].wr_acquisition_count);
+ 		return sprintf(buf, "%llu\n", wr_acq_count);
+ 	}
+ 
+@@ -230,7 +231,8 @@ static ssize_t region_show(struct region_attribute *attr, char *buf)
+ 		return sprintf(
+ 			buf, "%llu\n",
+ 			axdimm_device->mem_info.mem_size[attr->rank % NUM_OF_CS]
+-							[attr->region] / NUM_RANKS_PER_CS);
++							[attr->region] /
++				NUM_RANKS_PER_CS);
+ 
+ 	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+ 		return sprintf(buf, "%llu\n",
+@@ -389,7 +391,7 @@ static int build_rank_sysfs(struct kobject *kobj, uint8_t rank)
+ 	return err;
+ }
+ 
+-int build_axdimm_sysfs(struct axdimm_dev *dev)
++int build_axdimm_sysfs(struct axdimm_dev *dev, struct device *resource_dev)
+ {
+ 	int rank;
+ 	int err = 0;
+@@ -397,7 +399,7 @@ int build_axdimm_sysfs(struct axdimm_dev *dev)
+ 	axdimm_device = dev;
+ 
+ 	AXDIMM_DBG("Building AXDIMM sysfs\n");
+-	ranks_kobj = kobject_create_and_add("ranks", dev->kobject);
++	ranks_kobj = kobject_create_and_add("ranks", &resource_dev->kobj);
+ 	if (sysfs_create_groups(ranks_kobj, dev_attr_groups)) {
+ 		err = -ENOMEM;
+ 		goto axdimm_sysfs_out;
+diff --git a/drivers/pnm/axdimm_resource/axdimm_sysfs.h b/drivers/pnm/axdimm_resource/axdimm_sysfs.h
+new file mode 100644
+index 000000000..4cf702a11
+--- /dev/null
++++ b/drivers/pnm/axdimm_resource/axdimm_sysfs.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM_SYSFS__
++#define __AXDIMM_SYSFS__
++
++struct device;
++struct axdimm_dev;
++
++int build_axdimm_sysfs(struct axdimm_dev *dev, struct device *resource_dev);
++void destroy_axdimm_sysfs(void);
++
++#endif /* __AXDIMM_SYSFS__ */
+diff --git a/drivers/pnm/axdimm_resource/resource.c b/drivers/pnm/axdimm_resource/resource.c
+new file mode 100644
+index 000000000..e8a8a3094
+--- /dev/null
++++ b/drivers/pnm/axdimm_resource/resource.c
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include <linux/module.h>
++#include "axdimm.h"
++
++static int __init init_mod(void)
++{
++	return init_axdimm_device();
++}
++
++static void __exit exit_mod(void)
++{
++	cleanup_axdimm_device();
++}
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("AxDIMM resource manager");
++
++module_init(init_mod);
++module_exit(exit_mod);
+diff --git a/include/linux/axdimm_common.h b/include/linux/axdimm_common.h
+new file mode 100644
+index 000000000..c58cdbb0e
+--- /dev/null
++++ b/include/linux/axdimm_common.h
+@@ -0,0 +1,44 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++/*
++ * This file contains common definitions and macros used both by DAX and
++ * axdimm_resource.
++ */
++
++#ifndef __AXDIMM_COMMON_H__
++#define __AXDIMM_COMMON_H__
++
++#include <linux/types.h>
++#include <linux/libaxdimm.h>
++
++/* A scale of AXDIMM memory range */
++#define AXDIMM_MEMORY_SCALE ((uint64_t)CONFIG_AXDIMM_MEMORY_SCALE)
++
++/* Total Memory size for AXDIMM */
++#define AXDIMM_MEMORY_SIZE (0x1000000000ULL >> AXDIMM_MEMORY_SCALE)
++
++/* Start address of AXDIMM */
++#define AXDIMM_BASE_ADDR ((uint64_t)CONFIG_AXDIMM_BASE_ADDR << 30)
++
++/* Base offset for each CS */
++#define EMBT_BASE_CS0_OFFSET 0ULL
++#define EMBT_BASE_CS1_OFFSET (0x800000000ULL >> AXDIMM_MEMORY_SCALE)
++
++/* The enumeration of axdimm memory addresses */
++typedef enum _axd_mem_regions_e {
++	AXDIMM_BASE_CS0 = 0,
++	AXDIMM_TAGS_CS0 = 1,
++	AXDIMM_PSUM_CS0 = 2,
++	AXDIMM_BASE_CS1 = 3,
++	AXDIMM_TAGS_CS1 = 4,
++	AXDIMM_PSUM_CS1 = 5,
++	NUM_OF_MEM_REGION = 6 /* Number of index for memory mapping region */
++} axd_mem_regions_e;
++
++struct axdmem_info {
++	uint64_t mem_offset[NUM_OF_CS][AXDIMM_BLOCK_MAX];
++	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
++};
++
++#endif /* __AXDIMM_COMMON_H__ */
+diff --git a/include/linux/axdimm_set_mem_info.h b/include/linux/axdimm_set_mem_info.h
+new file mode 100644
+index 000000000..e8cd52838
+--- /dev/null
++++ b/include/linux/axdimm_set_mem_info.h
+@@ -0,0 +1,128 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++/*
++ * This file contains struct mem_info filling code common for DAX and
++ * axdimm_resource. These functions have been factored out to this
++ * file to avoid "Function defined but not used" warnings for code that
++ * only uses definitions from axdimm_common.h.
++ */
++
++#ifndef __AXDIMM_SET_MEM_INFO_H__
++#define __AXDIMM_SET_MEM_INFO_H__
++
++#include <linux/axdimm_common.h>
++#include <linux/types.h>
++
++static uint64_t axdimm_make_address(int channel, int rank, int bankgroup,
++				    int bank, int row, int column)
++{
++	uint64_t addr = 0;
++	uint64_t tmp_x = 0, tmp = 0, row_t = (uint64_t)row;
++
++	addr += ((uint64_t)column & 0x7) << 3;
++
++	tmp_x = (row_t >> 3) & 0x1;
++	tmp = bankgroup & 0x1;
++	/* BG0 bit[6], always 0 */
++	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 6);
++
++	tmp_x = (row_t >> 2) & 0x1;
++	tmp = (channel >> 1) & 0x1;
++	/* HA bit[7], always 0 */
++	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 7);
++
++	/* Column bits[8:14], all 0 */
++	addr += ((((uint64_t)column >> 3) & 0x7f) << 8);
++
++	/* Row R0-R2 bits[15:17], all 0 */
++	addr += (((uint64_t)row_t & 0x7) << 15);
++
++	tmp_x = (row_t >> 5) & 0x1;
++	tmp = (bankgroup >> 1) & 0x1;
++	/* BG1 bit[18], always 0 */
++	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 18);
++
++	tmp_x = (row_t >> 6) & 0x1;
++	tmp = bank & 0x1;
++	/* BA0 bit[19], always 0 */
++	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 19);
++
++	tmp_x = (row_t >> 7) & 0x1;
++	tmp = (bank >> 1) & 0x1;
++	/* BA1 bit[20], always 0 */
++	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 20);
++
++	/* Row R3 bit[21], always 0 */
++	addr += (((row_t >> 3) & 0x1) << 21);
++	/*
++	 * Row R5-R10 bit[22:27], different for INST/CFGR/PSUM,
++	 * it's a shift of INST/CFGR/PSUM blocks relative to the end of BASE,
++	 * this defines the start and indirectly the size of INST/CFGR/PSUM.
++	 * We don't scale these blocks, because it contains specific fixed
++	 * size buffers and registers.
++	 * Now total (INST + CFGR + PSUM) blocks size = 1 GB.
++	 */
++	addr += (((row_t >> 5) & 0x7f) << 22);
++	/* Row R4 bit[29], always 0 */
++	addr += (((row_t >> 4) & 0x1) << 29);
++	/*
++	 * Row R12-R16 bit[30:34], same non-zero for INST/CFGR/PSUM,
++	 * it's a common shift for INST/CONF/PSUM relative to the start of BASE,
++	 * in other words it's a BASE block size.
++	 */
++	addr += ((row_t >> 12) & 0x1f) >> AXDIMM_MEMORY_SCALE << 30;
++
++	/*
++	 * CS bit[35], Chip Select bit, it also scales to proper switch
++	 * between CS when using scale on a simulator.
++	 */
++	addr += ((uint64_t)rank << 35) >> AXDIMM_MEMORY_SCALE;
++	/* CH bit[36], always 0 */
++	addr += (((uint64_t)channel & 0x1) << 36) >> AXDIMM_MEMORY_SCALE;
++
++	return addr;
++}
++
++static void axdimm_set_mem_info(struct axdmem_info *mem_info)
++{
++	int cs;
++
++	/* Calculate system addr & size */
++	for (cs = 0; cs < NUM_OF_CS; cs++) {
++		/* init register address for each cs */
++		mem_info->mem_offset[cs][AXDIMM_BLOCK_BASE] =
++			(cs & 1) ?
++				EMBT_BASE_CS1_OFFSET :
++				EMBT_BASE_CS0_OFFSET; // CS0: rank 0,2	CS1: rank 1,3
++		mem_info->mem_offset[cs][AXDIMM_BLOCK_INST] =
++			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F000, 0);
++		mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR] =
++			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F100, 0);
++		mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS] =
++			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F200, 0);
++		mem_info->mem_offset[cs][AXDIMM_BLOCK_PSUM] =
++			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F400, 0);
++
++		/* init register size for each cs */
++		mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] =
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_INST] -
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_BASE];
++		mem_info->mem_size[cs][AXDIMM_BLOCK_INST] =
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR] -
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_INST];
++		mem_info->mem_size[cs][AXDIMM_BLOCK_CFGR] =
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS] -
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_CFGR];
++		mem_info->mem_size[cs][AXDIMM_BLOCK_TAGS] =
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_PSUM] -
++			mem_info->mem_offset[cs][AXDIMM_BLOCK_TAGS];
++		mem_info->mem_size[cs][AXDIMM_BLOCK_PSUM] =
++			EMBT_BASE_CS1_OFFSET -
++			mem_info->mem_offset
++				[0]
++				[AXDIMM_BLOCK_PSUM]; // Assume that all psum sizes are the same
++	}
++}
++
++#endif /* __AXDIMM_SET_MEM_INFO_H__ */
+-- 
+2.34.1
+

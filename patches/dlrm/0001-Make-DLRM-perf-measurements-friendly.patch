@@ -1,0 +1,58 @@
+From 5370e5faad1c26609402f7e1cc2548c4d69656fa Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 31 Aug 2022 13:43:37 +0900
+Subject: [PATCH 01/23] Make DLRM perf measurements friendly
+
+Separate test data generation from inference loop for performance measurements.
+Add time/QPS prints after inference is done.
+
+Relates to: AXDIMM-370.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ dlrm_s_pytorch.py | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index ec3394b..b3ac187 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -764,7 +764,15 @@ def inference(
+         scores = []
+         targets = []
+ 
++    # Separate test data generation from inference loop for performance
++    # measurements.
++    test_loads = []
+     for i, testBatch in enumerate(test_ld):
++        test_loads.append(testBatch)
++
++    start_inference = time.time()
++    i = 0
++    for testBatch in test_loads:
+         # early exit if nbatches was set by the user and was exceeded
+         if nbatches > 0 and i >= nbatches:
+             break
+@@ -787,6 +795,7 @@ def inference(
+             device,
+             ndevices=ndevices,
+         )
++        i = i + 1
+         ### gather the distributed results on each rank ###
+         # For some reason it requires explicit sync before all_gather call if
+         # tensor is on GPU memory
+@@ -813,6 +822,11 @@ def inference(
+                 test_accu += A_test
+                 test_samp += mbs_test
+ 
++    end_inference = time.time()
++    total_time = end_inference - start_inference
++    print("Total inference time: {}s\nQueries number: {}.\nQueries per second "
++          "(QPS): {}.".format(total_time, i, i / total_time))
++
+     if args.mlperf_logging:
+         with record_function("DLRM mlperf sklearn metrics compute"):
+             scores = np.concatenate(scores, axis=0)
+-- 
+2.34.1
+

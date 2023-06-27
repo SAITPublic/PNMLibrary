@@ -1,0 +1,239 @@
+From 4f189242b4f1d1721ddcf8a99788a608d7df8a21 Mon Sep 17 00:00:00 2001
+From: "s.koval" <s.koval@samsung.com>
+Date: Tue, 26 Jul 2022 10:31:09 +0300
+Subject: [PATCH 063/128] [core API] Memory allocation REPLICATE_ALL strategy
+
+* Support new memory allocation API
+
+Resolves: AXDIMM-256
+
+Signed-off-by: s.koval <s.koval@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops.cc       |  4 +-
+ .../operators/lengths_reducer_ops_axdimm.cc   | 11 ++---
+ .../lengths_reducer_ops_sec_axdimm.cc         |  4 --
+ .../lengths_reducer_ops_sec_axdimm.h          | 12 +----
+ caffe2/python/pybind_state_axdimm.cc          | 48 ++++++++++---------
+ 5 files changed, 35 insertions(+), 44 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops.cc b/caffe2/operators/lengths_reducer_ops.cc
+index 857e287f..693e64b5 100644
+--- a/caffe2/operators/lengths_reducer_ops.cc
++++ b/caffe2/operators/lengths_reducer_ops.cc
+@@ -104,8 +104,8 @@ OPERATOR_SCHEMA(SparseLengthsSumVec)
+         SparseLengthsSumOp::LENGTHS)
+     .SetDoc(FormatDoc<SparseLengthsSumDef>())
+     .Arg(
+-        "shared_tables_uuid",
+-        "string: an uuid to get shared embedding tables.")
++        "tables_layout_descriptor",
++        "uint64_t: a descriptor to get tables memory layout.")
+     .Input(
+         0,
+         "I1, ..., IN, L1, ..., LN",
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 9735f467..152d6fef 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -138,12 +138,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     std::fill(
+         num_indices_per_lookup_.begin(), num_indices_per_lookup_.end(), 0);
+ 
+-    std::string uuid = this->template GetSingleArgument<std::string>(
+-        "shared_tables_uuid", "None");
+-    CAFFE_ENFORCE_NE(
+-        uuid, "None", "Non-shared tables layout is not yet supported!");
+-    tables_layout_ = axdimm_get_shared_tables_layout(uuid.c_str());
++    uint64_t tables_descriptor = this->template GetSingleArgument<uint64_t>(
++        "tables_layout_descriptor", 0);
++    CAFFE_ENFORCE_NE(tables_descriptor, 0, "Non-shared tables layout are not yet supported!");
+     device_ = axdimm_create_base_device();
++    tables_layout_ = axdimm_get_tables_layout(device_, tables_descriptor);
+   }
+ 
+   ~AXDIMMSparseLengthsReductionOpVec() {
+@@ -153,8 +152,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     lengths_blocked_ = nullptr;
+ 
+     axdimm_destroy_op(sls_op_);
+-    axdimm_destroy_base_device(device_);
+     axdimm_destroy_tables_layout(tables_layout_);
++    axdimm_destroy_base_device(device_);
+     sls_op_ = nullptr;
+     device_ = nullptr;
+     tables_layout_ = nullptr;
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 18bbf57c..6bf8d91b 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -48,7 +48,6 @@ REGISTER_CPU_OPERATOR(
+         CPUContext>);
+ 
+ //-------------------OPERATORS SCHEMA---------------------------------
+-// [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+ #define REGISTER_OPERATOR_SCHEMA(operator_name)                                  \
+   OPERATOR_SCHEMA(operator_name)                                                 \
+       .NumInputs(2, INT_MAX)                                                     \
+@@ -59,9 +58,6 @@ REGISTER_CPU_OPERATOR(
+       .Arg("num_tables", "uint: number of embedded tables")                      \
+       .Arg("sparse_feature_size", "uint: sparse feature size")                   \
+       .Arg("rows", "vector<uint64>: number of rows for each table")              \
+-      .Arg(                                                                      \
+-          "engine_id",                                                           \
+-          "uint: id of inference engine in range [0,num_engines)")               \
+       .Arg("with_tag", "bool: perform MAC verification of result")               \
+       .Input(                                                                    \
+           0,                                                                     \
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index b90e75f8..f6970f6d 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -61,8 +61,6 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+                       "by expression I = static_cast<I>(F * "
+                    << SecureTypeTraits<T>::SCALE_FACTOR << " )";
+     }
+-    // [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+-    engine_id_ = this->template GetSingleArgument<size_t>("engine_id", false);
+     with_tag_ = this->template GetSingleArgument<bool>("with_tag", false);
+     if (with_tag_) {
+       LOG(INFO) << "MAC Verification is enabled.";
+@@ -187,24 +185,19 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       axdimm::common_view<const uint64_t> rows,
+       axdimm::common_view<const secure_core_value_type> data) {
+     if constexpr (std::is_same_v<Context, AXDIMMContext>) {
+-      // [TODO: AXDIMM-256] remove rank_offsets after rank allocator is ready
+       size_t tables_size_bytes = tables_size_ * sizeof(T);
+       if (with_tag_) {
+         tables_size_bytes +=
+             (tables_size_ / sparse_feature_size_) * sizeof(axdimm::uint128_t);
+       }
+-      std::vector<uint64_t> rank_offsets(
+-          NUM_OF_RANK, engine_id_ * tables_size_bytes);
+-      LOG(INFO) << "Operator " << engine_id_
+-                << " using rank offset: " << rank_offsets.back()
++      LOG(INFO) << "Operator "
+                 << " tables size in bytes: " << tables_size_bytes;
+       axdimm::secure::DeviceArguments args(
+           axdimm::secure::UntrustedAxdimmDeviceParams{
+               .rows = rows,
+               .sparse_feature_size = sparse_feature_size,
+-              .rank_offsets = std::move(rank_offsets),
+-              .rank_mask = 0xF,
+               .with_tag = with_tag_,
++              .preference = AXDIMM_ALLOC_AUTO,
+               .cache_exec_context = true});
+       runner_.init(&args);
+     } else if constexpr (std::is_same_v<Context, CPUContext>) {
+@@ -235,7 +228,6 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       sizeof(axdimm::uint128_t) / sizeof(secure_core_value_type);
+   int64_t sparse_feature_size_{};
+   size_t tables_size_{};
+-  uint32_t engine_id_{};
+   std::vector<uint64_t> rows_;
+   bool with_tag_{false};
+   std::vector<uint8_t> tag_checks_;
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index d344218e..6cd13ffc 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -16,7 +16,6 @@
+ 
+ #include "ai/api/axdimm.h"
+ #include "core/api/axdimm_device.h"
+-#include "core/api/axdimm_memory.h"
+ 
+ #include <fcntl.h>
+ #include <sys/mman.h>
+@@ -25,13 +24,12 @@
+ namespace {
+ 
+ static AxdimmBaseDevice* base_device = nullptr;
+-static AxdimmTablesLayout* tables_layout = nullptr;
+-static AxdimmMemoryObject* memory_object = nullptr;
++static uint64_t descriptor = 0;
+ 
+-std::string load_shared_tables(
++void load_tables(
+     AxdimmBaseDevice* device,
+-    AxdimmTablesLayout* layout,
+-    const std::string& weight_file) {
++    const std::string& weight_file,
++    uint64_t descr) {
+   int fd = ::open(weight_file.c_str(), O_RDONLY);
+ 
+   if (fd < 0) {
+@@ -44,8 +42,11 @@ std::string load_shared_tables(
+   void* addr =
+       mmap(nullptr, file_size, PROT_READ, MAP_FILE | MAP_SHARED, fd, 0);
+ 
++  auto* layout = axdimm_get_tables_layout(device, descr);
++
+   axdimm_write_rank_data(device, addr, file_size, layout);
+-  return axdimm_share_tables_layout(layout);
++
++  axdimm_destroy_tables_layout(layout);
+ }
+ } // namespace
+ 
+@@ -67,26 +68,27 @@ void addAXDIMMGlobalMethods(py::module& m) {
+       "axdimm_starter",
+       [](const std::string& weight_file,
+          const std::vector<uint32_t>& table_entry,
+-         uint32_t row_size) {
++         uint32_t row_size_in_bytes) {
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+         base_device = axdimm_create_base_device();
+-
+-        uint64_t tables_offsets[4] = {0, 0, 0, 0};
+-        memory_object = axdimm_allocate_memory_object(
+-            table_entry.size(), tables_offsets, 0xf);
+-
+-        tables_layout = axdimm_create_tables_layout(
+-            table_entry.data(), table_entry.size(), row_size, memory_object);
+-        return load_shared_tables(base_device, tables_layout, weight_file);
++        // reset for testing purposes
++        axdimm_reset_device(base_device);
++
++        descriptor = axdimm_allocate_tables(
++            base_device,
++            table_entry.data(),
++            table_entry.size(),
++            row_size_in_bytes,
++            AXDIMM_ALLOC_AUTO);
++
++        load_tables(base_device, weight_file, descriptor);
++        return descriptor;
+       });
+   m.def("axdimm_closer", []() {
++    axdimm_deallocate_tables(base_device, descriptor);
+     axdimm_destroy_base_device(base_device);
+-    axdimm_destroy_memory_object(memory_object);
+-    axdimm_destroy_tables_layout(tables_layout);
+     base_device = nullptr;
+-    tables_layout = nullptr;
+-    memory_object = nullptr;
+     return 0;
+   });
+ }
+@@ -96,13 +98,15 @@ void addSecureAXDIMMGlobalMethods(py::module& m) {
+       "secure_axdimm_starter",
+       [](const std::string& weight_file,
+          const std::vector<uint32_t>& table_entry,
+-         uint32_t row_size) {
++         uint32_t row_size_in_bytes) {
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+         // Insert awesome init stuff here
+         LOG(INFO) << "Work in Secure mode" << std::endl;
+         base_device = axdimm_create_base_device();
+-	CAFFE_ENFORCE_NE(nullptr, base_device, "AXDIMM device creation failed");
++        // reset for testing purposes
++        axdimm_reset_device(base_device);
++        CAFFE_ENFORCE_NE(nullptr, base_device, "AXDIMM device creation failed");
+         return "axdimm secure";
+       });
+   m.def("secure_axdimm_closer", []() {
+-- 
+2.34.1
+

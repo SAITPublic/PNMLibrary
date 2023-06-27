@@ -1,0 +1,119 @@
+From 6352437112bd7099f03c5d1e43778190af81bc7b Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Mon, 5 Jun 2023 12:21:08 +0300
+Subject: [PATCH 22/27] [pal_sls, manifest] Adapt to ToT Gramine
+
+Related to MCS23-1167
+
+Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>
+---
+ application/pytorch/conf.pytorch.manifest.template   |  6 +++---
+ application/sls_secndp_test/secndp.manifest.template |  9 ++++-----
+ pal/src/host/linux-sgx/pal_sls.c                     | 11 +++++------
+ 3 files changed, 12 insertions(+), 14 deletions(-)
+
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index 040d8007..e79217fd 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -23,16 +23,16 @@ fs.mounts = [
+   { uri = "file:{{ pnm_driver }}/lib", path = "{{ pnm_driver }}/lib"},
+   { uri = "file:{{ dlrm_data_path }}", path = "/input" },
+   { type = "tmpfs", path = "/tmp" },
+-  { type = "shm" },
+   { uri = "file:/dev/pnm/", path = "/dev/pnm/" },
+   { uri = "file:/sys/class", path = "/sys/class", type="chroot" },
+ ]
+ 
++sys.insecure__shared_memory = "passthrough"
++
+ sgx.nonpie_binary = true
+ sgx.enclave_size = "16G"
+-sgx.thread_num = 512
++sgx.max_threads = 512
+ sgx.debug = true
+-sgx.insecure__enable_shared_range = "true"
+ 
+ sgx.trusted_files = [
+   "file:/{{ dlrm_path }}/",
+diff --git a/application/sls_secndp_test/secndp.manifest.template b/application/sls_secndp_test/secndp.manifest.template
+index f25f29db..9300423c 100644
+--- a/application/sls_secndp_test/secndp.manifest.template
++++ b/application/sls_secndp_test/secndp.manifest.template
+@@ -24,19 +24,18 @@ fs.mounts = [
+   { uri = "file:/sys/class", path = "/sys/class", type="chroot" },
+   { uri = "file:/dev/pnm/", path = "/dev/pnm/" },
+   { type = "tmpfs", path = "/tmp" }
+-  { type = "shm" },
+ ]
+ 
++sys.insecure__shared_memory = "passthrough"
++
+ sgx.nonpie_binary = true
+ sgx.enclave_size = "1G"
+-sgx.thread_num = 512
++sgx.max_threads = 512
+ sgx.debug = true
+-sgx.insecure__enable_shared_range = "true"
+ 
+ sgx.allowed_files = [
+   "file:/sys/class/sls_resource/pnm!sls_resource/ranks/",
+-  "file:/dev/pnm/sls_resource",
+-  "file:/dev/shm/" # We need to allow sls device to enable write access to it
++  "file:/dev/pnm/sls_resource"
+ ]
+ 
+ sgx.trusted_files = [
+diff --git a/pal/src/host/linux-sgx/pal_sls.c b/pal/src/host/linux-sgx/pal_sls.c
+index bf2520c5..32d1f4cd 100644
+--- a/pal/src/host/linux-sgx/pal_sls.c
++++ b/pal/src/host/linux-sgx/pal_sls.c
+@@ -27,7 +27,7 @@ bool _IsSlsIoControl(uint32_t cmd) {
+      *      long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+      */
+     return _IOC_TYPE(cmd) == SLS_IOC_MAGIC &&
+-           (0 <= _IOC_NR(cmd) && _IOC_NR(cmd) <= SLS_IOC_MAXNR);
++           _IOC_NR(cmd) <= SLS_IOC_MAXNR;
+ }
+ 
+ static void* deep_sls_memory_alloc_copy(struct sls_memory_alloc_request* req, void* dst) {
+@@ -74,7 +74,7 @@ static uint64_t sls_request_size(uint32_t cmd, uint64_t args) {
+                    SLS_GET_MEM_ALLOC(args)->num_objects *
+                        sizeof(SLS_GET_MEM_ALLOC(args)->objects[0]);
+         default:
+-            pal_log(LOG_LEVEL_ERROR, "Fail to get size of request. Unknown command cmd = %d", cmd);
++            log_error("Fail to get size of request. Unknown command cmd = %d", cmd);
+             return 0;
+     }
+ }
+@@ -118,7 +118,7 @@ static void copy_to_trusted(uint32_t cmd, void* untrusted_ptr, uint64_t trusted_
+ static int sls_ioctl(int fd, uint32_t cmd, uint64_t arg, int* out_ret) {
+     int ret = ocall_ioctl(fd, cmd, arg);
+     if (ret < 0) {
+-        pal_log(LOG_LEVEL_ERROR, "Fail to make ioctl (%x) to device [%d]. PAL error code: %d (%s)",
++        log_error("Fail to make ioctl (%x) to device [%d]. PAL error code: %d (%s)",
+                 cmd, fd, unix_to_pal_error(ret), pal_strerror(unix_to_pal_error(ret)));
+     }
+     *out_ret = ret;
+@@ -132,7 +132,7 @@ static int sls_ioctl(int fd, uint32_t cmd, uint64_t arg, int* out_ret) {
+ }
+ 
+ int _PalSlsIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret) {
+-    pal_log(LOG_LEVEL_DEBUG, "SLS ioctl. cmd = %x, arg = %p.", cmd, (void*)arg);
++    log_debug("SLS ioctl. cmd = %x, arg = %p.", cmd, (void*)arg);
+ 
+     assert(_IsSlsIoControl(cmd));
+ 
+@@ -144,8 +144,7 @@ int _PalSlsIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret
+         case GET_MEMORY_ALLOCATION: {
+             uint64_t req_size = sls_request_size(cmd, arg);
+             if (req_size == 0) {
+-                pal_log(LOG_LEVEL_ERROR,
+-                        "Fail to serialize request for cmd = %u. Unable to get request size.", cmd);
++                log_error("Fail to serialize request for cmd = %u. Unable to get request size.", cmd);
+                 return -PAL_ERROR_INVAL;
+             }
+ 
+-- 
+2.34.1
+

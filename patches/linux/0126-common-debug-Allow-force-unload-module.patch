@@ -1,0 +1,29 @@
+From 1eaa2bb5ae129d8e73a19e1c6896145f44c70d95 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Sun, 9 Jul 2023 21:34:57 -0400
+Subject: [PATCH 126/161] [common][debug] Allow force unload module
+
+This patch allow us to unload module when it dead by
+rmmod -f <module_name>
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ config-pnm | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/config-pnm b/config-pnm
+index 8f42c12b4..e026e56ef 100644
+--- a/config-pnm
++++ b/config-pnm
+@@ -886,7 +886,7 @@ CONFIG_MODULE_SIG_FORMAT=y
+ CONFIG_MODULES=y
+ # CONFIG_MODULE_FORCE_LOAD is not set
+ CONFIG_MODULE_UNLOAD=y
+-# CONFIG_MODULE_FORCE_UNLOAD is not set
++CONFIG_MODULE_FORCE_UNLOAD=y
+ # CONFIG_MODULE_UNLOAD_TAINT_TRACKING is not set
+ # CONFIG_MODVERSIONS is not set
+ CONFIG_MODULE_SRCVERSION_ALL=y
+-- 
+2.34.1
+

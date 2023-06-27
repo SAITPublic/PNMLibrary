@@ -1,0 +1,72 @@
+@startuml
+participant ":DLRM" as DLRM
+
+participant ":Operator Executor" as OE
+participant ":SecurePostprocessor" as TH
+participant ":EncryptionEngine" as EE
+participant ":VerificationEngine" as VE
+participant ":OTPGenerator" as OTPGen
+participant ":AXDIMM\nControl library" as AXCL
+
+DLRM -> AXCL: axdimm_init(minibatch_size,\n\t sparse_feature_size,\n\t num_table,\n\t tables_rows_num, num_lookup)
+activate AXCL
+AXCL --> DLRM: returm
+
+DLRM -> OE: runSLS(lengths, indices, &psum)
+activate OE
+OE -> AXCL: run(lengths, indices, &psum_enc)
+
+AXCL -> AXCL: SLS_exec(lengths,\n\t indices,\n\t &psum_enc, \n\t &ctag)
+
+OE -> TH ++: SLS_over_OTP(lengths,\n\t indices,\n\t &psum_otp)\n//Context switch//
+group SGX (Trusted environment)
+    TH -> TH: generate_offsets(indices, length)
+    TH -> EE ++: offset_transform_reduce(offsets_b, offsets_e, SLS)
+
+    loop for each offset
+        EE -> OTPGen: generate_otp(0x00, offset, version,\n\t AES_Encoder, &otp)
+        activate OTPGen
+        OTPGen --> EE: return
+        deactivate OTPGen
+
+        EE -> EE: psum = op(psum, otp)
+    end
+
+    EE --> TH--: return
+
+
+    TH -> VE ++: offset_transfrom_reduce(offsets_b, offsets_e, SLS)
+
+
+    loop for each offset
+        VE -> OTPGen: generate_otp(0x10, offset,\n\t version,\n\t AES_Encoder, &otp)
+        activate OTPGen
+        OTPGen --> VE: return
+        deactivate OTPGen
+
+        VE -> VE: otp_tag = op(otp_tag, otp)
+    end
+
+    VE --> TH --: return otp_tag
+end
+
+TH --> OE --: return\n//Context switch//
+AXCL --> OE: return
+deactivate AXCL
+
+OE -> TH++: decrypt_psum(psum_enc, psum_otp)\nvalidate(begin, end, ctag, otp_tag)\n//Context switch//
+
+group SGX
+    TH -> EE ++: decrypt_psum(psum_enc_begin,\n\t psum_enc_end,\n\t psum_otp_begin,\n\t &psum)
+    EE -> EE: std::transform(begin, end,\n\t psum, output, std::plus{})
+    EE --> TH --: return
+
+    TH -> VE: validate(begin, end, ctag, otp_tag)
+    activate VE
+    VE -> VE: H = linear_checksum(begin, end)
+    VE --> TH: return H == otp_tag + ctag
+    deactivate VE
+end
+TH --> OE --: return psum\n//Context switch//
+OE --> DLRM--: return
+@enduml

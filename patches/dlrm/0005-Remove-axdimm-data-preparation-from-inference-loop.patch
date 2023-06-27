@@ -1,0 +1,127 @@
+From 391e59145ce72fd59cd56621cdc74e635d07d8c3 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Tue, 18 Oct 2022 19:10:54 +0300
+Subject: [PATCH 05/23] Remove axdimm data preparation from inference loop
+
+Improved performance of weights conversion from numpy array
+Indices and offsets preparation moved away from inference loop
+For correct performance measurements
+
+Resolves: AXDIMM-452
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ dlrm_s_pytorch.py | 45 ++++++++++++++++++++-------------------------
+ test_axdimm_op.py |  5 ++---
+ 2 files changed, 22 insertions(+), 28 deletions(-)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index f811f99..1f09226 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -251,7 +251,8 @@ class DLRM_Net(nn.Module):
+                 low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
+             ).astype(np.float32)
+             axdimm_weights.append(W)
+-        return EmbeddingBagAxdimm(torch.tensor(axdimm_weights, dtype=torch.float32, device="axdimm")), v_W_l
++        torch_ten = torch.from_numpy(np.asarray(axdimm_weights))
++        return EmbeddingBagAxdimm(torch.tensor(torch_ten, dtype=torch.float32, device="axdimm")), v_W_l
+ 
+     def create_emb(self, m, ln, weighted_pooling=None):
+         if self.use_axdimm:
+@@ -430,8 +431,15 @@ class DLRM_Net(nn.Module):
+ 
+         ly = []
+         if self.use_axdimm:
+-            axdimm_indices = []
+-            axdimm_offsets = []
++            # Run Axdimm SLS
++            axdimm_res = emb_l(lS_i, lS_o)
++            # offsets are repsresented like set of distances i.e. [0, 20, 60, 90] -> [20, 40, 30] - lenghts
++            # amount of elements in one offsets batch is equal to minibatch size + 1, since table indices size was appended to offsets
++            # this way there's no need to pass total indices lenghts separately
++            # Axdimm returns 1D tensor and dlrm expects it to be list of tensors where each tensor is 1 table batches result
++            # Result is 3d tensor of dims: (len(weights), minibatch_size, sparse_feature_size)
++            # convert it to list of tensors, dims preserved, just upper dim decomes list
++            return list(axdimm_res)
+         for k, sparse_index_group_batch in enumerate(lS_i):
+             sparse_offset_group_batch = lS_o[k]
+ 
+@@ -467,15 +475,6 @@ class DLRM_Net(nn.Module):
+                     )
+ 
+                 ly.append(QV)
+-            elif self.use_axdimm:
+-                # accumulate all tables indices in single 1D list
+-                # indices per table can be not equal
+-                # and, therefore, can not be 2D tensors
+-                axdimm_indices.extend(sparse_index_group_batch.tolist())
+-                # accumulate all tables offsets in single 2D list
+-                spg_list = sparse_offset_group_batch.tolist()
+-                spg_list.append(len(sparse_index_group_batch))
+-                axdimm_offsets.append(spg_list)
+             else:
+                 E = emb_l[k]
+                 V = E(
+@@ -486,19 +485,6 @@ class DLRM_Net(nn.Module):
+ 
+                 ly.append(V)
+ 
+-        if self.use_axdimm:
+-            ind_t = torch.tensor(axdimm_indices, dtype=torch.int32)
+-            off_t = torch.tensor(axdimm_offsets, dtype=torch.int32)
+-            # Run Axdimm SLS
+-            axdimm_res = emb_l(ind_t, off_t)
+-            # offsets are repsresented like set of distances i.e. [0, 20, 60, 90] -> [20, 40, 30] - lenghts
+-            # amount of elements in one offsets batch is equal to minibatch size + 1, since table indices size was appended to offsets
+-            # this way there's no need to pass total indices lenghts separately
+-            minibatch_size = off_t.size(1) - 1
+-            # Axdimm returns 1D tensor and dlrm expects it to be list of tensors where each tensor is 1 table batches result
+-            sliced_res = [axdimm_res[i : i + minibatch_size] for i in range(0, len(axdimm_res), minibatch_size)]
+-            return sliced_res
+-
+         return ly
+ 
+     #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
+@@ -819,6 +805,15 @@ def inference(
+     # measurements.
+     test_loads = []
+     for i, testBatch in enumerate(test_ld):
++        if dlrm.use_axdimm:
++            axdimm_offsets = []
++            axdimm_indices = torch.as_tensor(torch.cat(testBatch[2]), dtype=torch.int32)
++            for sparse_offsets_group_batch, sparse_indices_group_batch in zip(testBatch[1], testBatch[2]):
++                spg_list = sparse_offsets_group_batch.tolist()
++                spg_list.append(len(sparse_indices_group_batch))
++                axdimm_offsets.append(spg_list)
++            axdimm_offsets = torch.as_tensor(axdimm_offsets, dtype=torch.int32)
++            testBatch = (testBatch[0], axdimm_offsets, axdimm_indices, testBatch[3])
+         test_loads.append(testBatch)
+ 
+     start_inference = time.time()
+diff --git a/test_axdimm_op.py b/test_axdimm_op.py
+index e94b7d7..8959b01 100644
+--- a/test_axdimm_op.py
++++ b/test_axdimm_op.py
+@@ -57,7 +57,7 @@ class AxdimmEmbeddingsTest:
+         ).astype(np.float32) for x in range(0, self.tables_num)]
+ 
+     def gen_test_data(self):
+-        self.tables = self.gen_tables()
++        self.tables = torch.from_numpy(np.asarray(self.gen_tables()))
+         self.indices = [self.gen_indices() for x in range(0, self.tables_num)]
+         self.offsets = self.gen_offsets()
+ 
+@@ -92,8 +92,7 @@ class AxdimmEmbeddingsTest:
+             axdimm_indices.extend(i_bag)
+         print("Running AXDIMM...")
+         axdimm_res = op(torch.tensor(axdimm_indices, dtype=torch.int32), torch.tensor(self.offsets, dtype=torch.int32))
+-        sliced_res = [axdimm_res[i : i + self.minibatch_size] for i in range(0, len(axdimm_res), self.minibatch_size)]
+-        if self.check_results(cpu_res, sliced_res):
++        if self.check_results(cpu_res, axdimm_res):
+             print("Test completed successfully")
+             return True
+         else:
+-- 
+2.34.1
+

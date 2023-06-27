@@ -1,0 +1,40 @@
+From adbffd26dace8c26415ec34ff3918c8fe6509988 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Sun, 30 Jul 2023 20:39:48 -0400
+Subject: [PATCH 152/161]  [pnm][zswap] Fix race in decompression pipeline
+
+ The scope of `decompress_lock` was enlarged to cover the polling loop.
+ This allows to solve next issue: when there is only one available
+ decompression thread, HOST multithreading compete by getting
+ `decompress_lock`, but only one HOST thread can get the decompression
+ thread, and other threads cannot get, so CXL_PNM_FAILURE status is
+ returned.
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 488228263..5a581f1b7 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -190,6 +190,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 		pr_info("[HOST-D][%d] IDLE UNITs %d\n", tid,
+ 			atomic_read(&pnm_ctrl->num_idle_decomp_unit));
+ 
++	spin_lock(&pnm_ctrl->decompress_lock);
+ 	while (READ_ONCE(sim_is_active)) {
+ 		if (atomic_read(&pnm_ctrl->num_idle_decomp_unit) > 0)
+ 			break;
+@@ -199,7 +200,6 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 	//  1.  find an unit which is idle
+ 	//  2.  insert an instruction into unit->inst
+ 	//  3.  change the state of pnm selected
+-	spin_lock(&pnm_ctrl->decompress_lock);
+ 	for (pnm_id = 0; pnm_id < pnm_ctrl->num_decompress; pnm_id++) {
+ 		/* to check if an unit is idle */
+ 		if (READ_ONCE(pnm_ctrl->decompress[pnm_id].is_idle)) {
+-- 
+2.34.1
+

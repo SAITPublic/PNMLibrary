@@ -1,0 +1,169 @@
+From e1b5aff8493608424bf3b1a7934faaaf08b9ec30 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Wed, 17 May 2023 19:22:58 +0300
+Subject: [PATCH 20/27] [refactor] Sync with PNMLinux renaming 'axdimm'->'sls'
+
+Resolves: MCS23-925
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ .../secndp.manifest.template                  |  6 +--
+ .../pytorch/conf.pytorch.manifest.template    |  6 +--
+ pal/src/host/linux-sgx/pal_axdimm.c           | 38 +++++++++----------
+ pal/src/host/linux-sgx/pal_axdimm.h           |  2 +-
+ 4 files changed, 26 insertions(+), 26 deletions(-)
+
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/axdimm_secndp_test/secndp.manifest.template
+index d2e0a5a2..be7c35ef 100644
+--- a/application/axdimm_secndp_test/secndp.manifest.template
++++ b/application/axdimm_secndp_test/secndp.manifest.template
+@@ -34,9 +34,9 @@ sgx.debug = true
+ sgx.insecure__enable_shared_range = "true"
+ 
+ sgx.allowed_files = [
+-  "file:/sys/class/axdimm_resource/pnm!axdimm_resource/ranks/",
+-  "file:/dev/pnm/axdimm_resource",
+-  "file:/dev/shm/" # We need to allow axdimm device to enable write access to it
++  "file:/sys/class/sls_resource/pnm!sls_resource/ranks/",
++  "file:/dev/pnm/sls_resource",
++  "file:/dev/shm/" # We need to allow sls device to enable write access to it
+ ]
+ 
+ sgx.trusted_files = [
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index ed3e4dcf..040d8007 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -48,10 +48,10 @@ sgx.trusted_files = [
+ ]
+ 
+ sgx.allowed_files = [
+-  "file:/dev/shm/", # We need to allow axdimm device to enable write access to it
++  "file:/dev/shm/", # We need to allow sls device to enable write access to it
+   "file:./run_kaggle_pt/",
+-  "file:/sys/class/axdimm_resource/pnm!axdimm_resource/ranks/",
+-  "file:/dev/pnm/axdimm_resource",
++  "file:/sys/class/sls_resource/pnm!sls_resource/ranks/",
++  "file:/dev/pnm/sls_resource",
+   "file:{{ dlrm_data_path }}",
+   # In production we should place pillow path into sgx.trusted_files
+   # but to reduce the preparation time we place it here. Will be changed in production
+diff --git a/pal/src/host/linux-sgx/pal_axdimm.c b/pal/src/host/linux-sgx/pal_axdimm.c
+index 6549ad65..53224fcc 100644
+--- a/pal/src/host/linux-sgx/pal_axdimm.c
++++ b/pal/src/host/linux-sgx/pal_axdimm.c
+@@ -16,9 +16,9 @@
+ #include "pal_linux_error.h"
+ 
+ #define REQ_AS(S, A)           ((S*)(A))
+-#define AXD_ALLOC_MEM_REQ(A)   REQ_AS(struct axd_memory_alloc_request, A)
+-#define AXD_GET_MEM_NUM_REQ(A) REQ_AS(struct axd_num_objects_request, A)
+-#define AXD_GET_MEM_ALLOC(A)   REQ_AS(struct axd_memory_alloc, A)
++#define AXD_ALLOC_MEM_REQ(A)   REQ_AS(struct sls_memory_alloc_request, A)
++#define AXD_GET_MEM_NUM_REQ(A) REQ_AS(struct sls_num_objects_request, A)
++#define AXD_GET_MEM_ALLOC(A)   REQ_AS(struct sls_memory_alloc, A)
+ 
+ bool _IsAxdimmIoControl(uint32_t cmd) {
+     /* Assume that if we receive command with correct magic number and NR then we have AXDIMM
+@@ -26,12 +26,12 @@ bool _IsAxdimmIoControl(uint32_t cmd) {
+      * axdimm.c:
+      *      long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+      */
+-    return _IOC_TYPE(cmd) == AXDIMM_IOC_MAGIC &&
+-           (0 <= _IOC_NR(cmd) && _IOC_NR(cmd) <= AXDIMM_IOC_MAXNR);
++    return _IOC_TYPE(cmd) == SLS_IOC_MAGIC &&
++           (0 <= _IOC_NR(cmd) && _IOC_NR(cmd) <= SLS_IOC_MAXNR);
+ }
+ 
+-static void* deep_axd_memory_alloc_copy(struct axd_memory_alloc_request* req, void* dst) {
+-    struct axd_memory_alloc_request* untrusted_req = dst;
++static void* deep_sls_memory_alloc_copy(struct sls_memory_alloc_request* req, void* dst) {
++    struct sls_memory_alloc_request* untrusted_req = dst;
+ 
+     // Extra data will place next to main request structure
+     uint64_t* extra_data = (uint64_t*)(untrusted_req + 1);
+@@ -45,15 +45,15 @@ static void* deep_axd_memory_alloc_copy(struct axd_memory_alloc_request* req, vo
+     return dst;
+ }
+ 
+-static void* deep_axd_get_memory_alloc_copy(struct axd_memory_alloc* req, void* dst) {
+-    struct axd_memory_alloc* untrusted_req = dst;
++static void* deep_sls_get_memory_alloc_copy(struct sls_memory_alloc* req, void* dst) {
++    struct sls_memory_alloc* untrusted_req = dst;
+ 
+     // Extra data will place next to main request structure
+-    struct axd_memory_object* extra_data = (struct axd_memory_object*)(untrusted_req + 1);
++    struct sls_memory_object* extra_data = (struct sls_memory_object*)(untrusted_req + 1);
+ 
+     *untrusted_req = *req;
+ 
+-    // Here we do not make deep copy of axd_memory_alloc because the object fiel is used only to
++    // Here we do not make deep copy of sls_memory_alloc because the object fiel is used only to
+     // store output from kernel
+     untrusted_req->objects = extra_data;
+ 
+@@ -64,13 +64,13 @@ static void* deep_axd_get_memory_alloc_copy(struct axd_memory_alloc* req, void*
+ static uint64_t axdimm_request_size(uint32_t cmd, uint64_t args) {
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+-            return sizeof(struct axd_memory_alloc_request) +
++            return sizeof(struct sls_memory_alloc_request) +
+                    AXD_ALLOC_MEM_REQ(args)->num_user_objects *
+                        sizeof(AXD_ALLOC_MEM_REQ(args)->user_objects_sizes[0]);
+         case GET_MEMORY_OBJECTS_NUM:
+-            return sizeof(struct axd_num_objects_request);
++            return sizeof(struct sls_num_objects_request);
+         case GET_MEMORY_ALLOCATION:
+-            return sizeof(struct axd_memory_alloc) +
++            return sizeof(struct sls_memory_alloc) +
+                    AXD_GET_MEM_ALLOC(args)->num_objects *
+                        sizeof(AXD_GET_MEM_ALLOC(args)->objects[0]);
+         default:
+@@ -83,12 +83,12 @@ static uint64_t axdimm_request_size(uint32_t cmd, uint64_t args) {
+ static void* copy_to_untrusted(uint32_t cmd, uint64_t trusted_ptr, void* untrusted_ptr) {
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+-            return deep_axd_memory_alloc_copy(AXD_ALLOC_MEM_REQ(trusted_ptr), untrusted_ptr);
++            return deep_sls_memory_alloc_copy(AXD_ALLOC_MEM_REQ(trusted_ptr), untrusted_ptr);
+         case GET_MEMORY_OBJECTS_NUM:
+-            *(struct axd_num_objects_request*)untrusted_ptr = *AXD_GET_MEM_NUM_REQ(trusted_ptr);
++            *(struct sls_num_objects_request*)untrusted_ptr = *AXD_GET_MEM_NUM_REQ(trusted_ptr);
+             return untrusted_ptr;
+         case GET_MEMORY_ALLOCATION:
+-            return deep_axd_get_memory_alloc_copy(AXD_GET_MEM_ALLOC(trusted_ptr), untrusted_ptr);
++            return deep_sls_get_memory_alloc_copy(AXD_GET_MEM_ALLOC(trusted_ptr), untrusted_ptr);
+         default:
+             return NULL;
+     }
+@@ -102,7 +102,7 @@ static void copy_to_trusted(uint32_t cmd, void* untrusted_ptr, uint64_t trusted_
+                 AXD_ALLOC_MEM_REQ(untrusted_ptr)->descriptor;
+             break;
+         case GET_MEMORY_OBJECTS_NUM:
+-            *AXD_GET_MEM_NUM_REQ(trusted_ptr) = *(struct axd_num_objects_request*)untrusted_ptr;
++            *AXD_GET_MEM_NUM_REQ(trusted_ptr) = *(struct sls_num_objects_request*)untrusted_ptr;
+             break;
+         case GET_MEMORY_ALLOCATION:
+             memcpy(AXD_GET_MEM_ALLOC(trusted_ptr)->objects,
+@@ -177,4 +177,4 @@ int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_
+     }
+ 
+     return unix_to_pal_error(ret);
+-}
+\ No newline at end of file
++}
+diff --git a/pal/src/host/linux-sgx/pal_axdimm.h b/pal/src/host/linux-sgx/pal_axdimm.h
+index 26f2f7d3..eb1bf9e8 100644
+--- a/pal/src/host/linux-sgx/pal_axdimm.h
++++ b/pal/src/host/linux-sgx/pal_axdimm.h
+@@ -14,7 +14,7 @@
+ #define AXDIMM_GRAMINE_PAL_AXDIMM_H
+ 
+ #include <asm/ioctls.h>
+-#include <linux/libaxdimm.h>
++#include <linux/sls_resources.h>
+ 
+ #include "pal.h"
+ #include "pal_host.h"
+-- 
+2.34.1
+

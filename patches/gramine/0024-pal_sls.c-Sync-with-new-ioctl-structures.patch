@@ -1,0 +1,179 @@
+From a51b8401f65d66591ded121e28e3db861edee9ca Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Thu, 29 Jun 2023 10:33:05 +0000
+Subject: [PATCH 24/27] [pal_sls.c] Sync with new ioctl structures
+
+* Ioctls were updated, and most of them removed. Update code accordingly
+* Use mmap for now, add TODO to get rid of it
+
+Related to: MCS23-1260
+---
+ pal/src/host/linux-sgx/pal_sls.c | 119 ++++---------------------------
+ 1 file changed, 15 insertions(+), 104 deletions(-)
+
+diff --git a/pal/src/host/linux-sgx/pal_sls.c b/pal/src/host/linux-sgx/pal_sls.c
+index 32d1f4cd..fb593a1f 100644
+--- a/pal/src/host/linux-sgx/pal_sls.c
++++ b/pal/src/host/linux-sgx/pal_sls.c
+@@ -15,11 +15,6 @@
+ #include "enclave_ocalls.h"
+ #include "pal_linux_error.h"
+ 
+-#define REQ_AS(S, A)           ((S*)(A))
+-#define SLS_ALLOC_MEM_REQ(A)   REQ_AS(struct sls_memory_alloc_request, A)
+-#define SLS_GET_MEM_NUM_REQ(A) REQ_AS(struct sls_num_objects_request, A)
+-#define SLS_GET_MEM_ALLOC(A)   REQ_AS(struct sls_memory_alloc, A)
+-
+ bool _IsSlsIoControl(uint32_t cmd) {
+     /* Assume that if we receive command with correct magic number and NR then we have SLS
+      * IOCTL. Extra checks can be included in process function. This code refer to same checks in
+@@ -30,91 +25,6 @@ bool _IsSlsIoControl(uint32_t cmd) {
+            _IOC_NR(cmd) <= SLS_IOC_MAXNR;
+ }
+ 
+-static void* deep_sls_memory_alloc_copy(struct sls_memory_alloc_request* req, void* dst) {
+-    struct sls_memory_alloc_request* untrusted_req = dst;
+-
+-    // Extra data will place next to main request structure
+-    uint64_t* extra_data = (uint64_t*)(untrusted_req + 1);
+-
+-    *untrusted_req = *req;
+-
+-    untrusted_req->user_objects_sizes = extra_data;
+-    memcpy(untrusted_req->user_objects_sizes, req->user_objects_sizes,
+-           req->num_user_objects * sizeof(req->user_objects_sizes[0]));
+-
+-    return dst;
+-}
+-
+-static void* deep_sls_get_memory_alloc_copy(struct sls_memory_alloc* req, void* dst) {
+-    struct sls_memory_alloc* untrusted_req = dst;
+-
+-    // Extra data will place next to main request structure
+-    struct sls_memory_object* extra_data = (struct sls_memory_object*)(untrusted_req + 1);
+-
+-    *untrusted_req = *req;
+-
+-    // Here we do not make deep copy of sls_memory_alloc because the object fiel is used only to
+-    // store output from kernel
+-    untrusted_req->objects = extra_data;
+-
+-    return dst;
+-}
+-
+-/* Get the request size */
+-static uint64_t sls_request_size(uint32_t cmd, uint64_t args) {
+-    switch (cmd) {
+-        case ALLOCATE_MEMORY:
+-            return sizeof(struct sls_memory_alloc_request) +
+-                   SLS_ALLOC_MEM_REQ(args)->num_user_objects *
+-                       sizeof(SLS_ALLOC_MEM_REQ(args)->user_objects_sizes[0]);
+-        case GET_MEMORY_OBJECTS_NUM:
+-            return sizeof(struct sls_num_objects_request);
+-        case GET_MEMORY_ALLOCATION:
+-            return sizeof(struct sls_memory_alloc) +
+-                   SLS_GET_MEM_ALLOC(args)->num_objects *
+-                       sizeof(SLS_GET_MEM_ALLOC(args)->objects[0]);
+-        default:
+-            log_error("Fail to get size of request. Unknown command cmd = %d", cmd);
+-            return 0;
+-    }
+-}
+-
+-/* Make deep-copy of ioctl request: trusted->untrusted*/
+-static void* copy_to_untrusted(uint32_t cmd, uint64_t trusted_ptr, void* untrusted_ptr) {
+-    switch (cmd) {
+-        case ALLOCATE_MEMORY:
+-            return deep_sls_memory_alloc_copy(SLS_ALLOC_MEM_REQ(trusted_ptr), untrusted_ptr);
+-        case GET_MEMORY_OBJECTS_NUM:
+-            *(struct sls_num_objects_request*)untrusted_ptr = *SLS_GET_MEM_NUM_REQ(trusted_ptr);
+-            return untrusted_ptr;
+-        case GET_MEMORY_ALLOCATION:
+-            return deep_sls_get_memory_alloc_copy(SLS_GET_MEM_ALLOC(trusted_ptr), untrusted_ptr);
+-        default:
+-            return NULL;
+-    }
+-}
+-
+-/* Make deep-copy of ioctl request: untrusted->trusted*/
+-static void copy_to_trusted(uint32_t cmd, void* untrusted_ptr, uint64_t trusted_ptr) {
+-    switch (cmd) {
+-        case ALLOCATE_MEMORY:
+-            SLS_ALLOC_MEM_REQ(trusted_ptr)->descriptor =
+-                SLS_ALLOC_MEM_REQ(untrusted_ptr)->descriptor;
+-            break;
+-        case GET_MEMORY_OBJECTS_NUM:
+-            *SLS_GET_MEM_NUM_REQ(trusted_ptr) = *(struct sls_num_objects_request*)untrusted_ptr;
+-            break;
+-        case GET_MEMORY_ALLOCATION:
+-            memcpy(SLS_GET_MEM_ALLOC(trusted_ptr)->objects,
+-                   SLS_GET_MEM_ALLOC(untrusted_ptr)->objects,
+-                   SLS_GET_MEM_ALLOC(untrusted_ptr)->num_objects *
+-                       sizeof(SLS_GET_MEM_ALLOC(untrusted_ptr)->objects[0]));
+-            break;
+-        default:
+-            break;
+-    }
+-}
+-
+ static int sls_ioctl(int fd, uint32_t cmd, uint64_t arg, int* out_ret) {
+     int ret = ocall_ioctl(fd, cmd, arg);
+     if (ret < 0) {
+@@ -140,39 +50,40 @@ int _PalSlsIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret
+ 
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+-        case GET_MEMORY_OBJECTS_NUM:
+-        case GET_MEMORY_ALLOCATION: {
+-            uint64_t req_size = sls_request_size(cmd, arg);
+-            if (req_size == 0) {
+-                log_error("Fail to serialize request for cmd = %u. Unable to get request size.", cmd);
+-                return -PAL_ERROR_INVAL;
+-            }
+-
+-            void* untrusted_addr;
+-            ret = ocall_mmap_untrusted(&untrusted_addr, ALLOC_ALIGN_UP(req_size),
++        case DEALLOCATE_MEMORY: {
++            /* These requests have an argument that is larger than a single machine word,
++             * so we need to copy them to untrusted memory and only then execute. And after that,
++             * copy back into trusted memory. */
++            uint64_t req_size = ALLOC_ALIGN_UP(sizeof(struct sls_memory_alloc_request));
++
++            // [TODO: @e-kutovoi MCS23-1260] Eliminate the mmap, use COPY_VALUE_TO_UNTRUSTED
++            struct sls_memory_alloc_request* untrusted_addr;
++            ret = ocall_mmap_untrusted(&untrusted_addr, req_size,
+                                        PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,
+                                        /*fd=*/-1, /*offset=*/0);
+             if (ret < 0)
+                 return unix_to_pal_error(ret);
+ 
+-            untrusted_addr = copy_to_untrusted(cmd, arg, untrusted_addr);
++            struct sls_memory_alloc_request* trusted_addr = (struct sls_memory_alloc_request*)arg;
++            *untrusted_addr = *trusted_addr;
+ 
+             ret = sls_ioctl((int)handle->dev.fd, cmd, (uint64_t)untrusted_addr, out_ret);
+ 
+             if (ret == 0)
+-                copy_to_trusted(cmd, untrusted_addr, arg);
++                *trusted_addr = *untrusted_addr;
+ 
+-            ocall_munmap_untrusted(untrusted_addr, ALLOC_ALIGN_UP(req_size));
++            ocall_munmap_untrusted(untrusted_addr, req_size);
+ 
+             break;
+         }
+-        default:  // Here we have simple ioctl request
++        default: {
+             /* Here we have simple sls requests that can be performed without
+              * serialization/deserialization processes. We also can perform non-SLS request if
+              * they don't return any values or return integer value.*/
+             assert(_IOC_SIZE(cmd) == _IOC_TYPECHECK(int) ||
+                    _IOC_SIZE(cmd) == _IOC_TYPECHECK(uint64_t) || _IOC_SIZE(cmd) == 0);
+             ret = sls_ioctl((int)handle->dev.fd, cmd, arg, out_ret);
++        }
+     }
+ 
+     return unix_to_pal_error(ret);
+-- 
+2.34.1
+

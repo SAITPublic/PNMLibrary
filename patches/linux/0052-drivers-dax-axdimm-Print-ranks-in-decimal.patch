@@ -1,0 +1,123 @@
+From 5d533509e6e7b46f1e81be3b031e581d71c6f1d0 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 10 Oct 2022 15:29:58 +0300
+Subject: [PATCH 052/161] [drivers/dax/axdimm] Print ranks in decimal.
+
+Replace all occurrences of the `%x` format specifier for rank numbers.
+Also correct `%u` to `%hhu` for ranks where appropriate.
+
+References: AXDIMM-372
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ drivers/dax/axdimm_allocator.c      |  4 ++--
+ drivers/dax/axdimm_rank_scheduler.c | 18 +++++++++---------
+ drivers/dax/axdimm_sysfs.c          |  4 ++--
+ 3 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 2ff8a3114..4e95118e0 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -37,7 +37,7 @@ static int init_memory_trees_and_size(struct axdimm_allocator *alloc,
+ 			}
+ 			/* Initialize tree size */
+ 			AXDIMM_DBG(
+-				"Initialized allocator tree for rank %x with size 0x%llx\n",
++				"Initialized allocator tree for rank %hhu with size 0x%llx\n",
+ 				cs_rank_idx,
+ 				length);
+ 			alloc->ranks_free_sizes[cs_rank_idx] = length;
+@@ -233,7 +233,7 @@ static int rank_insert_mem_obj(struct axdimm_allocator *alloc, uint64_t obj_idx,
+ 
+ 	alloc->ranks_free_sizes[rank] -= user_obj_size;
+ 	AXDIMM_DBG(
+-		"Allocated chunk: rank %x, user object index %llu, offset 0x%llx, length %llu\n",
++		"Allocated chunk: rank %hhu, user object index %llu, offset 0x%llx, length %llu\n",
+ 		rank,
+ 		user_obj_idx,
+ 		offset,
+diff --git a/drivers/dax/axdimm_rank_scheduler.c b/drivers/dax/axdimm_rank_scheduler.c
+index 70aef44e3..814d59dce 100644
+--- a/drivers/dax/axdimm_rank_scheduler.c
++++ b/drivers/dax/axdimm_rank_scheduler.c
+@@ -110,7 +110,7 @@ static int get_rank_write(struct axdimm_rank_scheduler *rank_sched,
+ 	if (ret < 0)
+ 		AXDIMM_DBG("No free rank for write\n");
+ 	else
+-		AXDIMM_DBG("Acquired rank %x for write\n", (unsigned int)ret);
++		AXDIMM_DBG("Acquired rank %d for write\n", ret);
+ 
+ 	return ret;
+ }
+@@ -121,10 +121,10 @@ static int get_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	int ret = -1;
+ 	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
+ 
+-	AXDIMM_DBG("Acquiring rank %x for read\n", rank_id);
++	AXDIMM_DBG("Acquiring rank %u for read\n", rank_id);
+ 
+ 	if (rank_id > (NUM_OF_RANK - 1)) {
+-		AXDIMM_ERR("Invalid rank value: %x\n", rank_id);
++		AXDIMM_ERR("Invalid rank value: %u\n", rank_id);
+ 		return ret;
+ 	}
+ 
+@@ -138,9 +138,9 @@ static int get_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	mutex_unlock(&rank_sched->rank_stat_lock);
+ 
+ 	if (ret < 0)
+-		AXDIMM_DBG("Could not acquire rank %x for read\n", rank_id);
++		AXDIMM_DBG("Could not acquire rank %u for read\n", rank_id);
+ 	else
+-		AXDIMM_DBG("Acquired rank %x for read\n", rank_id);
++		AXDIMM_DBG("Acquired rank %u for read\n", rank_id);
+ 
+ 	return ret;
+ }
+@@ -151,10 +151,10 @@ int release_rank_write(struct axdimm_rank_scheduler *rank_sched,
+ 	int ret = rank_id;
+ 	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
+ 
+-	AXDIMM_DBG("Releasing rank %x for write\n", rank_id);
++	AXDIMM_DBG("Releasing rank %u for write\n", rank_id);
+ 
+ 	if (rank_id > (NUM_OF_RANK - 1)) {
+-		AXDIMM_ERR("Invalid rank value: %x\n", rank_id);
++		AXDIMM_ERR("Invalid rank value: %u\n", rank_id);
+ 		return -1;
+ 	}
+ 
+@@ -171,10 +171,10 @@ int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	int ret = rank_id;
+ 	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
+ 
+-	AXDIMM_DBG("Releasing rank %x for read\n", rank_id);
++	AXDIMM_DBG("Releasing rank %u for read\n", rank_id);
+ 
+ 	if (rank_id > (NUM_OF_RANK - 1)) {
+-		AXDIMM_ERR("Invalid rank value: %x\n", rank_id);
++		AXDIMM_ERR("Invalid rank value: %u\n", rank_id);
+ 		return -1;
+ 	}
+ 
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index f053b84ed..1cad3a543 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -317,10 +317,10 @@ static int build_rank_sysfs(struct kobject *kobj, uint8_t rank)
+ 	char buf[4];
+ 	int err;
+ 
+-	AXDIMM_DBG("Building AXDIMM sysfs for rank %u\n", rank);
++	AXDIMM_DBG("Building AXDIMM sysfs for rank %hhu\n", rank);
+ 
+ 	kobject_init(&ranks_fs[rank].rank_idx_kobj, &rank_type);
+-	sprintf(buf, "%u", rank);
++	sprintf(buf, "%hhu", rank);
+ 	err = kobject_add(&ranks_fs[rank].rank_idx_kobj, kobj, buf);
+ 	if (err) {
+ 		kobject_put(&ranks_fs[rank].rank_idx_kobj);
+-- 
+2.34.1
+

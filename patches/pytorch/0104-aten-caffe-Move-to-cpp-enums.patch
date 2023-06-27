@@ -1,0 +1,86 @@
+From 9a9f6ddd5d98cb7c3d7c5678283a9819e854aef5 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 28 Feb 2023 10:01:58 +0300
+Subject: [PATCH 104/128] [aten][caffe] Move to cpp enums
+
+After changing enums to enum classes, we need to update their usage.
+
+Related to: AXDIMM-638
+---
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp     | 6 +++---
+ aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp | 2 +-
+ caffe2/operators/lengths_reducer_ops_axdimm.cc   | 6 +++---
+ 3 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index 725936a7..bdd90849 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -6,9 +6,9 @@ namespace {
+ 
+ ::axdimm_sls_type get_sls_type(const c10::ScalarType& type) {
+   if (type == torch::kFloat32) {
+-    return AXDIMM_SLS_FLOAT;
++    return axdimm_sls_type::FLOAT;
+   } else if (type == torch::kInt32) {
+-    return AXDIMM_SLS_UINT32;
++    return axdimm_sls_type::UINT32;
+   } else {
+     TORCH_CHECK(false, "Unsupported scalar type");
+   }
+@@ -70,7 +70,7 @@ AxdimmTensor::AxdimmTensor(
+ }
+ 
+ AxdimmLayoutWrapper::~AxdimmLayoutWrapper() {
+-  if (AXDIMM_SUCCESS != axdimm_deallocate_tables(device_, layout_handle_)) {
++  if (axd_status_e::SUCCESS != axdimm_deallocate_tables(device_, layout_handle_)) {
+     LOG(ERROR) << "Failed to deallocate tables for handle: " << layout_handle_;
+   }
+   if (layout_) {
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index 7475ca51..e239264c 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -49,7 +49,7 @@ at::Tensor embedding_bag_forward_simple_impl(
+       static_cast<uint32_t*>(indices.data_ptr()),
+       output_view.begin());
+ 
+-  TORCH_CHECK(status == AXDIMM_SUCCESS, "Axdimm embeddings calculation failed");
++  TORCH_CHECK(status == axd_status_e::SUCCESS, "Axdimm embeddings calculation failed");
+ 
+   return torch::from_blob(
+       output_view.begin(),
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index cd67a121..25c1b2c6 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -239,7 +239,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+           block_size_,
+           table_entry_list.data(),
+           tables_layout_,
+-          AXDIMM_SLS_FLOAT);
++          axdimm_sls_type::FLOAT);
+     }
+ 
+     // 3.1) If new operator invocation consumes more memory for indices,
+@@ -296,7 +296,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     T* output_buf = output->template data<T>();
+ 
+     // 6) And finally run the operator.
+-    int status = axdimm_run_sls(
++    axd_status_e status = axdimm_run_sls(
+         sls_op_,
+         device_,
+         M,
+@@ -305,7 +305,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         (uint8_t*)output_buf /* psum buffer */
+     );
+ 
+-    return status == 0;
++    return status == axd_status_e::SUCCESS;
+   }
+ 
+   enum {
+-- 
+2.34.1
+

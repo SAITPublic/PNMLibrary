@@ -1,0 +1,107 @@
+From 3d3d347055b414f6d170fa87f0acd6139bfeb4df Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Thu, 17 Nov 2022 15:58:00 +0300
+Subject: [PATCH 24/33] Remove SGX support from the driver.
+
+This commit removes SGX support from the AXDIMM driver, because it
+is supposed to be superseeded with running the whole driver under
+Gramine-SGX. See the task description for a more detailed information.
+
+Here is the summary of what has been removed and/or modified:
+
+- The entire `secure/intel_sgx` directory has been removed.
+- The `sgx_demo_app` test has been removed.
+- The secure library has been modified to drop SGX support.
+- `FindSGX` CMake module has been removed.
+- Scripts and CMake files have been modified not to refer to removed
+  files.
+- DeepRecSys has been modified to remove its dependency on SGX.
+- Secure tests have been modified to drop SGX support.
+
+References: AXDIMM-429
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ models/dlrm_s_caffe2.py  | 13 +++----------
+ run_DeepRecSys_axdimm.sh | 14 +-------------
+ utils/utils.py           |  1 -
+ 3 files changed, 4 insertions(+), 24 deletions(-)
+
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index c3f17df..34818cd 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -355,21 +355,14 @@ class DLRM_Net(object):
+             else:
+                 raise ValueError("Wrong device type: {}".format(self.args.sls_accel))
+ 
+-            WITH_SGX = True
+-            WITHOUT_SGX = False
+-            secure_operators_map = {}
+-
+-            secure_operators_map[WITHOUT_SGX] = {"float32": model.net.SecureSparseLengthsSumVec,
+-                                                 "int32": model.net.SecureSparseLengthsSumIntVec}
+-            if self.args.use_sgx:
+-                secure_operators_map[WITH_SGX] = {"float32": model.net.SgxSecureSparseLengthsSumVec,
+-                                                  "int32": model.net.SgxSecureSparseLengthsSumIntVec}
++            secure_operators_map = {"float32": model.net.SecureSparseLengthsSumVec,
++                                    "int32": model.net.SecureSparseLengthsSumIntVec}
+ 
+             with core.DeviceScope(core.DeviceOption(dev_type, 0)):
+                 rows = [int(v) for v in self.args.arch_embedding_size.split("-")]
+ 
+                 if self.args.use_secndp_algo:
+-                    op = secure_operators_map[self.args.use_sgx][self.args.sls_dtype]
++                    op = secure_operators_map[self.args.sls_dtype]
+                     EE = op([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+                             [sls_s_combined],
+                             from_file=True, path=self.args.table_weight_path,
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index 5c02ea2..c816e47 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -94,9 +94,6 @@ do
+           shift
+           table_weight_path=$1
+ 	        ;;
+-  "--sgx")
+-	        USE_SGX="--use_sgx"
+-	        ;;
+   "--tag")
+ 	        TAG_VERIFICATION="--use_tags"
+ 	        ;;
+@@ -133,18 +130,9 @@ do
+   shift
+ done
+ 
+-if [ "$USE_SGX" ] && [ -z "${SECNDP_ENCLAVE_PATH}"  ]
+-then
+-  echo "Set path to enclave file *.signed.so in env. variable SECNDP_ENCLAVE_PATH"
+-  echo "Example: export SECNDP_ENCLAVE_PATH=/home/yalavrinenko/git/axdimm_lib/driver/build/secure/AxdimmSecureEnclave.signed.so"
+-  exit 1
+-fi
+-
+-
+-
+ engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
+ 
+-axdimm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $USE_SGX $TAG_VERIFICATION --sls_accel $SLS_ACCEL --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
++axdimm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION --sls_accel $SLS_ACCEL --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
+ # axdimm_args=""
+ 
+ avg_arrival_rate=1
+diff --git a/utils/utils.py b/utils/utils.py
+index a5d76a4..515cf38 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -145,7 +145,6 @@ def cli():
+     # AXDIMM SecNDP configuration
+     # =========================================================================================
+     parser.add_argument("--use_secndp_algo", action="store_true", default=False)
+-    parser.add_argument("--use_sgx", action="store_true", default=False)
+     parser.add_argument("--use_tags", action="store_true", default=False)
+     parser.add_argument("--sls_accel", type=str, default=None)
+     parser.add_argument("--sls_dtype", type=str, choices=["float32", "int32"], default="float32")
+-- 
+2.34.1
+

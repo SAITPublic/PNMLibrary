@@ -1,0 +1,424 @@
+From 278e28e0178d7713249550c941c984eb7fb3b5c9 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Fri, 12 May 2023 19:37:24 +0300
+Subject: [PATCH 113/161] [DBA][Allocator] Split common memory range into ranks
+
+* DBA physical memory range with 32GB size contains 2 ranks by 16GB.
+Make allocator changes to reflect this and add the possibility
+of allocation at a specific rank.
+
+Resolves: MCS23-959
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/dba_resource/dba_allocator.c | 178 +++++++++++++++++------
+ drivers/pnm/dba_resource/dba_allocator.h |  10 +-
+ drivers/pnm/dba_resource/dba_private.h   |   2 +
+ drivers/pnm/sls_resource/sls_allocator.c |   7 +-
+ drivers/pnm/sls_resource/sls_private.h   |   3 -
+ include/uapi/linux/dba_resources.h       |   2 +
+ 6 files changed, 151 insertions(+), 51 deletions(-)
+
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+index 99d285229..41579daa3 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/dba_resource/dba_allocator.c
+@@ -5,41 +5,53 @@
+ #include "dba_log.h"
+ #include "dba_private.h"
+ 
+-#include <linux/mutex.h>
+-#include <linux/module.h>
++#include <linux/dba_resources.h>
++#include <linux/genalloc.h>
+ #include <linux/kernel.h>
++#include <linux/log2.h>
++#include <linux/math.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/numa.h>
+ #include <linux/uaccess.h>
+-#include <linux/dba_resources.h>
+ 
+-static struct MemoryAllocator general_alloc;
++static struct MemoryAllocator general_alloc = {
++	.gran = DBA_MEMORY_ADDRESS_ALIGN,
++};
+ 
+ DEFINE_MUTEX(allocator_lock);
+ 
+-static int init_memory_pool(struct MemoryAllocator *alloc)
++static int init_rank_pool(struct MemoryAllocator *alloc, uint8_t rank,
++			  uint64_t start, uint64_t size)
+ {
+-	alloc->granularity = DBA_MEMORY_ADDRESS_ALIGN;
+-
+-	alloc->pool = gen_pool_create(ilog2(alloc->granularity), -1);
++	int err_code;
++	struct gen_pool *pool =
++		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
+ 
+-	if (alloc->pool == NULL) {
+-		DBA_ERR("Fail to create memory pool.");
++	if (!pool) {
++		DBA_ERR("gen_pool_create failed for rank pool[%hhu], gran = [%llu]\n",
++			rank, alloc->gran);
+ 		return -ENOMEM;
+ 	}
+ 
+-	if (gen_pool_add(alloc->pool, alloc->granularity,
+-			 get_mem_size() - alloc->granularity, -1) < 0) {
+-		DBA_ERR("Fail to init memory pool with size %llu.",
+-			get_mem_size());
+-
+-		gen_pool_destroy(alloc->pool);
+-		return -EINVAL;
++	err_code = gen_pool_add(pool, start, size, NUMA_NO_NODE);
++	if (err_code < 0) {
++		DBA_ERR("Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
++			rank, size, err_code);
++		gen_pool_destroy(pool);
++		return err_code;
+ 	}
++	gen_pool_set_algo(pool, gen_pool_best_fit, NULL);
+ 
+-	gen_pool_set_algo(alloc->pool, gen_pool_best_fit, NULL);
++	DBA_INF("Memory rank pool[%hhu] initialized: gran = [%llu], size = [%llu]\n",
++		rank, alloc->gran, size);
+ 
+-	return 0;
++	alloc->pools[rank] = pool;
++
++	return err_code;
+ }
+ 
++/* Make each pool chunk size == 0 */
+ static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+ 					  struct gen_pool_chunk *chunk,
+ 					  void *data)
+@@ -47,25 +59,102 @@ static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+ 	chunk->end_addr = chunk->start_addr - 1;
+ }
+ 
+-static int destroy_memory_pool(struct MemoryAllocator *alloc)
++static void cleanup_memory_pools(struct MemoryAllocator *alloc)
+ {
+-	if (gen_pool_size(alloc->pool) != gen_pool_avail(alloc->pool)) {
+-		DBA_WRN("Trying to destroy non-empty pool.");
+-		gen_pool_for_each_chunk(alloc->pool,
+-					mem_pool_mark_zero_chunk_size, NULL);
++	uint8_t rank;
++	struct gen_pool *pool;
++
++	for (rank = 0; rank < DBA_NUM_OF_RANK; ++rank) {
++		pool = alloc->pools[rank];
++		if (!pool) {
++			DBA_WRN("Trying to cleanup memory rank pool[%hhu] that was not created\n",
++				rank);
++			continue;
++		}
++		if (gen_pool_avail(pool) != gen_pool_size(pool)) {
++			DBA_ERR("pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
++				rank, gen_pool_size(pool),
++				gen_pool_avail(pool));
++			/*
++			 * To destroy memory pool gen_pool_destroy checks
++			 * outstanding allocations up to the kernel panic.
++			 * Mark all our memory chunks with zero size for
++			 * forced deallocation ignoring that.
++			 */
++			gen_pool_for_each_chunk(
++				pool, mem_pool_mark_zero_chunk_size, NULL);
++		}
++		gen_pool_destroy(pool);
++		alloc->pools[rank] = NULL;
++		DBA_INF("Memory rank pool[%hhu] is destroyed\n", rank);
++	}
++}
++
++static int init_memory_pools(struct MemoryAllocator *alloc)
++{
++	/*
++	 * Reserve alloc->gran size from start to eliminate allocator
++	 * ambiguity, technically we could back off by just 1 byte,
++	 * but the alignment is preferred. The size changes accordingly.
++	 * Otherwise, the allocator may return 0 as a pointer to
++	 * the real allocation, and we'll not be able to distinguish
++	 * the result from the allocator fail.
++	 */
++	uint64_t start = alloc->gran;
++	const uint64_t rank_size = DBA_RANK_SIZE - alloc->gran;
++	int err_code;
++	uint8_t rank = 0;
++
++	if (!is_power_of_2(alloc->gran)) {
++		DBA_ERR("Memory granularity should be a power of 2!\n");
++		return -EINVAL;
++	}
++
++	for (; rank < DBA_NUM_OF_RANK; ++rank)
++		if (alloc->pools[rank]) {
++			DBA_ERR("Not cleaned pool[%hhu] in initialization!\n",
++				rank);
++			alloc->pools[rank] = NULL;
++			DBA_ERR("pool[%hhu] ptr forcefully reset to zero\n",
++				rank);
++		}
++
++	for (rank = 0; rank < DBA_NUM_OF_RANK; ++rank, start += rank_size) {
++		err_code = init_rank_pool(alloc, rank, start, rank_size);
++		if (err_code) {
++			cleanup_memory_pools(alloc);
++			return err_code;
++		}
+ 	}
+ 
+-	gen_pool_destroy(alloc->pool);
+ 	return 0;
+ }
+ 
++static uint8_t get_rank_most_free(void)
++{
++	uint64_t max_avail = gen_pool_avail(general_alloc.pools[0]);
++	uint8_t rank_most_free = 0;
++	uint8_t rank = 1;
++
++	for (; rank < DBA_NUM_OF_RANK; ++rank)
++		if (max_avail < gen_pool_avail(general_alloc.pools[rank])) {
++			max_avail = gen_pool_avail(general_alloc.pools[rank]);
++			rank_most_free = rank;
++		}
++	return rank_most_free;
++}
++
+ static int allocate_memory(struct dba_allocation *req)
+ {
+ 	int result = 0;
+ 
+ 	mutex_lock(&allocator_lock);
+ 
+-	req->address = gen_pool_alloc(general_alloc.pool, req->size);
++	if (req->rank == DBA_NUM_OF_RANK)
++		req->rank = get_rank_most_free();
++
++	req->address =
++		gen_pool_alloc(general_alloc.pools[req->rank], req->size);
+ 	if (req->address == 0) {
+ 		DBA_ERR("Fail to allocate %llu bytes.", req->size);
+ 		result = -ENOMEM;
+@@ -78,33 +167,34 @@ static int allocate_memory(struct dba_allocation *req)
+ static void deallocate_memory(struct dba_allocation *req)
+ {
+ 	mutex_lock(&allocator_lock);
+-	gen_pool_free(general_alloc.pool, req->address, req->size);
++	gen_pool_free(general_alloc.pools[req->rank], req->address, req->size);
+ 	mutex_unlock(&allocator_lock);
+ }
+ 
+ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ {
+-	struct dba_allocation request;
+-	int rc = -EFAULT;
++	struct dba_allocation req;
+ 
+-	rc = !!copy_from_user(&request, (void __user *)arg, sizeof(request));
++	int rc = !!copy_from_user(&req, (void __user *)arg, sizeof(req));
+ 
+ 	if (rc)
+ 		return -EFAULT;
+ 
++	if (req.rank > DBA_NUM_OF_RANK)
++		return -EINVAL;
++
+ 	switch (cmd) {
+ 	case DBA_IOCTL_ALLOCATE:
+-		rc = allocate_memory(&request);
++		rc = allocate_memory(&req);
++		if (rc)
++			return rc;
+ 		break;
+ 	case DBA_IOCTL_DEALLOCATE:
+-		deallocate_memory(&request);
++		deallocate_memory(&req);
+ 		break;
+ 	}
+ 
+-	if (rc)
+-		return rc;
+-
+-	rc = !!copy_to_user((void __user *)arg, &request, sizeof(request));
++	rc = !!copy_to_user((void __user *)arg, &req, sizeof(req));
+ 
+ 	if (rc)
+ 		return -EFAULT;
+@@ -114,11 +204,13 @@ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ 
+ uint64_t get_avail_size(void)
+ {
+-	uint64_t value;
++	uint64_t value = 0;
++	uint8_t rank = 0;
+ 
+ 	mutex_lock(&allocator_lock);
+ 
+-	value = gen_pool_avail(general_alloc.pool);
++	for (; rank < DBA_NUM_OF_RANK; ++rank)
++		value += gen_pool_avail(general_alloc.pools[rank]);
+ 
+ 	mutex_unlock(&allocator_lock);
+ 
+@@ -136,7 +228,7 @@ uint64_t get_granularity(void)
+ 
+ 	mutex_lock(&allocator_lock);
+ 
+-	value = general_alloc.granularity;
++	value = general_alloc.gran;
+ 
+ 	mutex_unlock(&allocator_lock);
+ 
+@@ -150,7 +242,7 @@ int initialize_memory_allocator(void)
+ 	mutex_init(&allocator_lock);
+ 	mutex_lock(&allocator_lock);
+ 
+-	result = init_memory_pool(&general_alloc);
++	result = init_memory_pools(&general_alloc);
+ 
+ 	mutex_unlock(&allocator_lock);
+ 	return result;
+@@ -159,7 +251,7 @@ int initialize_memory_allocator(void)
+ void destroy_memory_allocator(void)
+ {
+ 	mutex_lock(&allocator_lock);
+-	destroy_memory_pool(&general_alloc);
++	cleanup_memory_pools(&general_alloc);
+ 
+ 	mutex_unlock(&allocator_lock);
+ 	mutex_destroy(&allocator_lock);
+@@ -172,8 +264,8 @@ int reset_memory_allocator(void)
+ 	DBA_INF("Reset allocator");
+ 	mutex_lock(&allocator_lock);
+ 
+-	destroy_memory_pool(&general_alloc);
+-	result = init_memory_pool(&general_alloc);
++	cleanup_memory_pools(&general_alloc);
++	result = init_memory_pools(&general_alloc);
+ 
+ 	mutex_unlock(&allocator_lock);
+ 	return result;
+diff --git a/drivers/pnm/dba_resource/dba_allocator.h b/drivers/pnm/dba_resource/dba_allocator.h
+index 25437ec3e..c1915f9a9 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.h
++++ b/drivers/pnm/dba_resource/dba_allocator.h
+@@ -8,8 +8,14 @@
+ #include <linux/genalloc.h>
+ 
+ struct MemoryAllocator {
+-	unsigned long granularity;
+-	struct gen_pool *pool;
++	/* Allocator granularity in bytes, the number should be a power of 2 */
++	uint64_t gran;
++	/* GenAlloc memory pools for each rank, each pool has it's own virtual
++	 * range, currently this range is not bound to the real memory by PA,
++	 * Range: [reserved_indent == DBA_MEMORY_ADDRESS_ALIGN,
++	 * rank_size - reserved_indent]
++	 */
++	struct gen_pool *pools[DBA_NUM_OF_RANK];
+ };
+ 
+ int initialize_memory_allocator(void);
+diff --git a/drivers/pnm/dba_resource/dba_private.h b/drivers/pnm/dba_resource/dba_private.h
+index fb95de159..d3d4d4b88 100644
+--- a/drivers/pnm/dba_resource/dba_private.h
++++ b/drivers/pnm/dba_resource/dba_private.h
+@@ -4,6 +4,7 @@
+ #ifndef __DBA_PRIVATE_H__
+ #define __DBA_PRIVATE_H__
+ 
++#include <linux/dba_resources.h>
+ #include <linux/pgtable.h>
+ 
+ /*
+@@ -14,6 +15,7 @@
+ 
+ #define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
+ #define DBA_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
++#define DBA_RANK_SIZE (DBA_MEMORY_TOTAL_SIZE / DBA_NUM_OF_RANK)
+ #define DBA_RW_MODE 0666
+ 
+ #endif /* __DBA_PRIVATE_H__ */
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index 3d8f423e0..f0e6c1af3 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -8,6 +8,7 @@
+ #include "sls_process_manager.h"
+ 
+ #include <linux/genalloc.h>
++#include <linux/kernel.h>
+ #include <linux/log2.h>
+ #include <linux/math.h>
+ #include <linux/numa.h>
+@@ -114,7 +115,7 @@ static void cleanup_memory_pools(struct sls_allocator *alloc)
+ 		gen_pool_destroy(pool);
+ 		SLS_INF("Memory rank pool[%hhu] is destroyed\n", rank);
+ 	}
+-	memset(alloc->mem_pools, 0, SIZEOF_ARRAY(alloc->mem_pools));
++	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+ }
+ 
+ static inline uint64_t get_rank_size(struct sls_mem_info *mem_info, uint8_t rank)
+@@ -135,7 +136,7 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 		return -EINVAL;
+ 	}
+ 
+-	memset(alloc->mem_pools, 0, SIZEOF_ARRAY(alloc->mem_pools));
++	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+ 	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
+ 		/*
+ 		 * reserve PAGE_SIZE size from start to eliminate allocator
+@@ -162,7 +163,7 @@ static int preinit_sls_allocator(struct sls_allocator *alloc,
+ {
+ 	alloc->pack_counter = 0;
+ 	alloc->gran = PAGE_SIZE; // [TODO: @p.bred] make configurable
+-	memset(alloc->mem_pools, 0, SIZEOF_ARRAY(alloc->mem_pools));
++	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+ 	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
+ }
+ 
+diff --git a/drivers/pnm/sls_resource/sls_private.h b/drivers/pnm/sls_resource/sls_private.h
+index 3ec5d8e07..d754c5865 100644
+--- a/drivers/pnm/sls_resource/sls_private.h
++++ b/drivers/pnm/sls_resource/sls_private.h
+@@ -28,9 +28,6 @@
+ #define SLS_COPY_TO_USER(error, dst, src, size) \
+ 	SLS_COPY_FROM_TO_USER(copy_to_user, error, dst, src, size)
+ 
+-/* Just sizeof(array) with static array check */
+-#define SIZEOF_ARRAY(arr) (sizeof(arr) + __must_be_array(arr))
+-
+ struct sls_device_data {
+ 	int rank;
+ 	int region;
+diff --git a/include/uapi/linux/dba_resources.h b/include/uapi/linux/dba_resources.h
+index b5f2967a6..cb813af3b 100644
+--- a/include/uapi/linux/dba_resources.h
++++ b/include/uapi/linux/dba_resources.h
+@@ -27,6 +27,7 @@
+ #define DBA_SYSFS_PATH "/sys/class/"DBA_RESOURCE_CLASS_NAME"/pnm!"DBA_RESOURCE_CLASS_NAME
+ 
+ #define DBA_THREAD_NUM 3
++#define DBA_NUM_OF_RANK 2
+ 
+ #define DBA_THREAD_BUSY 1
+ #define DBA_THREAD_IDLE 0
+@@ -34,6 +35,7 @@
+ struct dba_allocation {
+ 	uint64_t address;
+ 	uint64_t size;
++	uint8_t rank;
+ };
+ 
+ #define DBA_RESOURCE_IOC_MAGIC 'D'
+-- 
+2.34.1
+

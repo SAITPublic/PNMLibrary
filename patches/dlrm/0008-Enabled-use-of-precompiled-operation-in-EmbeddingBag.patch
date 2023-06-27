@@ -1,0 +1,30 @@
+From b6378638377f60513bbc33742d4a1018b5df10af Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Wed, 26 Oct 2022 03:30:51 +0300
+Subject: [PATCH 08/23] Enabled use of precompiled operation in
+ EmbeddingBagAxdimm call
+
+Resolves: AXDIMM-452
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ dlrm_s_pytorch.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index 1f09226..4ea0738 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -252,7 +252,8 @@ class DLRM_Net(nn.Module):
+             ).astype(np.float32)
+             axdimm_weights.append(W)
+         torch_ten = torch.from_numpy(np.asarray(axdimm_weights))
+-        return EmbeddingBagAxdimm(torch.tensor(torch_ten, dtype=torch.float32, device="axdimm")), v_W_l
++        return EmbeddingBagAxdimm(torch.tensor(torch_ten, dtype=torch.float32, device="axdimm",
++                                               precompile=True)), v_W_l
+ 
+     def create_emb(self, m, ln, weighted_pooling=None):
+         if self.use_axdimm:
+-- 
+2.34.1
+

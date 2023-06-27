@@ -1,0 +1,45 @@
+From 6e8e550762b196970f3c70c17bb325b2ee582b19 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Mon, 22 Aug 2022 19:58:32 +0300
+Subject: [PATCH 16/33] Forward memory preference to caffe op
+
+Forward memory preference for caffe2 operator. This allows to define different
+execution policies for 1 IE and for many IE.
+
+Resolve: AXDIMM-359
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ DeepRecSys.py           | 2 +-
+ models/dlrm_s_caffe2.py | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index 3d2df40..5f36c82 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -50,7 +50,7 @@ def DeepRecSys():
+       ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+       op = workspace.SecureAxdimmStarter if args.use_secndp_algo else workspace.AxdimmStarter
+       tables_descriptor = op(args.table_weight_path, ln_emb,
+-                      args.arch_sparse_feature_size * dtype_in_bytes)
++                      args.arch_sparse_feature_size * dtype_in_bytes, args.mem_preference)
+ 
+     # Setup single request Queue and multiple response queues
+     requestQueue    = Queue(maxsize=1024)
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index de74f16..ab45b26 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -373,7 +373,7 @@ class DLRM_Net(object):
+                             [sls_s_combined],
+                             from_file=True, path=self.args.table_weight_path,
+                             num_tables=len(rows), sparse_feature_size=m, rows=rows,
+-                            with_tag=self.args.use_tags)
++                            with_tag=self.args.use_tags, mem_preference=self.args.mem_preference)
+                 else:
+                     EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+                                                        [sls_s_combined],
+-- 
+2.34.1
+

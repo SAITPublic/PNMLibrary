@@ -1,0 +1,31 @@
+From 921e202be6f4f7e7361f4468d41b06b39ff737a5 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 26 Oct 2022 17:41:42 +0900
+Subject: [PATCH 081/128] [torch/nn/modules] Fix EmbeddingBagAxdimm helper
+ binding
+
+The helper class name is AxdimmPrecompiledOp, not AxdimmOperationsStorage.
+
+Relates to: AXDIMM-452
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ torch/nn/modules/sparse.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/torch/nn/modules/sparse.py b/torch/nn/modules/sparse.py
+index 2c4cddd0..c3aa2e25 100644
+--- a/torch/nn/modules/sparse.py
++++ b/torch/nn/modules/sparse.py
+@@ -236,7 +236,7 @@ class EmbeddingBagAxdimm(Module):
+ 
+     def forward(self, indices: Tensor, offsets: Tensor) -> Tensor:
+         if self.precompile and self.op_context is None:
+-            self.op_context = torch.classes.axdimm_helpers.AxdimmOperationsStorage(self.weight, offsets)
++            self.op_context = torch.classes.axdimm_helpers.AxdimmPrecompiledOp(self.weight, offsets)
+             self.op_id = self.op_context.get_precompiled_op_id()
+         return torch.ops.aten.embedding_bag_forward_only_axdimm(self.weight, indices, offsets, self.op_id)
+ 
+-- 
+2.34.1
+

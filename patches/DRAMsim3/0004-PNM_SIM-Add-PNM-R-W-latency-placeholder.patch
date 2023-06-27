@@ -1,0 +1,72 @@
+From ce99f16e09e1d93c9cfecf4486f4f5ded123fad3 Mon Sep 17 00:00:00 2001
+From: Yoojin <yoojin73.kim@samsung.com>
+Date: Thu, 31 Aug 2023 12:54:39 +0900
+Subject: [PATCH 4/4] [PNM_SIM] Add PNM R/W latency (placeholder)
+
+---
+ pnm_sim/src/address_decoder.h |  2 +-
+ pnm_sim/src/cxl.h             |  2 +-
+ pnm_sim/src/pnm.cc            | 13 +++++--------
+ 3 files changed, 7 insertions(+), 10 deletions(-)
+
+diff --git a/pnm_sim/src/address_decoder.h b/pnm_sim/src/address_decoder.h
+index b63fad1..ab092d3 100644
+--- a/pnm_sim/src/address_decoder.h
++++ b/pnm_sim/src/address_decoder.h
+@@ -8,7 +8,7 @@
+ #include "controller.h"
+ 
+ namespace dramsim3 {
+-#define PNM_PSUM_READ_LATENCY 0 // FIXME will be estimated in board
++#define PNM_PSUM_READ_LATENCY 14 // Placeholder
+ 
+ class AddrDecoder {
+    public:
+diff --git a/pnm_sim/src/cxl.h b/pnm_sim/src/cxl.h
+index 46bd5bb..8deab48 100644
+--- a/pnm_sim/src/cxl.h
++++ b/pnm_sim/src/cxl.h
+@@ -9,7 +9,7 @@
+ 
+ namespace dramsim3 {
+ 
+-#define CXL_LATENCY 0 //FIXME real CXL_LATENCY (cycle)
++#define CXL_LATENCY 7 // Placeholder
+ 
+ class CXL {
+    public:
+diff --git a/pnm_sim/src/pnm.cc b/pnm_sim/src/pnm.cc
+index 1d94480..a5a11c2 100644
+--- a/pnm_sim/src/pnm.cc
++++ b/pnm_sim/src/pnm.cc
+@@ -186,12 +186,9 @@ void PNM::WriteConfigRegister(Transaction trans) {
+                               % psum_offset.size();
+ 
+ #ifdef DEBUG_PRINT
+-            std::cout << clk_ << " sls exec enable " 
+-                      << channel_id_ << "  "
+-                      << num_write_inst << "  "
++            std::cout << clk_ << "::CH"
++                      << channel_id_ << "::SLS_EXEC_ENABLED"
+                       << std::endl;
+-            num_input = 0;
+-            num_weight = 0;
+ #endif
+         }
+     }
+@@ -330,9 +327,9 @@ void PNM::ScheduleInstruction() {
+     if (it->second.trace_end == 1){
+         // program_cout == num_write_inst
+ #ifdef DEBUG_PRINT
+-        std::cout << "trace_end: " 
+-                  << program_count << " " 
+-                  << num_write_inst << std::endl;
++        std::cout << clk_ << "::CH"
++                  << channel_id_ << "::ScheduleInstruction END"
++                  << std::endl;
+ #endif
+         num_read_inst = program_count;
+         program_count = -1;
+-- 
+2.34.1
+

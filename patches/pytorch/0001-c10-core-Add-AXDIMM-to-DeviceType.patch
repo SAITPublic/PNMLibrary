@@ -1,0 +1,70 @@
+From a8a042d4efee0ada9d3f8d53017e7777a1918eec Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 29 Oct 2021 17:01:52 +0900
+Subject: [PATCH 001/128] [c10/core] Add AXDIMM to DeviceType
+
+Add new 'AXDIMM' device type.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ c10/core/DeviceType.cpp | 3 +++
+ c10/core/DeviceType.h   | 7 ++++---
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/c10/core/DeviceType.cpp b/c10/core/DeviceType.cpp
+index efc33be3..17abd7a9 100644
+--- a/c10/core/DeviceType.cpp
++++ b/c10/core/DeviceType.cpp
+@@ -51,6 +51,8 @@ std::string DeviceTypeName(DeviceType d, bool lower_case) {
+       return lower_case ? "mtia" : "MTIA";
+     case DeviceType::PrivateUse1:
+       return get_privateuse1_backend(/*lower_case=*/lower_case);
++    case DeviceType::AXDIMM:
++      return lower_case ? "axdimm" : "AXDIMM";
+     default:
+       TORCH_CHECK(
+           false,
+@@ -95,6 +97,7 @@ bool isValidDeviceType(DeviceType d) {
+     case DeviceType::IPU:
+     case DeviceType::MTIA:
+     case DeviceType::PrivateUse1:
++    case DeviceType::AXDIMM:
+       return true;
+     default:
+       return false;
+diff --git a/c10/core/DeviceType.h b/c10/core/DeviceType.h
+index 06eca223..ad76501e 100644
+--- a/c10/core/DeviceType.h
++++ b/c10/core/DeviceType.h
+@@ -52,11 +52,12 @@ enum class DeviceType : int8_t {
+   IPU = 18, // Graphcore IPU
+   MTIA = 19, // Meta training and inference devices
+   PrivateUse1 = 20, // PrivateUse1 device
++  AXDIMM = 21, // AXDIMM
+   // NB: If you add more devices:
+   //  - Change the implementations of DeviceTypeName and isValidDeviceType
+   //    in DeviceType.cpp
+   //  - Change the number below
+-  COMPILE_TIME_MAX_DEVICE_TYPES = 21,
++  COMPILE_TIME_MAX_DEVICE_TYPES = 22,
+ };
+ 
+ constexpr DeviceType kCPU = DeviceType::CPU;
+@@ -82,12 +83,12 @@ constexpr int COMPILE_TIME_MAX_DEVICE_TYPES =
+     static_cast<int>(DeviceType::COMPILE_TIME_MAX_DEVICE_TYPES);
+ 
+ static_assert(
+-    COMPILE_TIME_MAX_DEVICE_TYPES <= 21,
++    COMPILE_TIME_MAX_DEVICE_TYPES <= 22,
+     "Hey!  You seem to be adding a lot of new DeviceTypes.  The intent was "
+     "for this constant to reflect the actual number of DeviceTypes we support "
+     "in PyTorch; it's important that this number is not too large as we "
+     "use this to allocate stack arrays in some places in our code.  If you "
+-    "are indeed just adding the 20th device type, feel free to change "
++    "are indeed just adding the 22nd device type, feel free to change "
+     "the check to 32; but if you are adding some sort of extensible device "
+     "types registration, please be aware that you are affecting code that "
+     "this number is small.  Try auditing uses of this constant.");
+-- 
+2.34.1
+

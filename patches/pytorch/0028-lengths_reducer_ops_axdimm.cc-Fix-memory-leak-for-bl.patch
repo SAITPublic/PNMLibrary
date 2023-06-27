@@ -1,0 +1,97 @@
+From 9662fa0a00059dc57b86fc49d527029f0888d84f Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 15 Nov 2021 10:03:04 +0900
+Subject: [PATCH 028/128] [lengths_reducer_ops_axdimm.cc] Fix memory leak for
+ blocked indices/lengths buffers
+
+Do not allocate buffers every time, increase their capacity instead if needed.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ .../operators/lengths_reducer_ops_axdimm.cc   | 33 +++++++++++++++----
+ 1 file changed, 27 insertions(+), 6 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 079e2fe5..90abad5d 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -162,9 +162,10 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         0,
+         "Operator input must consist of 3 equal vectors: TablesVec, IndicesVec and LengthsVec.");
+ 
+-    uint64_t indices_total_size_in_bytes = 0;
+-    uint64_t lengths_total_size_in_bytes = 0;
++    uint64_t cur_indices_total_size_in_bytes = 0;
++    uint64_t cur_lengths_total_size_in_bytes = 0;
+ 
++    // 1) Calculate total sizes for indices/lengths to be blocked.
+     for (int i = 0; i < block_size_; ++i) {
+       auto& dataInput = Input(tables_vec_start_idx_ + i);
+       auto& indicesInput = Input(indices_vec_start_idx_ + i);
+@@ -175,8 +176,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       const int64_t lengths_size_in_bytes =
+           lengthsInput.numel() * lengthsInput.itemsize();
+ 
+-      indices_total_size_in_bytes += indices_size_in_bytes;
+-      lengths_total_size_in_bytes += lengths_size_in_bytes;
++      cur_indices_total_size_in_bytes += indices_size_in_bytes;
++      cur_lengths_total_size_in_bytes += lengths_size_in_bytes;
+ 
+       CAFFE_ENFORCE_GT(indices_size_in_bytes, 0, "indicesInput can't be empty");
+ 
+@@ -185,9 +186,23 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       (void)dataInput;
+     }
+ 
+-    indices_blocked = (char*)malloc(indices_total_size_in_bytes);
+-    lengths_blocked = (char*)malloc(lengths_total_size_in_bytes);
++    // 2.1) If new operator invocation consumes more memory for indices,
++    // increase total capacity.
++    if (cur_indices_total_size_in_bytes > indices_total_size_in_bytes_) {
++      indices_total_size_in_bytes_ = cur_indices_total_size_in_bytes;
++      indices_blocked =
++          (char*)realloc(indices_blocked, indices_total_size_in_bytes_);
++    }
++
++    // 2.2) Same for lengths: if new operator invocation consumes more memory,
++    // increase total capacity.
++    if (cur_lengths_total_size_in_bytes > lengths_total_size_in_bytes_) {
++      lengths_total_size_in_bytes_ = cur_lengths_total_size_in_bytes;
++      lengths_blocked =
++          (char*)realloc(lengths_blocked, lengths_total_size_in_bytes_);
++    }
+ 
++    // 3) Setup output buffer.
+     const int64_t M = Input(lengths_vec_start_idx_).size(0);
+     auto shape = Input(tables_vec_start_idx_).sizes().vec();
+     shape[0] = M;
+@@ -197,6 +212,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     uint64_t indices_offset_in_bytes = 0;
+     uint64_t lengths_offset_in_bytes = 0;
+ 
++    // 4) Copy indices/lengths inputs into respecive "blocked" memory.
+     for (int i = 0; i < block_size_; ++i) {
+       auto& indicesInput = Input(indices_vec_start_idx_ + i);
+       auto& lengthsInput = Input(lengths_vec_start_idx_ + i);
+@@ -223,6 +239,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     T* output_buf = output->template data<T>();
+ 
++    // 5) And finally run the operator.
+     axd_status_e status = axdimm::axdimm_run(
+         (uint32_t*)lengths_blocked,
+         (uint32_t*)indices_blocked,
+@@ -248,6 +265,10 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   int tables_vec_start_idx_; // Starting input index for tables blobs
+   int indices_vec_start_idx_; // Starting input index for indices blobs
+   int lengths_vec_start_idx_; // Starting input index for lengths blobs
++  uint64_t indices_total_size_in_bytes_ =
++      0; // Size of currently allocated blocked indices buffer.
++  uint64_t lengths_total_size_in_bytes_ =
++      0; // Size of currently allocated blocked lengths buffer.
+ };
+ 
+ using SparseLengthsSumOp =
+-- 
+2.34.1
+

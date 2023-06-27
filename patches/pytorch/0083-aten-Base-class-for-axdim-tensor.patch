@@ -1,0 +1,205 @@
+From 232885b665f4acd329687641c3832f8a9a3992d6 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 01:35:47 +0300
+Subject: [PATCH 083/128] [aten] Base class for axdim tensor
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ .../src/ATen/native/axdimm/AxdimmBaseTensor.h | 183 ++++++++++++++++++
+ 1 file changed, 183 insertions(+)
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+new file mode 100644
+index 00000000..b091b441
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+@@ -0,0 +1,183 @@
++#ifndef __AXDIMM_BASE_TENSOR__
++#define __AXDIMM_BASE_TENSOR__
++
++#include <ATen/ATen.h>
++#include <ATen/native/axdimm/AxdimmDeviceContext.h>
++#include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
++
++#include <torch/library.h>
++#include <torch/types.h>
++
++#include <fcntl.h>
++#include <sys/mman.h>
++
++#include <memory>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++inline void verify(const at::TensorOptions& options) {
++  TORCH_CHECK(
++      !options.has_requires_grad() || !options.requires_grad(),
++      "'requires_grad' tensor option is not yet supported under Axdimm!");
++
++  TORCH_CHECK(
++      !options.has_pinned_memory() || !options.pinned_memory(),
++      "'pinned_memory' tensor option is not yet supported under Axdimm!");
++
++  TORCH_CHECK(
++      !options.has_layout() || (c10::kStrided == options.layout()),
++      "'layout' tensor option is not yet supported under Axdimm!");
++
++  TORCH_CHECK(
++      !options.has_memory_format() ||
++          (c10::MemoryFormat::Contiguous == options.memory_format_opt()),
++      "'memory_format' tensor option is not yet supported under Axdimm!");
++}
++
++enum class AxdimmTensorType { AXDIMM_SIMPLE, AXDIMM_SECURE, AXDIMM_SECURE_SGX };
++
++class AxdimmBaseTensor {
++ public:
++  AxdimmBaseTensor(
++      const std::string& weights_path,
++      const c10::ScalarType& scalar_type,
++      const at::Tensor& tables_rows_num,
++      AxdimmTensorType tensor_type,
++      uint32_t num_tables,
++      uint32_t sparse_feature_size,
++      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL)
++      : weights_path_(weights_path),
++        scalar_type_(scalar_type),
++        num_tables_(num_tables),
++        sparse_feature_size_(sparse_feature_size),
++        preference_(preference),
++        type_(tensor_type) {
++    TORCH_CHECK(
++        tables_rows_num.scalar_type() == torch::kInt32,
++        "Weights rows sizes must be int32 tensor");
++
++    const auto table_rows_size = tables_rows_num.sizes()[0];
++    TORCH_CHECK(table_rows_size > 0, "Weights rows sizes length must be > 0");
++    TORCH_CHECK(
++        table_rows_size <= num_tables,
++        "Weights rows sizes length must be <= number of weights tables");
++    check_params();
++
++    tables_rows_num_.reserve(table_rows_size);
++    std::for_each(
++        static_cast<const uint32_t*>(tables_rows_num.data_ptr()),
++        static_cast<const uint32_t*>(tables_rows_num.data_ptr()) +
++            table_rows_size,
++        [this](const auto val) {
++          TORCH_CHECK(
++              val > 0,
++              "Weights rows sizes are invalid. Each weights table size must be > 0");
++          tables_rows_num_.push_back(val);
++          tables_size_ += tables_rows_num_.back() * sparse_feature_size_;
++        });
++  }
++
++  AxdimmBaseTensor(
++      const at::Tensor& weights,
++      AxdimmTensorType tensor_type,
++      uint32_t num_tables,
++      uint32_t features_per_table,
++      uint32_t sparse_feature_size,
++      axd_user_preferences preference)
++      : scalar_type_(weights.scalar_type()),
++        num_tables_(num_tables),
++        sparse_feature_size_(sparse_feature_size),
++        preference_(preference),
++        type_(tensor_type) {
++    TORCH_CHECK(weights.is_contiguous(), "Weights tensor must be contiguous");
++    TORCH_CHECK(features_per_table > 0, "Features per table must be > 0");
++    check_params();
++    tables_rows_num_.resize(num_tables_);
++    std::fill(
++        std::begin(tables_rows_num_),
++        std::end(tables_rows_num_),
++        features_per_table);
++    tables_size_ = num_tables_ * features_per_table * sparse_feature_size_;
++  }
++
++  AxdimmBaseTensor(AxdimmBaseTensor&&) = default;
++
++  virtual ~AxdimmBaseTensor() = default;
++
++  AxdimmTensorType get_tensor_type() const {
++    return type_;
++  }
++
++  uint32_t get_sparse_feature_size() const {
++    return sparse_feature_size_;
++  }
++
++  uint32_t get_num_tables() const {
++    return num_tables_;
++  }
++
++  const std::vector<uint32_t>& get_tables_rows_num() const {
++    return tables_rows_num_;
++  }
++
++  Device* get_device() const {
++    return AxdimmDeviceContext::device();
++  }
++
++ private:
++  void check_params() const {
++    TORCH_CHECK(
++        scalar_type_ == torch::kFloat32 || scalar_type_ == torch::kInt32,
++        "Invalid tensor data type. AXDIMM tensor only float32 and int32 tensors as weights");
++    TORCH_CHECK(num_tables_ > 0, "Number of tables must be > 0");
++    TORCH_CHECK(sparse_feature_size_ > 0, "Sparse feature size must be > 0");
++  }
++
++ protected:
++  void* mmap_weights_file() const {
++    TORCH_CHECK(
++        !weights_path_.empty(), "Can't open weights file: file path is empty");
++    auto fd = open(weights_path_.c_str(), O_RDONLY);
++    TORCH_CHECK(fd != -1, "Failed to open weights tables file");
++    auto data = mmap(
++        nullptr,
++        tables_size_ * c10::scalarTypeToTypeMeta(scalar_type_).itemsize(),
++        PROT_READ,
++        MAP_PRIVATE,
++        fd,
++        0);
++    TORCH_CHECK(data != MAP_FAILED, "Failed to open weights tables file");
++
++    return data;
++  }
++
++  std::string weights_path_;
++  c10::ScalarType scalar_type_;
++  std::vector<uint32_t> tables_rows_num_;
++  size_t tables_size_{};
++  uint32_t num_tables_{};
++  uint32_t sparse_feature_size_{};
++  axd_user_preferences preference_{};
++  AxdimmTensorType type_{};
++};
++
++/* We need `AxdimmOpaqueTensorImpl` handle to:
++
++   1) Be copyable (opaque handle objects requirement).
++   2) Preserve polymorphic behavior.
++
++   Our options are shared_ptr or wrapped unique_ptr with proper copy
++   constructor. We decided to use shared_ptr, since it has negligible
++   performance impact and wrapper with copy constructor would require to move or
++   transfer ownership of data, which is not intuitive for copy operations to do
++*/
++using AxdimmTensorImpl =
++    AxdimmOpaqueTensorImpl<std::shared_ptr<AxdimmBaseTensor>>;
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
++
++#endif
+-- 
+2.34.1
+

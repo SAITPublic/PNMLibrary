@@ -1,0 +1,73 @@
+From d27a6f9380b25433a72c2d18ff58f43679b190b7 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 10 Oct 2022 16:42:51 +0300
+Subject: [PATCH 075/128] [caffe2] Remove `AxdimmSecure{Starter,Closer}`.
+
+These functions have become redundant and serve no practical purpose.
+
+References: AXDIMM-323
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ caffe2/python/pybind_state_axdimm.cc | 25 -------------------------
+ caffe2/python/workspace.py           |  3 ---
+ 2 files changed, 28 deletions(-)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 555c3a9b..4bc026dc 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -110,36 +110,11 @@ void addAXDIMMGlobalMethods(py::module& m) {
+   });
+ }
+ 
+-void addSecureAXDIMMGlobalMethods(py::module& m) {
+-  m.def(
+-      "secure_axdimm_starter",
+-      [](const std::string& weight_file,
+-         const std::vector<uint32_t>& table_entry,
+-         uint32_t row_size_in_bytes) { // Extra args for consistence with
+-                                    // non-secure version
+-        CAFFE_ENFORCE_EQ(
+-            nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+-        // Insert awesome init stuff here
+-        LOG(INFO) << "Work in Secure mode" << std::endl;
+-        base_device = axdimm_create_base_device();
+-        CAFFE_ENFORCE_NE(nullptr, base_device, "AXDIMM device creation failed");
+-        return "axdimm secure";
+-      });
+-  m.def("secure_axdimm_closer", []() {
+-    // Insert awesome close stuff here
+-    std::cout << "End of work in Secure mode" << std::endl;
+-    axdimm_destroy_base_device(base_device);
+-    base_device = nullptr;
+-    return 0;
+-  });
+-}
+-
+ PYBIND11_MODULE(caffe2_pybind11_state_axdimm, m) {
+   m.doc() = "pybind11 stateful interface to Caffe2 workspaces - AXDIMM edition";
+ 
+   addGlobalMethods(m);
+   addAXDIMMGlobalMethods(m);
+-  addSecureAXDIMMGlobalMethods(m);
+   addObjectMethods(m);
+   for (const auto& addition : PybindAdditionRegistry()->Keys()) {
+     PybindAdditionRegistry()->Create(addition, m);
+diff --git a/caffe2/python/workspace.py b/caffe2/python/workspace.py
+index 07f15400..4bd6ea35 100644
+--- a/caffe2/python/workspace.py
++++ b/caffe2/python/workspace.py
+@@ -99,9 +99,6 @@ if has_axdimm_support:
+     AxdimmStarter = C.axdimm_starter
+     AxdimmCloser = C.axdimm_closer
+ 
+-    SecureAxdimmStarter = C.secure_axdimm_starter
+-    SecureAxdimmCloser = C.secure_axdimm_closer
+-
+ if not has_axdimm_support:
+     AxdimmStarter = lambda: 0 # noqa
+     AxdimmCloser = lambda: 0 # noqa
+-- 
+2.34.1
+

@@ -1,0 +1,116 @@
+From 9cf5428cefed9baabc44b76665666e5c13b5f87d Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Mon, 22 Aug 2022 16:40:56 +0300
+Subject: [PATCH 066/128] [driver] Add argument to define memory preference
+
+Add `mem_preference` argument to define memory allocation strategy
+in AXDIMM library.
+
+Resolve: AXDIMM-359
+---
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.cc |  1 +
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h  | 14 ++++++++++----
+ caffe2/python/pybind_state_axdimm.cc               | 13 ++++++++++---
+ 3 files changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 6bf8d91b..478e63cd 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -59,6 +59,7 @@ REGISTER_CPU_OPERATOR(
+       .Arg("sparse_feature_size", "uint: sparse feature size")                   \
+       .Arg("rows", "vector<uint64>: number of rows for each table")              \
+       .Arg("with_tag", "bool: perform MAC verification of result")               \
++      .Arg("mem_preference", "uint: memory preference id")                       \
+       .Input(                                                                    \
+           0,                                                                     \
+           "T1, ..., TN, I1, ..., IN, L1, ..., LN",                               \
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 25babaff..ce8c3433 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -112,7 +112,8 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       CAFFE_ENFORCE_EQ(1, indicesInput.dim(), "INDICES must be a vector");
+       CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
+ 
+-      if (*lengths.begin() != num_indices_per_lookup_[i]) {
++      if (static_cast<uint32_t>(*lengths.begin()) !=
++          num_indices_per_lookup_[i]) {
+         CAFFE_ENFORCE_EQ(
+             num_indices_per_lookup_[i],
+             0,
+@@ -190,14 +191,19 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+         tables_size_bytes +=
+             (tables_size_ / sparse_feature_size_) * sizeof(axdimm::uint128_t);
+       }
+-      LOG(INFO) << "Operator "
+-                << " tables size in bytes: " << tables_size_bytes;
++      LOG(INFO) << "Operator AXDIMMSecureSparseLengthsReductionOpVec: "
++                << " Tables size in bytes: " << tables_size_bytes;
++
++      const auto memory_preference = this->template GetSingleArgument<int>(
++          "mem_preference", AXDIMM_ALLOC_AUTO);
++
+       axdimm::secure::DeviceArguments args(
+           axdimm::secure::UntrustedAxdimmDeviceParams{
+               .rows = rows,
+               .sparse_feature_size = sparse_feature_size,
+               .with_tag = with_tag_,
+-              .preference = AXDIMM_ALLOC_AUTO,
++              .preference =
++                  static_cast<axd_user_preferences>(memory_preference),
+               .cache_exec_context = true});
+       runner_.init(&args);
+     } else if constexpr (std::is_same_v<Context, CPUContext>) {
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index fee5b323..5af25d39 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -68,19 +68,23 @@ void addAXDIMMGlobalMethods(py::module& m) {
+       "axdimm_starter",
+       [](const std::string& weight_file,
+          const std::vector<uint32_t>& table_entry,
+-         uint32_t row_size_in_bytes) {
++         uint32_t row_size_in_bytes,
++         uint32_t mem_preference) {
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+         base_device = axdimm_create_base_device();
+         // reset for testing purposes
+         axdimm_reset_device(base_device);
+ 
++        LOG(INFO) << "Allocate tables with memory preference id: "
++                  << mem_preference;
++
+         descriptor = axdimm_allocate_tables(
+             base_device,
+             table_entry.data(),
+             table_entry.size(),
+             row_size_in_bytes,
+-            AXDIMM_ALLOC_AUTO);
++            static_cast<axd_user_preferences>(mem_preference));
+ 
+         load_tables(base_device, weight_file, descriptor);
+         return descriptor;
+@@ -98,7 +102,9 @@ void addSecureAXDIMMGlobalMethods(py::module& m) {
+       "secure_axdimm_starter",
+       [](const std::string& weight_file,
+          const std::vector<uint32_t>& table_entry,
+-         uint32_t row_size_in_bytes) {
++         uint32_t row_size_in_bytes,
++         [[maybe_unused]] uint32_t mem_preference) { // Extra args for consistence with
++                                    // non-secure version
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+         // Insert awesome init stuff here
+@@ -112,6 +118,7 @@ void addSecureAXDIMMGlobalMethods(py::module& m) {
+   m.def("secure_axdimm_closer", []() {
+     // Insert awesome close stuff here
+     std::cout << "End of work in Secure mode" << std::endl;
++    axdimm_reset_device(base_device); // Reset device to free acquired ranks
+     axdimm_destroy_base_device(base_device);
+     base_device = nullptr;
+     return 0;
+-- 
+2.34.1
+

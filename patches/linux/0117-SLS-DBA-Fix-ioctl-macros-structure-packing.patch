@@ -1,0 +1,92 @@
+From 2359b449d2dd1a00b2fbf306a434976cac56de14 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Fri, 26 May 2023 07:44:38 +0300
+Subject: [PATCH 117/161] [SLS/DBA] Fix ioctl macros & structure packing
+
+* Correct ioctl macro convention is to use a data type,
+not a pointer to that data type.
+
+* Structure packing to exclude uninitialized paddings when aligning.
+The main reason is to calm the MSAN. MSAN is needed so as not to miss
+really uninitialized fields.
+However, only the packing of all used structures in both kernel and
+userspace will completely eliminate all errors of uninitialized
+paddings, which seems unlikely.
+Thus it's better to use packing in the most critical sections like ioctl.
+
+* Using pragma for packing, because of known "Cannot bind packed field"
+GCC bug.
+
+Resolves: MCS23-1080, MCS23-1122
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ include/uapi/linux/dba_resources.h | 6 ++++--
+ include/uapi/linux/sls_resources.h | 9 +++++----
+ 2 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/include/uapi/linux/dba_resources.h b/include/uapi/linux/dba_resources.h
+index d6dbd167e..e681edd80 100644
+--- a/include/uapi/linux/dba_resources.h
++++ b/include/uapi/linux/dba_resources.h
+@@ -32,18 +32,20 @@
+ #define DBA_THREAD_BUSY 1
+ #define DBA_THREAD_IDLE 0
+ 
++#pragma pack(push, 1)
+ struct dba_allocation {
+ 	uint64_t address;
+ 	uint64_t size;
+ 	uint8_t rank;
+ };
++#pragma pack(pop)
+ 
+ #define DBA_RESOURCE_IOC_MAGIC 'D'
+ 
+ #define DBA_IOCTL_ALLOCATE \
+-	_IOWR(DBA_RESOURCE_IOC_MAGIC, 1, struct dba_allocation *)
++	_IOWR(DBA_RESOURCE_IOC_MAGIC, 1, struct dba_allocation)
+ #define DBA_IOCTL_DEALLOCATE \
+-	_IOW(DBA_RESOURCE_IOC_MAGIC, 2, struct dba_allocation *)
++	_IOW(DBA_RESOURCE_IOC_MAGIC, 2, struct dba_allocation)
+ #define DBA_IOCTL_GET_THREAD _IO(DBA_RESOURCE_IOC_MAGIC, 3)
+ #define DBA_IOCTL_RELEASE_THREAD _IOW(DBA_RESOURCE_IOC_MAGIC, 4, uint8_t)
+ 
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index d6e0ff431..ca7d14fea 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -150,6 +150,7 @@ struct sls_memory_object {
+ 	uint64_t length;
+ };
+ 
++#pragma pack(push, 1)
+ /* Tables allocation parameters */
+ struct sls_memory_alloc_request {
+ 	uint64_t descriptor;
+@@ -170,6 +171,7 @@ struct sls_num_objects_request {
+ 	uint64_t descriptor;
+ 	uint64_t num_objects;
+ };
++#pragma pack(pop)
+ 
+ #define SLS_IOC_MAGIC 'T'
+ 
+@@ -177,11 +179,10 @@ struct sls_num_objects_request {
+ #define SET_FIRST_BUFFER _IO(SLS_IOC_MAGIC, 1)
+ #define SET_SECOND_BUFFER _IO(SLS_IOC_MAGIC, 2)
+ #define WHICH_BUFFER _IOR(SLS_IOC_MAGIC, 3, int)
+-#define ALLOCATE_MEMORY \
+-	_IOWR(SLS_IOC_MAGIC, 4, struct sls_memory_alloc_request *)
++#define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 4, struct sls_memory_alloc_request)
+ #define GET_MEMORY_OBJECTS_NUM \
+-	_IOWR(SLS_IOC_MAGIC, 5, struct sls_num_objects_request *)
+-#define GET_MEMORY_ALLOCATION _IOWR(SLS_IOC_MAGIC, 6, struct sls_memory_alloc *)
++	_IOWR(SLS_IOC_MAGIC, 5, struct sls_num_objects_request)
++#define GET_MEMORY_ALLOCATION _IOWR(SLS_IOC_MAGIC, 6, struct sls_memory_alloc)
+ #define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 7, uint64_t)
+ #define GET_RANK_FOR_WRITE _IOW(SLS_IOC_MAGIC, 8, unsigned int)
+ #define GET_RANK_FOR_READ _IOW(SLS_IOC_MAGIC, 9, unsigned int)
+-- 
+2.34.1
+

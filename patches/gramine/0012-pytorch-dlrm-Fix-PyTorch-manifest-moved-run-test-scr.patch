@@ -1,0 +1,131 @@
+From 19e74d9b73d718bdd4ae5878d8cc1aad5cf74af0 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Wed, 16 Nov 2022 23:54:54 +0300
+Subject: [PATCH 12/27] [pytorch, dlrm] Fix PyTorch manifest, moved run test
+ script
+
+Added required directorires and parameters to PyTorch manifest
+Moved script to run pytorch tests to CI-Scripts
+
+Resolves: AXDIMM-343
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ CI-Scripts/build_pytorch_dlrm.sh                 | 13 +++++++++++++
+ CI-Scripts/run_pytorch_test.sh                   | 13 +++++++++++++
+ application/pytorch/Makefile                     |  1 +
+ .../pytorch/conf.pytorch.manifest.template       |  8 ++++++--
+ application/pytorch/run_test.sh                  | 16 ----------------
+ 5 files changed, 33 insertions(+), 18 deletions(-)
+ create mode 100755 CI-Scripts/build_pytorch_dlrm.sh
+ create mode 100755 CI-Scripts/run_pytorch_test.sh
+ delete mode 100755 application/pytorch/run_test.sh
+
+diff --git a/CI-Scripts/build_pytorch_dlrm.sh b/CI-Scripts/build_pytorch_dlrm.sh
+new file mode 100755
+index 00000000..43879a3d
+--- /dev/null
++++ b/CI-Scripts/build_pytorch_dlrm.sh
+@@ -0,0 +1,13 @@
++#!/bin/sh
++
++set -e
++
++. $(dirname "$0")/env.sh
++
++gramine-sgx-gen-private-key -f
++
++DLRM_APP_DIR="$ROOT_DIR/application/pytorch/"
++cd $DLRM_APP_DIR
++
++make clean
++make SGX=1
+diff --git a/CI-Scripts/run_pytorch_test.sh b/CI-Scripts/run_pytorch_test.sh
+new file mode 100755
+index 00000000..48623f1f
+--- /dev/null
++++ b/CI-Scripts/run_pytorch_test.sh
+@@ -0,0 +1,13 @@
++#!/bin/sh
++
++set -e
++
++GRAMINE_BINARY=$1
++TENSOR_TYPE=$2
++
++. $(dirname "$0")/env.sh
++
++DLRM_APP_DIR="$ROOT_DIR/application/pytorch/"
++cd $DLRM_APP_DIR
++
++${DLRM_PATH}/run_test.sh --weights-path /input/DLRM_FLOAT/embedded.bin --use-axdimm $TENSOR_TYPE --run-command "$GRAMINE_BINARY pytorch"
+diff --git a/application/pytorch/Makefile b/application/pytorch/Makefile
+index 07569443..32f0f527 100644
+--- a/application/pytorch/Makefile
++++ b/application/pytorch/Makefile
+@@ -21,6 +21,7 @@ pytorch.manifest: conf.pytorch.manifest.template config_pillow.py
+ 		-Daxdimm_driver=${AXDIMM_DRIVER_PATH} \
+ 		-Ddlrm_path=${DLRM_PATH} \
+ 		-Dpython_path=${PYTHONPATH} \
++		-Ddlrm_data_path=${DLRM_DATA_PATH} \
+ 		pytorch.manifest.template \
+ 		> $@
+ 
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index 2a1b4158..dbcadbe1 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -22,15 +22,17 @@ fs.mounts = [
+   #  *** PILLOW MOUNT PLACEHOLDER *** #Will be replaced by config_pillow.py during the make process
+   { uri = "file:{{ axdimm_driver }}/build/ai", path = "{{ axdimm_driver }}/build/ai"},
+   { uri = "file:{{ axdimm_driver }}/build/secure", path = "{{ axdimm_driver }}/build/secure"},
++  { uri = "file:{{ dlrm_data_path }}", path = "/input" },
+   { type = "tmpfs", path = "/tmp" },
+   { uri = "dev:/dev/axdimm_device0", path = "/dev/axdimm_device0" },
+-  { uri = "dev:/dev/axdimm_meminfo", path = "/dev/axdimm_meminfo" }
++  { uri = "file:/sys/bus/", path = "/sys/bus/", type="chroot" }, #unsafe but we can't mount single file from sysfs
+ ]
+ 
+ sgx.nonpie_binary = true
+-sgx.enclave_size = "8G"
++sgx.enclave_size = "16G"
+ sgx.thread_num = 512
+ sgx.debug = true
++sgx.insecure__enable_shared_range = "true"
+ 
+ sgx.trusted_files = [
+   "file:/dev/",
+@@ -49,6 +51,8 @@ sgx.trusted_files = [
+ 
+ sgx.allowed_files = [
+   "file:./run_kaggle_pt/",
++  "file:/sys/bus/dax/drivers/device_dax/dax0.0/ranks/",
++  "file:{{ dlrm_data_path }}",
+   # In production we should place pillow path into sgx.trusted_files
+   # but to reduce the preparation time we place it here. Will be changed in production
+   #  *** PILLOW SGX PLACEHOLDER *** #Will be replaced by config_pillow.py during the make process
+diff --git a/application/pytorch/run_test.sh b/application/pytorch/run_test.sh
+deleted file mode 100755
+index c7cfcfbf..00000000
+--- a/application/pytorch/run_test.sh
++++ /dev/null
+@@ -1,16 +0,0 @@
+-#!/bin/sh
+-
+-set -e
+-
+-embedding_size="500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000"
+-arch_mlp_bot="128-128-16"
+-arch_mlp_top="256-64-1"
+-sparse_feature_size=16
+-mini_batch_size=256
+-num_indices_per_lookup=40
+-interaction_op="cat"
+-num_batches=100
+-
+-$1 pytorch ${DLRM_PATH}/dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
+-                            --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed=1 \
+-                            --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" --inference-only
+-- 
+2.34.1
+

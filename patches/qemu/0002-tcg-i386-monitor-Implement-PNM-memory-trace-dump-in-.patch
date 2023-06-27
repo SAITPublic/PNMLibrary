@@ -1,0 +1,310 @@
+From 257dbf3679a87a05f1020c8be7fe69054859bf8d Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 31 Jul 2023 02:20:36 +0000
+Subject: [PATCH 2/3] [tcg/i386][monitor] Implement PNM memory trace dump in
+ tcg
+
+tcg/
+
+* disable fast path for TLB load/store handling, always fall back to
+  QEMU handlers.
+* if pnm tracing is enabled, check for physical address belongs to PNM
+  range ([4 GB - 68 GB] for now). If so, dump memory access info into
+  PNM trace file.
+
+monitor/
+
+* add new 'pnm-trace-file on/off/set' command to enable/disable PNM
+  tracing in MMU.
+
+Resolves: MCS23-1517.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ accel/tcg/cputlb.c        | 138 ++++++++++++++++++++++++++++++++++++++
+ hmp-commands.hx           |  13 ++++
+ monitor/misc.c            |  23 +++++++
+ softmmu/pnm_tlb_trace.h   |   9 +++
+ tcg/i386/tcg-target.c.inc |   8 +--
+ 5 files changed, 187 insertions(+), 4 deletions(-)
+ create mode 100644 softmmu/pnm_tlb_trace.h
+
+diff --git a/accel/tcg/cputlb.c b/accel/tcg/cputlb.c
+index 6f1c00682..6b20091b7 100644
+--- a/accel/tcg/cputlb.c
++++ b/accel/tcg/cputlb.c
+@@ -41,6 +41,9 @@
+ #endif
+ #include "tcg/tcg-ldst.h"
+ 
++#include "softmmu/pnm_tlb_trace.h"
++#include "qemu/qemu-print.h"
++
+ /* DEBUG defines, enable DEBUG_TLB_LOG to log to the CPU_LOG_MMU target */
+ /* #define DEBUG_TLB */
+ /* #define DEBUG_TLB_LOG */
+@@ -108,6 +111,119 @@ static void tb_jmp_cache_clear_page(CPUState *cpu, target_ulong page_addr)
+     }
+ }
+ 
++static bool g_is_tracing = false;
++static FILE *pnm_tlb_trace_file = NULL;
++static char *pnm_tlb_trace_file_name = NULL;
++
++static char DEFAULT_PNM_TRACE_NAME[] = "/tmp/pnm_trace.txt";
++
++static const uint64_t one_gb = 1024ULL * 1024ULL * 1024ULL;
++static const uint64_t rank_size = 16 * one_gb;
++static const uint64_t ranks_num = 4;
++
++static inline bool pnm_is_tracing(void)
++{
++    return g_is_tracing;
++}
++
++static inline uint64_t get_real_pnm_phys_addr(hwaddr addr)
++{
++    // [TODO: ] For some reason, QEMU maps 4GB base of PNM to 3GB physical
++    //          RAM address (qemu_ram_addr_from_host). Need to figure out why
++    //          we have a gap of 1GB here. Check hw/i386/pc.c:998 for details.
++    return addr + one_gb;
++}
++
++static inline uint64_t pnm_base(void)
++{
++    return 4 * one_gb;
++}
++
++// Returns TRUE if addr belongs to PNM device range excluding "base" region
++// where user data (e.g. embedding tables) is loaded.
++static bool pnm_do_print_physaddr_no_base_region(hwaddr addr)
++{
++    uint64_t half_gb = 1024ULL * 1024ULL * 512ULL;
++
++    uint64_t base_1 = pnm_base();
++    uint64_t base_2 = base_1 + rank_size;
++
++    uint64_t start_1 = base_1 + rank_size - half_gb;
++    uint64_t end_1 = start_1 + half_gb;
++
++    uint64_t start_2 = base_2 + rank_size - half_gb;
++    uint64_t end_2 = start_2 + half_gb;
++
++    return (addr >= start_1 && addr < end_1) ||
++           (addr >= start_2 && addr < end_2);
++}
++
++// Returns TRUE if addr belongs to PNM device range.
++static bool pnm_do_print_physaddr(hwaddr addr)
++{
++    uint64_t start = pnm_base();
++    uint64_t end = start + ranks_num * rank_size;
++
++    return (addr >= start && addr < end);
++}
++
++static bool do_print_physaddr(hwaddr addr, bool exclude_base_region)
++{
++    return exclude_base_region ? pnm_do_print_physaddr_no_base_region(addr)
++                               : pnm_do_print_physaddr(addr);
++}
++
++void pnm_tlb_trace_start(void)
++{
++    if (g_is_tracing) {
++        qemu_printf("\t[PNM] the trace file is still opened (%s)\n",
++                    pnm_tlb_trace_file_name);
++        return;
++    }
++
++    pnm_tlb_trace_file = pnm_tlb_trace_file_name ? fopen(pnm_tlb_trace_file_name, "w+")
++                                                 : fopen(DEFAULT_PNM_TRACE_NAME, "w+");
++
++    if (!pnm_tlb_trace_file) {
++        qemu_printf("\t[PNM] %s\n", strerror(errno));
++    }
++
++    g_is_tracing = true;
++    qemu_printf("\t[PNM] trace_start\n");
++}
++
++void pnm_tlb_trace_end(void)
++{
++    if (!g_is_tracing) {
++        qemu_printf("\t[PNM] error: can't close the trace file (%s)\n",
++                    pnm_tlb_trace_file_name);
++        return;
++    }
++
++    g_is_tracing = false;
++    fclose(pnm_tlb_trace_file);
++    pnm_tlb_trace_file = NULL;
++    qemu_printf("\t[PNM] trace_end (%s file is generated!)\n",
++                pnm_tlb_trace_file_name);
++}
++
++void pnm_tlb_print_trace_file_status(void)
++{
++    qemu_printf("Trace file \"%s\" %s.\n",
++                pnm_tlb_trace_file_name, pnm_tlb_trace_file ? "on" : "off");
++}
++
++void pnm_tlb_set_trace_file(const char *file)
++{
++    g_free(pnm_tlb_trace_file_name);
++
++    if (!file) {
++        pnm_tlb_trace_file_name = g_strdup_printf("%s", DEFAULT_PNM_TRACE_NAME);
++    } else {
++        pnm_tlb_trace_file_name = g_strdup_printf("%s", file);
++    }
++}
++
+ /**
+  * tlb_mmu_resize_locked() - perform TLB resize bookkeeping; resize if necessary
+  * @desc: The CPUTLBDesc portion of the TLB
+@@ -2009,6 +2125,17 @@ load_helper(CPUArchState *env, target_ulong addr, MemOpIdx oi,
+     }
+ 
+     haddr = (void *)((uintptr_t)addr + entry->addend);
++
++    if (pnm_is_tracing()) {
++        hwaddr physaddr = (hwaddr)qemu_ram_addr_from_host_nofail(haddr);
++        physaddr = get_real_pnm_phys_addr(physaddr);
++
++        if (do_print_physaddr(physaddr, true)) {
++            fprintf(pnm_tlb_trace_file, "READ addr: %p, size: %lu\n",
++                    (void *)physaddr, size);
++        }
++    }
++
+     return load_memop(haddr, op);
+ }
+ 
+@@ -2413,6 +2540,17 @@ store_helper(CPUArchState *env, target_ulong addr, uint64_t val,
+     }
+ 
+     haddr = (void *)((uintptr_t)addr + entry->addend);
++
++    if (pnm_is_tracing()) {
++        hwaddr physaddr = (hwaddr)qemu_ram_addr_from_host_nofail(haddr);
++        physaddr = get_real_pnm_phys_addr(physaddr);
++
++        if (do_print_physaddr(physaddr, true)) {
++            fprintf(pnm_tlb_trace_file, "WRITE addr: %p, size: %lu, val: %p\n",
++                    (void *)physaddr, size, (void*)val);
++        }
++    }
++
+     store_memop(haddr, val, op);
+ }
+ 
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index 673e39a69..99b47e367 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -312,6 +312,19 @@ SRST
+ ERST
+ #endif
+ 
++    {
++        .name       = "pnm-trace-file",
++        .args_type  = "op:s?,arg:F?",
++        .params     = "on|off|set [arg]",
++        .help       = "open, close, or set a new file name",
++        .cmd        = hmp_pnm_trace_file,
++    },
++
++SRST
++``pnm-trace-file on|off``
++  Open or close the PNM trace file.
++ERST
++
+     {
+         .name       = "log",
+         .args_type  = "items:s",
+diff --git a/monitor/misc.c b/monitor/misc.c
+index 205487e2b..3a04f7907 100644
+--- a/monitor/misc.c
++++ b/monitor/misc.c
+@@ -85,6 +85,8 @@
+ #include "hw/s390x/storage-attributes.h"
+ #endif
+ 
++#include "softmmu/pnm_tlb_trace.h"
++
+ /* Make devices configuration available for use in hmp-commands*.hx templates */
+ #include CONFIG_DEVICES
+ 
+@@ -220,6 +222,27 @@ static void hmp_trace_file(Monitor *mon, const QDict *qdict)
+ }
+ #endif
+ 
++static void hmp_pnm_trace_file(Monitor *mon, const QDict *qdict)
++{
++    const char *op = qdict_get_try_str(qdict, "op");
++    const char *arg = qdict_get_try_str(qdict, "arg");
++
++    if (!op) {
++        pnm_tlb_print_trace_file_status();
++    } else if (!strcmp(op, "on")) {
++        pnm_tlb_trace_start();
++    } else if (!strcmp(op, "off")) {
++        pnm_tlb_trace_end();
++    } else if (!strcmp(op, "set")) {
++        if (arg) {
++            pnm_tlb_set_trace_file(arg);
++        }
++    } else {
++        monitor_printf(mon, "unexpected argument \"%s\"\n", op);
++        help_cmd(mon, "pnm-trace-file");
++    }
++}
++
+ static void hmp_info_help(Monitor *mon, const QDict *qdict)
+ {
+     help_cmd(mon, "info");
+diff --git a/softmmu/pnm_tlb_trace.h b/softmmu/pnm_tlb_trace.h
+new file mode 100644
+index 000000000..8708c96e5
+--- /dev/null
++++ b/softmmu/pnm_tlb_trace.h
+@@ -0,0 +1,9 @@
++#ifndef _PNM_TLB_TRACE_H_
++#define _PNM_TLB_TRACE_H_
++
++void pnm_tlb_trace_start(void);
++void pnm_tlb_trace_end(void);
++void pnm_tlb_print_trace_file_status(void);
++void pnm_tlb_set_trace_file(const char *file);
++
++#endif
+diff --git a/tcg/i386/tcg-target.c.inc b/tcg/i386/tcg-target.c.inc
+index cb04e4b3a..7037ac8cd 100644
+--- a/tcg/i386/tcg-target.c.inc
++++ b/tcg/i386/tcg-target.c.inc
+@@ -1793,8 +1793,8 @@ static inline void tcg_out_tlb_load(TCGContext *s, TCGReg addrlo, TCGReg addrhi,
+        path function argument setup.  */
+     tcg_out_mov(s, ttype, r1, addrlo);
+ 
+-    /* jne slow_path */
+-    tcg_out_opc(s, OPC_JCC_long + JCC_JNE, 0, 0, 0);
++    /* jmp slow_path */
++    tcg_out8(s, OPC_JMP_long);
+     label_ptr[0] = s->code_ptr;
+     s->code_ptr += 4;
+ 
+@@ -1802,8 +1802,8 @@ static inline void tcg_out_tlb_load(TCGContext *s, TCGReg addrlo, TCGReg addrhi,
+         /* cmp 4(r0), addrhi */
+         tcg_out_modrm_offset(s, OPC_CMP_GvEv, addrhi, r0, which + 4);
+ 
+-        /* jne slow_path */
+-        tcg_out_opc(s, OPC_JCC_long + JCC_JNE, 0, 0, 0);
++        /* jmp slow_path */
++        tcg_out8(s, OPC_JMP_long);
+         label_ptr[1] = s->code_ptr;
+         s->code_ptr += 4;
+     }
+-- 
+2.34.1
+

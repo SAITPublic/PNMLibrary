@@ -1,0 +1,79 @@
+From 86782ce0558444640a3d886e213b6b3a78c32684 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Fri, 14 Oct 2022 12:20:29 +0300
+Subject: [PATCH 053/161] [drivers/dax/axdimm] Print ioctl cmd components.
+
+Instead of printing the ioctl cmd as a raw hex number, print its _IOC_NR
+if the ioctl is known and all its components if not.
+
+References: AXDIMM-372
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ drivers/dax/axdimm.c | 27 ++++++++++++++++++---------
+ 1 file changed, 18 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 0df6cb850..6188f365d 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -270,30 +270,37 @@ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+ 	return 0;
+ }
+ 
++static void dump_ioctl_err(unsigned int cmd)
++{
++	AXDIMM_ERR(" ioctl cmd: magic %u, direction %u, size %u, number %u\n",
++		   _IOC_TYPE(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd), _IOC_NR(cmd));
++}
++
+ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ {
+ 	int err = 0;
+ 	int retval = 0;
+ 
+-	AXDIMM_DBG("Handling ioctl(cmd = 0x%x, arg = 0x%lx)\n", cmd, arg);
+-
+ 	/*
+ 	 * extract the type and number bitfields, and don't decode
+ 	 * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
+ 	 */
+ 	if (_IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC) {
+-		AXDIMM_ERR(" _IOC_TYPE(cmd) :	 %u\n", _IOC_TYPE(cmd));
+-		AXDIMM_ERR(" AXDIMM_IOC_MAGIC:   %u\n", AXDIMM_IOC_MAGIC);
+-		AXDIMM_ERR(
+-			" _IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC => false. Aborting ioctl\n");
++		AXDIMM_ERR("Wrong ioctl magic. Aborting ioctl:\n");
++		dump_ioctl_err(cmd);
++		AXDIMM_ERR(" expected magic: %u\n", AXDIMM_IOC_MAGIC);
+ 		return -ENOTTY;
+ 	}
+ 	if (_IOC_NR(cmd) > AXDIMM_IOC_MAXNR) {
+-		AXDIMM_ERR(
+-			" _IOC_NR(cmd) > AXDIMM_IOC_MAXNR => false. Aborting ioctl\n");
++		AXDIMM_ERR("Ioctl number too large. Aborting ioctl:\n");
++		dump_ioctl_err(cmd);
++		AXDIMM_ERR(" maximum ioctl number: %u\n", AXDIMM_IOC_MAGIC);
+ 		return -ENOTTY;
+ 	}
+ 
++	AXDIMM_DBG("Handling AXDIMM ioctl %u with arg 0x%lx\n", _IOC_NR(cmd),
++		   arg);
++
+ 	/*
+ 	 * the direction is a bitmask, and VERIFY_WRITE catches R/W
+ 	 * transfers. `Type' is user-oriented, while
+@@ -346,7 +353,9 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		retval = release_axdimm_rank(&axdimm_rank_sched, cmd, arg);
+ 		break;
+ 	default:
+-		AXDIMM_ERR("Unknown ioctl command 0x%x\n", cmd);
++		AXDIMM_ERR("Unknown ioctl command:\n");
++		dump_ioctl_err(cmd);
++		retval = -ENOTTY;
+ 	}
+ 
+ 	AXDIMM_DBG("Returning %d from ioctl\n", retval);
+-- 
+2.34.1
+

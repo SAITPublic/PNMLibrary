@@ -1,0 +1,155 @@
+From 96f2b95d4b4c477836921500312600106ee15504 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 20 Jul 2023 22:43:48 -0400
+Subject: [PATCH 143/161] [zSwap] Add module parameter for enabling disabling
+ sim
+
+Resolves: MCS23-1369
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/zswap/pnm_sim.c | 53 ++++++++++++++++++++++++++-----------
+ 1 file changed, 38 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/pnm/zswap/pnm_sim.c b/drivers/pnm/zswap/pnm_sim.c
+index d188eba8e..1052206ed 100644
+--- a/drivers/pnm/zswap/pnm_sim.c
++++ b/drivers/pnm/zswap/pnm_sim.c
+@@ -33,8 +33,7 @@
+ 
+ static struct pnm_info *pnm_ctrl;
+ 
+-/* Kill ktheads for system halt */
+-static bool sim_should_stop;
++static bool sim_is_active;
+ 
+ /*********************************
+  * PNM Simulator Parameters
+@@ -182,7 +181,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 		pr_info("[HOST-D][%d] IDLE UNITs %d\n", tid,
+ 			atomic_read(&pnm_ctrl->num_idle_decomp_unit));
+ 
+-	while (!sim_should_stop) {
++	while (READ_ONCE(sim_is_active)) {
+ 		if (atomic_read(&pnm_ctrl->num_idle_decomp_unit) > 0)
+ 			break;
+ 	}
+@@ -285,14 +284,14 @@ int pnm_compress_unit(void *p)
+ 	struct commit *commit_out = &unit->commit;
+ 	ktime_t started, finished;
+ 
+-	while (!kthread_should_stop() || !sim_should_stop) {
++	while (!kthread_should_stop() && READ_ONCE(sim_is_active)) {
+ 		started = ktime_get();
+ 		finished = ktime_add_ns(started, unit_poll_ns);
+ 		do {
+ 			if (READ_ONCE(unit->state) & RUNNING)
+ 				break;
+ 
+-			if (kthread_should_stop() || sim_should_stop)
++			if (kthread_should_stop() || !READ_ONCE(sim_is_active))
+ 				break;
+ 
+ 		} while (ktime_before(ktime_get(), finished));
+@@ -337,7 +336,8 @@ int pnm_compress_unit(void *p)
+ 					unit->inst.tid);
+ 
+ 			/* wait until the thread takes results */
+-			while (!kthread_should_stop() || !sim_should_stop) {
++			while (!kthread_should_stop() &&
++			       READ_ONCE(sim_is_active)) {
+ 				if (READ_ONCE(unit->state) & IDLE) {
+ 					/* update statistics of pnm unit */
+ 					unit->num_used++;
+@@ -404,14 +404,14 @@ int pnm_decompress_unit(void *p)
+ 	struct commit *commit_out = &unit->commit;
+ 	ktime_t started, finished;
+ 
+-	while (!kthread_should_stop() || !sim_should_stop) {
++	while (!kthread_should_stop() && READ_ONCE(sim_is_active)) {
+ 		started = ktime_get();
+ 		finished = ktime_add_ns(started, unit_poll_ns);
+ 		do {
+ 			if (READ_ONCE(unit->state) & RUNNING)
+ 				break;
+ 
+-			if (kthread_should_stop() || sim_should_stop)
++			if (kthread_should_stop() || !READ_ONCE(sim_is_active))
+ 				break;
+ 
+ 		} while (ktime_before(ktime_get(), finished));
+@@ -457,7 +457,8 @@ int pnm_decompress_unit(void *p)
+ 					unit->inst.tid);
+ 
+ 			/* wait until the thread takes results */
+-			while (!kthread_should_stop() || !sim_should_stop) {
++			while (!kthread_should_stop() ||
++			       READ_ONCE(sim_is_active)) {
+ 				if (READ_ONCE(unit->state) & IDLE) {
+ 					/* update statistics of pnm unit */
+ 					unit->num_used++;
+@@ -522,7 +523,7 @@ static int __init cxl_pnm_sim_init(void)
+ 	return 0;
+ }
+ 
+-static void __exit cxl_pnm_sim_exit(void)
++static void cxl_pnm_sim_shutdown(void)
+ {
+ 	int i;
+ 
+@@ -533,9 +534,13 @@ static void __exit cxl_pnm_sim_exit(void)
+ 	for (i = 0; i < pnm_ctrl->num_decompress; i++)
+ 		kthread_stop(pnm_ctrl->decompress[i].task_unit);
+ 
+-	sim_should_stop = true;
++	WRITE_ONCE(sim_is_active, false);
++}
+ 
++static void __exit cxl_pnm_sim_exit(void)
++{
+ 	pr_info("[pnm_sim] simulator exit!\n");
++	cxl_pnm_sim_shutdown();
+ }
+ 
+ /* initialization for queues in PNM
+@@ -686,15 +691,33 @@ static void pnm_sim_init(void)
+ 		HIDDEN_POOL_SIZE);
+ }
+ 
++/* This function is callback to `enabled` kernel module parameter.
++ * This parameter enable or disable simulator
++ */
+ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ {
+-	pr_info("[pnm_sim] pnm simulator engine loaded!\n");
++	const int rc = param_set_bool(val, kp);
++	bool enable_sim;
+ 
+-	pnm_sim_init();
++	if (rc)
++		return rc;
+ 
+-	pnm_unit_gen();
++	enable_sim = *(bool *)kp->arg;
+ 
+-	return param_set_bool(val, kp);
++	if (enable_sim == READ_ONCE(sim_is_active))
++		return 0;
++
++	if (enable_sim) {
++		WRITE_ONCE(sim_is_active, true);
++		pr_info("[pnm_sim] pnm simulator engine loaded!\n");
++		pnm_sim_init();
++		pnm_unit_gen();
++	} else {
++		pr_info("[pnm_sim] pnm simulator stopped!\n");
++		cxl_pnm_sim_shutdown();
++	}
++
++	return 0;
+ }
+ 
+ module_init(cxl_pnm_sim_init);
+-- 
+2.34.1
+

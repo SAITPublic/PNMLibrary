@@ -1,0 +1,102 @@
+From 656d7bbbfb11824d5ac2ec9fb2766c335741d9fb Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 15 Nov 2021 10:24:13 +0900
+Subject: [PATCH 029/128] [lengths_reducer_ops_axdimm.cc] NFC: fix formatting
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ .../operators/lengths_reducer_ops_axdimm.cc   | 35 ++++++++++---------
+ 1 file changed, 19 insertions(+), 16 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 90abad5d..d1dba05e 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -134,10 +134,10 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   }
+ 
+   ~AXDIMMSparseLengthsReductionOpVec() {
+-    free(indices_blocked);
+-    free(lengths_blocked);
+-    indices_blocked = nullptr;
+-    lengths_blocked = nullptr;
++    free(indices_blocked_);
++    free(lengths_blocked_);
++    indices_blocked_ = nullptr;
++    lengths_blocked_ = nullptr;
+   }
+ 
+   // Currently, we support float and at::Half inputs for input data type, and
+@@ -190,16 +190,16 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     // increase total capacity.
+     if (cur_indices_total_size_in_bytes > indices_total_size_in_bytes_) {
+       indices_total_size_in_bytes_ = cur_indices_total_size_in_bytes;
+-      indices_blocked =
+-          (char*)realloc(indices_blocked, indices_total_size_in_bytes_);
++      indices_blocked_ =
++          (char*)realloc(indices_blocked_, indices_total_size_in_bytes_);
+     }
+ 
+     // 2.2) Same for lengths: if new operator invocation consumes more memory,
+     // increase total capacity.
+     if (cur_lengths_total_size_in_bytes > lengths_total_size_in_bytes_) {
+       lengths_total_size_in_bytes_ = cur_lengths_total_size_in_bytes;
+-      lengths_blocked =
+-          (char*)realloc(lengths_blocked, lengths_total_size_in_bytes_);
++      lengths_blocked_ =
++          (char*)realloc(lengths_blocked_, lengths_total_size_in_bytes_);
+     }
+ 
+     // 3) Setup output buffer.
+@@ -226,11 +226,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       const int* lengths = lengthsInput.template data<int>();
+ 
+       memcpy(
+-          indices_blocked + indices_offset_in_bytes,
++          indices_blocked_ + indices_offset_in_bytes,
+           indices,
+           indices_size_in_bytes);
+       memcpy(
+-          lengths_blocked + lengths_offset_in_bytes,
++          lengths_blocked_ + lengths_offset_in_bytes,
+           lengths,
+           lengths_size_in_bytes);
+       indices_offset_in_bytes += indices_size_in_bytes;
+@@ -241,8 +241,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     // 5) And finally run the operator.
+     axd_status_e status = axdimm::axdimm_run(
+-        (uint32_t*)lengths_blocked,
+-        (uint32_t*)indices_blocked,
++        (uint32_t*)lengths_blocked_,
++        (uint32_t*)indices_blocked_,
+         output_buf /* psum buffer */,
+         0);
+ 
+@@ -259,16 +259,19 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   };
+ 
+  private:
+-  char* indices_blocked = nullptr; // Concatenated indices arrays
+-  char* lengths_blocked = nullptr; // Concatenated lengths arrays
++  char* indices_blocked_ = nullptr; // Concatenated indices arrays
++  char* lengths_blocked_ = nullptr; // Concatenated lengths arrays
++
+   int block_size_; // Number of tables/indices/lengths to be blocked
++
+   int tables_vec_start_idx_; // Starting input index for tables blobs
+   int indices_vec_start_idx_; // Starting input index for indices blobs
+   int lengths_vec_start_idx_; // Starting input index for lengths blobs
++
+   uint64_t indices_total_size_in_bytes_ =
+-      0; // Size of currently allocated blocked indices buffer.
++      0; // Size of currently allocated blocked indices buffer
+   uint64_t lengths_total_size_in_bytes_ =
+-      0; // Size of currently allocated blocked lengths buffer.
++      0; // Size of currently allocated blocked lengths buffer
+ };
+ 
+ using SparseLengthsSumOp =
+-- 
+2.34.1
+

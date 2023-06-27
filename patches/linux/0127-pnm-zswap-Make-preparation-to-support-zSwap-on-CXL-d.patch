@@ -1,0 +1,149 @@
+From 78c8937c70c9919bbe73d840de7b962c105ea511 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Sun, 9 Jul 2023 21:23:43 -0400
+Subject: [PATCH 127/161] [pnm][zswap] Make preparation to support zSwap on CXL
+ device
+
+The parameters to enable support of CXL-zSwap device were added into
+config files. To enable CXL-zSwap support we introduce PNM_ZSWAP
+parameter.
+
+Also, the zbud allocator was temporary changes to make an allocation
+only on selected numa node to simulate CXL-zSwap storage. This behaviour
+can be enabled by PNM_ZSWAP parameter. The numa node can be defined
+by PNM_ZSWAP_NUMA_NODE parameter.
+
+Related to: MCS23-1322
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ config-pnm                 |  5 +++++
+ drivers/pnm/Kconfig        | 31 +++++++++++++++++++++++++++++++
+ include/linux/cpuhotplug.h |  2 ++
+ include/linux/migrate.h    |  4 ++++
+ mm/migrate.c               |  8 ++++++++
+ mm/zbud.c                  |  6 ++++++
+ 6 files changed, 56 insertions(+)
+
+diff --git a/config-pnm b/config-pnm
+index e026e56ef..19eed86f4 100644
+--- a/config-pnm
++++ b/config-pnm
+@@ -10015,6 +10015,11 @@ CONFIG_DEV_SLS=y
+ CONFIG_SLS_RESOURCE=m
+ CONFIG_DBA=y
+ CONFIG_DBA_RESOURCE=m
++
++#CONFIG_PNM_ZSWAP is not set
++#CONFIG_PNM_ZSWAP_MODIFY_ZBUD is not set
++#CONFIG_PNM_ZSWAP_NUMA_NODE is not set
++
+ CONFIG_NVMEM=y
+ CONFIG_NVMEM_SYSFS=y
+ # CONFIG_NVMEM_RAVE_SP_EEPROM is not set
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index fcbd46d58..659c42dac 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -25,3 +25,34 @@ config SLS_RESOURCE
+ 	  by means of ioctl interface. Also it provide monitoring facilities
+ 	  using sysfs interface.
+ 
++config PNM_ZSWAP
++    tristate "CXL-zSwap Devices Support"
++    default n
++	help
++	  Option to enable CXL-zSwap device
++
++	  This is a main option to enable support of CXL-zSwap device. The
++	  option allows to create zswap-related devices and enables build
++	  of kernel zswap-pnm library.
++
++config PNM_ZSWAP_MODIFY_ZBUD:
++    bool "Modify allocation policy in zbud allocator"
++    depends on PNM_ZSWAP
++    default y
++	help
++	  Modify zbud allocator to make allocation on selected NODE
++
++	  This option change the allocation policy for zbud to make allocation
++	  only on a selected node. The node should be selected by
++	  PNM_ZSWAP_NUMA_NODE.
++
++config PNM_ZSWAP_NUMA_NODE
++	int "A NUMA node index"
++	depends on PNM_ZSWAP_MODIFY_ZBUD
++	default 1
++	help
++	  An index of NUMA node that simulates CXL-zSwap device
++
++	  This value is used by zbud allocator to make allocation on selected
++	  NUMA node. It's required by simulation logic where we use whole NUMA
++	  node to emulate device memory.
+diff --git a/include/linux/cpuhotplug.h b/include/linux/cpuhotplug.h
+index f61447913..3cbd9798e 100644
+--- a/include/linux/cpuhotplug.h
++++ b/include/linux/cpuhotplug.h
+@@ -126,6 +126,8 @@ enum cpuhp_state {
+ 	CPUHP_MM_ZS_PREPARE,
+ 	CPUHP_MM_ZSWP_MEM_PREPARE,
+ 	CPUHP_MM_ZSWP_POOL_PREPARE,
++	CPUHP_MM_CXL_ZSWAP_MEM_PREPARE,
++	CPUHP_MM_CXL_ZPOOL_PREPARE,
+ 	CPUHP_KVM_PPC_BOOK3S_PREPARE,
+ 	CPUHP_ZCOMP_PREPARE,
+ 	CPUHP_TIMERS_PREPARE,
+diff --git a/include/linux/migrate.h b/include/linux/migrate.h
+index 3ef77f52a..42bae39b7 100644
+--- a/include/linux/migrate.h
++++ b/include/linux/migrate.h
+@@ -217,6 +217,10 @@ void migrate_device_pages(unsigned long *src_pfns, unsigned long *dst_pfns,
+ void migrate_device_finalize(unsigned long *src_pfns,
+ 			unsigned long *dst_pfns, unsigned long npages);
+ 
++/* Wrapper over kernel_move_pages for cxl-zswap */
++extern int move_page_cxl(pid_t pid, unsigned long nr_pages,
++			 const void __user *page, const int node, int status_,
++			 int flags);
+ #endif /* CONFIG_MIGRATION */
+ 
+ #endif /* _LINUX_MIGRATE_H */
+diff --git a/mm/migrate.c b/mm/migrate.c
+index dff333593..4690efe91 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -2215,5 +2215,13 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
+ 	put_page(page);
+ 	return 0;
+ }
++
++/* Wrapper over kernel_move_pages for cxl-zswap */
++int move_page_cxl(pid_t pid, unsigned long nr_pages, const void __user *page,
++		  const int node, int status, int flags)
++{
++	return kernel_move_pages(pid, nr_pages, &page, &node, &status, flags);
++}
++
+ #endif /* CONFIG_NUMA_BALANCING */
+ #endif /* CONFIG_NUMA */
+diff --git a/mm/zbud.c b/mm/zbud.c
+index 634893243..ce8073958 100644
+--- a/mm/zbud.c
++++ b/mm/zbud.c
+@@ -296,7 +296,13 @@ static int zbud_alloc(struct zbud_pool *pool, size_t size, gfp_t gfp,
+ 
+ 	/* Couldn't find unbuddied zbud page, create new one */
+ 	spin_unlock(&pool->lock);
++#ifdef CONFIG_PNM_ZSWAP_MODIFY_ZBUD
++	page = alloc_pages_node(CONFIG_PNM_ZSWAP_NUMA_NODE,
++				gfp | __GFP_THISNODE, 0);
++#else
+ 	page = alloc_page(gfp);
++#endif
++	// pr_info("Zpool page allocation: NODE[%d]\n", page_to_nid(page));
+ 	if (!page)
+ 		return -ENOMEM;
+ 	spin_lock(&pool->lock);
+-- 
+2.34.1
+

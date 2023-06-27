@@ -1,0 +1,31 @@
+From c832be720ebdc9cbd5fa94fc84258d57e3f167f0 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 3 Nov 2021 12:41:21 +0900
+Subject: [PATCH 018/128] [c10/core] Hack: add AXDIMM allocator which is shared
+ with CPU
+
+Quick hack, needs proper handling in future.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ c10/core/CPUAllocator.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/c10/core/CPUAllocator.cpp b/c10/core/CPUAllocator.cpp
+index c103c42a..0374a870 100644
+--- a/c10/core/CPUAllocator.cpp
++++ b/c10/core/CPUAllocator.cpp
+@@ -188,6 +188,10 @@ at::Allocator* GetDefaultCPUAllocator() {
+ 
+ REGISTER_ALLOCATOR(DeviceType::CPU, &g_cpu_alloc);
+ 
++namespace {
++  static AllocatorRegisterer<DeviceType::AXDIMM> g_allocator_d_axdimm(&g_cpu_alloc);
++}
++
+ #endif /* C10_Mobile */
+ 
+ void ProfiledCPUMemoryReporter::New(void* ptr, size_t nbytes) {
+-- 
+2.34.1
+

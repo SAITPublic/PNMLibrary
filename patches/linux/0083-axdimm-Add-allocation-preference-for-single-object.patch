@@ -1,0 +1,127 @@
+From 29b5b71cd694af56e45e19e9d819bb7b508bdb75 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 9 Feb 2023 14:01:06 +0300
+Subject: [PATCH 083/161] [axdimm] Add allocation preference for single object
+
+The allocation preference AXDIMM_ALLOC_SINGLE was introduced to define
+the allocation of single object. The allocation will select the rank
+with the lowest occupancy.
+
+Relasted to: AXDIMM-606
+---
+ drivers/dax/axdimm_allocator.c | 58 +++++++++++++++++++++++++++-------
+ include/uapi/linux/libaxdimm.h |  1 +
+ 2 files changed, 48 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 596fb5c62..e9782c733 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -257,6 +257,7 @@ static inline uint64_t gen_num_obj(uint64_t num_user_obj,
+ 	case AXDIMM_ALLOC_REPLICATE_ALL:
+ 		return num_user_obj * NUM_OF_RANK;
+ 	case AXDIMM_ALLOC_DISTRIBUTE_ALL:
++	case AXDIMM_ALLOC_SINGLE:
+ 		return num_user_obj;
+ 	}
+ 
+@@ -277,6 +278,8 @@ static inline uint64_t gen_rank_num_obj(uint64_t num_user_obj,
+ 	case AXDIMM_ALLOC_DISTRIBUTE_ALL:
+ 		/* [TODO: @p.bred] Not perfectly even distribution for a small number of objects */
+ 		return DIV_ROUND_UP(num_user_obj, NUM_OF_RANK);
++	case AXDIMM_ALLOC_SINGLE:
++		return 1;
+ 	}
+ 
+ 	AXDIMM_ERR("Unknown memory policy [%d]\n", pref);
+@@ -295,6 +298,7 @@ static inline uint64_t get_user_obj_idx(uint64_t obj_idx, uint8_t rank,
+ 	case AXDIMM_ALLOC_REPLICATE_ALL:
+ 		return obj_idx - rank * rank_num_obj;
+ 	case AXDIMM_ALLOC_DISTRIBUTE_ALL:
++	case AXDIMM_ALLOC_SINGLE:
+ 		return obj_idx;
+ 	}
+ 
+@@ -374,6 +378,30 @@ static int deallocate_objects(struct axdimm_allocator *alloc,
+ 	return err_code;
+ }
+ 
++static int allocate_single_object(struct axdimm_allocator *alloc,
++			     struct axd_memory_object *objects,
++			     struct axd_memory_alloc_request *request,
++			     uint64_t *actual_num)
++{
++	uint8_t rank;
++	int err_code = 0;
++	uint8_t optimal_rank = 0;
++	size_t max_free_space = gen_pool_avail(alloc->mem_pools[0]);
++
++	for (rank = 1; rank < NUM_OF_RANK; ++rank){
++		size_t rank_free_space = gen_pool_avail(alloc->mem_pools[rank]);
++		if (max_free_space < rank_free_space){
++			max_free_space = rank_free_space;
++			optimal_rank = rank;
++		}
++	}
++
++	err_code = pool_alloc_mem_obj(alloc, 0, optimal_rank, 1, objects, request);
++	*actual_num = (err_code == 0);
++
++	return err_code;
++}
++
+ static int allocate_in_ranks(uint64_t num_obj, struct axdimm_allocator *alloc,
+ 			     struct axd_memory_object *objects,
+ 			     struct axd_memory_alloc_request *request,
+@@ -382,17 +410,25 @@ static int allocate_in_ranks(uint64_t num_obj, struct axdimm_allocator *alloc,
+ 	uint8_t rank;
+ 	int err_code = 0;
+ 	uint64_t idx, max_idx_in_rank;
+-	const uint64_t rank_num_obj = gen_rank_num_obj(
+-		request->num_user_objects, request->preference);
+-
+-	for (rank = 0, idx = 0; rank < NUM_OF_RANK && idx < num_obj; ++rank) {
+-		max_idx_in_rank = idx + rank_num_obj;
+-		for (; idx < max_idx_in_rank && idx < num_obj; ++idx) {
+-			err_code = pool_alloc_mem_obj(alloc, idx, rank,
+-						      rank_num_obj, objects,
+-						      request);
+-			if (unlikely(err_code)) {
+-				goto alloc_ranks_out;
++	uint64_t rank_num_obj;
++
++	if (request->preference == AXDIMM_ALLOC_SINGLE) {
++		err_code =
++			allocate_single_object(alloc, objects, request, &idx);
++	} else {
++		rank_num_obj = gen_rank_num_obj(request->num_user_objects,
++						request->preference);
++
++		for (rank = 0, idx = 0; rank < NUM_OF_RANK && idx < num_obj;
++		     ++rank) {
++			max_idx_in_rank = idx + rank_num_obj;
++			for (; idx < max_idx_in_rank && idx < num_obj; ++idx) {
++				err_code = pool_alloc_mem_obj(alloc, idx, rank,
++							      rank_num_obj,
++							      objects, request);
++				if (unlikely(err_code)) {
++					goto alloc_ranks_out;
++				}
+ 			}
+ 		}
+ 	}
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 7e7d93e98..1289dcf10 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -144,6 +144,7 @@ typedef enum _axd_user_preferences {
+ 	AXDIMM_ALLOC_AUTO = 0,
+ 	AXDIMM_ALLOC_REPLICATE_ALL,
+ 	AXDIMM_ALLOC_DISTRIBUTE_ALL,
++	AXDIMM_ALLOC_SINGLE
+ } axd_user_preferences;
+ 
+ struct axd_memory_object {
+-- 
+2.34.1
+

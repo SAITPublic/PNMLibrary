@@ -1,0 +1,115 @@
+From d5c4f5b62df8de0a1e200d5a3bb45730291a9b32 Mon Sep 17 00:00:00 2001
+From: Aleksei Khokhlov <a.khokhlov@samsung.com>
+Date: Fri, 16 Dec 2022 15:08:00 +0300
+Subject: [PATCH 074/161] [driver/dax/axdimm] Remove SET_SC_LOCK/UNLOCK ioctl
+ and semaphore
+
+Resolves: AXDIMM-487
+Signed-off-by: Aleksei Khokhlov <a.khokhlov@samsung.com>
+---
+ drivers/dax/axdimm-private.h   |  1 -
+ drivers/dax/axdimm.c           | 20 --------------------
+ include/uapi/linux/libaxdimm.h | 22 ++++++++++------------
+ 3 files changed, 10 insertions(+), 33 deletions(-)
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index 632460781..f2031b5b3 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -69,7 +69,6 @@ struct axdmem_info {
+ };
+ 
+ struct axdimm_dev {
+-	struct semaphore sem_axdimm; /* semaphore */
+ 	struct axdmem_info mem_info; /* memory info */
+ };
+ 
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 860ee4a56..0f565ec0c 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -21,8 +21,6 @@
+ MODULE_VERSION(AXDIMM_DRIVER_VERSION);
+ #endif
+ 
+-#define AXDIMM_SEM_VALUE 1
+-
+ struct axdimm_allocator axdimm_allocator;
+ struct axdimm_rank_scheduler axdimm_rank_sched;
+ struct axdimm_dev axdimm_device;
+@@ -307,26 +305,11 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+-		while (unlikely(axdimm_device.sem_axdimm.count > AXDIMM_SEM_VALUE &&
+-				!down_trylock(&axdimm_device.sem_axdimm))) {
+-		}
+-		while (unlikely(axdimm_device.sem_axdimm.count < AXDIMM_SEM_VALUE)) {
+-			up(&axdimm_device.sem_axdimm);
+-		}
+ 		reset_axdimm_rank_scheduler(&axdimm_rank_sched);
+ 		retval = reset_axdimm_allocator(&axdimm_allocator,
+ 						&axdimm_device.mem_info);
+ 		reset_axdimm_process_manager(&axdimm_proc_mgr);
+ 		break;
+-	case SET_SC_LOCK:
+-		if (down_interruptible(&axdimm_device.sem_axdimm)) {
+-			AXDIMM_ERR("Device was busy. Operation aborted\n");
+-			return -ERESTARTSYS;
+-		}
+-		break;
+-	case SET_SC_UNLOCK:
+-		up(&axdimm_device.sem_axdimm);
+-		break;
+ 	case ALLOCATE_MEMORY:
+ 	case GET_MEMORY_OBJECTS_NUM:
+ 	case GET_MEMORY_ALLOCATION:
+@@ -360,9 +343,6 @@ int init_axdimm_device(struct dev_dax *dev_dax)
+ 	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
+ 	dev_dax->is_axdimm_device = 1;
+ 
+-	/* semaphore initialization */
+-	sema_init(&axdimm_device.sem_axdimm, AXDIMM_SEM_VALUE);
+-
+ 	/* Initialize device meminfo */
+ 	axdimm_setmeminfo(&axdimm_device.mem_info);
+ 
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index aa161931f..7e7d93e98 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -182,21 +182,19 @@ struct axd_num_objects_request {
+ #define SET_FIRST_BUFFER _IO(AXDIMM_IOC_MAGIC, 1)
+ #define SET_SECOND_BUFFER _IO(AXDIMM_IOC_MAGIC, 2)
+ #define WHICH_BUFFER _IOR(AXDIMM_IOC_MAGIC, 3, int)
+-#define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
+-#define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
+ #define ALLOCATE_MEMORY                                                        \
+-	_IOWR(AXDIMM_IOC_MAGIC, 6, struct axd_memory_alloc_request *)
++	_IOWR(AXDIMM_IOC_MAGIC, 4, struct axd_memory_alloc_request *)
+ #define GET_MEMORY_OBJECTS_NUM                                                 \
+-	_IOWR(AXDIMM_IOC_MAGIC, 7, struct axd_num_objects_request *)
++	_IOWR(AXDIMM_IOC_MAGIC, 5, struct axd_num_objects_request *)
+ #define GET_MEMORY_ALLOCATION                                                  \
+-	_IOWR(AXDIMM_IOC_MAGIC, 8, struct axd_memory_alloc *)
+-#define DEALLOCATE_MEMORY _IOW(AXDIMM_IOC_MAGIC, 9, uint64_t)
+-#define GET_RANK_FOR_WRITE _IOW(AXDIMM_IOC_MAGIC, 10, unsigned int)
+-#define GET_RANK_FOR_READ _IOW(AXDIMM_IOC_MAGIC, 11, unsigned int)
+-#define RELEASE_WRITE_RANK _IOW(AXDIMM_IOC_MAGIC, 12, unsigned int)
+-#define RELEASE_READ_RANK _IOW(AXDIMM_IOC_MAGIC, 13, unsigned int)
+-
+-#define AXDIMM_IOC_MAXNR (13)
++	_IOWR(AXDIMM_IOC_MAGIC, 6, struct axd_memory_alloc *)
++#define DEALLOCATE_MEMORY _IOW(AXDIMM_IOC_MAGIC, 7, uint64_t)
++#define GET_RANK_FOR_WRITE _IOW(AXDIMM_IOC_MAGIC, 8, unsigned int)
++#define GET_RANK_FOR_READ _IOW(AXDIMM_IOC_MAGIC, 9, unsigned int)
++#define RELEASE_WRITE_RANK _IOW(AXDIMM_IOC_MAGIC, 10, unsigned int)
++#define RELEASE_READ_RANK _IOW(AXDIMM_IOC_MAGIC, 11, unsigned int)
++
++#define AXDIMM_IOC_MAXNR (11)
+ 
+ #endif
+ 
+-- 
+2.34.1
+

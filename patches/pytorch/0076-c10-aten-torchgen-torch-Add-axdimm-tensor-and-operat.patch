@@ -1,0 +1,1101 @@
+From b5b06ccc54497d0c08e6548b963ef070906ed367 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Mon, 3 Oct 2022 22:09:15 +0300
+Subject: [PATCH 076/128] [c10,aten,torchgen,torch] Add axdimm tensor and
+ operators for embedding sum
+
+copy operator aten/src/ATen/native/axdimm/ops/Copy.cpp to copy CPU tensor to AXDIMM
+empty_strided operator aten/src/ATen/native/axdimm/ops/Factory.cpp to create empty AXDIMM tensor
+AxdimmTensor entity to encapsulate device specific data and operation in at::Tensor object
+Added AXDIMM key to dispatcher to properly call dispatched methods
+Added AXDIMM to PyTorch build
+
+Resolves: AXDIMM-316
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ CMakeLists.txt                                |   4 +
+ aten/src/ATen/CMakeLists.txt                  |   8 ++
+ aten/src/ATen/axdimm/is_axdimm_available.cpp  |  20 +++
+ aten/src/ATen/core/TensorBase.h               |   6 +
+ aten/src/ATen/native/Copy.cpp                 |   2 +-
+ .../native/axdimm/AxdimmDeviceContext.cpp     |  37 +++++
+ .../ATen/native/axdimm/AxdimmDeviceContext.h  |  29 ++++
+ aten/src/ATen/native/axdimm/AxdimmGuard.cpp   |   8 ++
+ .../ATen/native/axdimm/AxdimmOpaqueTensor.h   |  54 +++++++
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp  | 102 +++++++++++++
+ aten/src/ATen/native/axdimm/AxdimmTensor.h    | 134 ++++++++++++++++++
+ aten/src/ATen/native/axdimm/ops/Copy.cpp      |  30 ++++
+ .../ATen/native/axdimm/ops/EmbeddingBag.cpp   | 112 +++++++++++++++
+ aten/src/ATen/native/axdimm/ops/Factory.cpp   |  83 +++++++++++
+ aten/src/ATen/native/native_functions.yaml    |   2 +
+ c10/core/Backend.h                            |   6 +
+ c10/core/Device.cpp                           |   1 +
+ c10/core/DeviceType.h                         |   1 +
+ c10/core/DispatchKey.cpp                      |   3 +
+ c10/core/DispatchKey.h                        |   2 +-
+ c10/core/DispatchKeySet.h                     |   1 +
+ c10/core/TensorImpl.h                         |   5 +
+ c10/core/TensorOptions.h                      |   3 +
+ cmake/Dependencies.cmake                      |   4 +
+ torch/csrc/autograd/python_variable.cpp       |  16 ++-
+ torch/csrc/jit/frontend/sugared_value.cpp     |   1 +
+ torch/csrc/jit/runtime/register_prim_ops.cpp  |   8 ++
+ torch/csrc/utils/tensor_types.cpp             |   2 +
+ torch/nn/modules/__init__.py                  |   4 +-
+ torch/nn/modules/sparse.py                    |  10 ++
+ torchgen/model.py                             |   1 +
+ 31 files changed, 694 insertions(+), 5 deletions(-)
+ create mode 100644 aten/src/ATen/axdimm/is_axdimm_available.cpp
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmGuard.cpp
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmOpaqueTensor.h
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmTensor.h
+ create mode 100644 aten/src/ATen/native/axdimm/ops/Copy.cpp
+ create mode 100644 aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+ create mode 100644 aten/src/ATen/native/axdimm/ops/Factory.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b260dfc4..4508cf57 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -763,6 +763,10 @@ if(USE_VULKAN)
+ 
+ endif()
+ 
++if(USE_AXDIMM)
++  string(APPEND CMAKE_CXX_FLAGS " -DUSE_AXDIMM")
++endif()
++
+ if(BUILD_LITE_INTERPRETER)
+   string(APPEND CMAKE_CXX_FLAGS " -DBUILD_LITE_INTERPRETER")
+ endif()
+diff --git a/aten/src/ATen/CMakeLists.txt b/aten/src/ATen/CMakeLists.txt
+index f6745ff8..3e7f9fe5 100644
+--- a/aten/src/ATen/CMakeLists.txt
++++ b/aten/src/ATen/CMakeLists.txt
+@@ -85,6 +85,8 @@ file(GLOB native_mkl_cpp "native/mkl/*.cpp")
+ file(GLOB native_mkldnn_cpp "native/mkldnn/*.cpp")
+ file(GLOB vulkan_cpp "vulkan/*.cpp")
+ file(GLOB native_vulkan_cpp "native/vulkan/*.cpp" "native/vulkan/api/*.cpp" "native/vulkan/impl/*.cpp" "native/vulkan/ops/*.cpp")
++file(GLOB axdimm_cpp "axdimm/*.cpp")
++file(GLOB native_axdimm_cpp "native/axdimm/*.cpp" "native/axdimm/ops/*.cpp")
+ 
+ # Metal
+ file(GLOB metal_h "metal/*.h")
+@@ -220,6 +222,12 @@ else()
+   set(all_cpu_cpp ${all_cpu_cpp} ${vulkan_cpp})
+ endif()
+ 
++if(USE_AXDIMM)
++  set(all_cpu_cpp ${all_cpu_cpp} ${axdimm_cpp} ${native_axdimm_cpp})
++else()
++  set(all_cpu_cpp ${all_cpu_cpp} ${axdimm_cpp})
++endif()
++
+ # Metal
+ if(USE_PYTORCH_METAL_EXPORT)
+   # Add files needed from exporting metal models(optimized_for_mobile)
+diff --git a/aten/src/ATen/axdimm/is_axdimm_available.cpp b/aten/src/ATen/axdimm/is_axdimm_available.cpp
+new file mode 100644
+index 00000000..d2ee3d4e
+--- /dev/null
++++ b/aten/src/ATen/axdimm/is_axdimm_available.cpp
+@@ -0,0 +1,20 @@
++namespace at {
++namespace native {
++
++// Used to check if torch is linked with axdimm support from python
++// Call in python: torch.is_axdimm_available()
++// Function must be implemented even if torch linked without axdimm support,
++// library won't link otherwise Schema is defined in
++// aten/src/ATen/native/native_functions.yaml Functions implementing schema must
++// be in at::native namespace Some extra logic can be implemented but atm is not
++// required
++bool is_axdimm_available() {
++#ifdef USE_AXDIMM
++  return true;
++#else
++  return false;
++#endif
++}
++
++} // namespace native
++} // namespace at
+diff --git a/aten/src/ATen/core/TensorBase.h b/aten/src/ATen/core/TensorBase.h
+index d60f21d7..056796f7 100644
+--- a/aten/src/ATen/core/TensorBase.h
++++ b/aten/src/ATen/core/TensorBase.h
+@@ -481,6 +481,12 @@ class TORCH_API TensorBase {
+     return impl_->is_vulkan();
+   }
+ 
++  /// Returns if a `Tensor` is axdimm tensor.
++  bool is_axdimm() const {
++    // NB: this is not a native function to avoid dispatching overhead.
++    return impl_->is_axdimm();
++  }
++
+   /// Returns if a `Tensor` is metal tensor.
+   bool is_metal() const {
+     // NB: this is not a native function to avoid dispatching overhead.
+diff --git a/aten/src/ATen/native/Copy.cpp b/aten/src/ATen/native/Copy.cpp
+index 3b7043a9..bf65614a 100644
+--- a/aten/src/ATen/native/Copy.cpp
++++ b/aten/src/ATen/native/Copy.cpp
+@@ -108,7 +108,7 @@ void copy_same_type_transpose_(Tensor& self, const Tensor& src) {
+ // (e.g. XLA) may be supported by overriding copy_ and _copy_from.
+ bool is_supported_device(Device device) {
+   DeviceType device_type = device.type();
+-  return device_type == kCPU || device_type == kCUDA || device_type == kHIP || device_type == kVulkan || device_type == kMetal || device_type == kMPS;
++  return device_type == kCPU || device_type == kCUDA || device_type == kHIP || device_type == kVulkan || device_type == kMetal || device_type == kMPS || device_type == kAXDIMM;
+ }
+ 
+ } // namespace
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+new file mode 100644
+index 00000000..397f64af
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+@@ -0,0 +1,37 @@
++#include "ai/api/axdimm.h"
++
++#include <ATen/native/axdimm/AxdimmDeviceContext.h>
++
++#include <functional>
++#include <memory>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++Device* AxdimmDeviceContext::device() {
++  static std::unique_ptr<Device, std::function<void(Device*)>> device_(
++      create_device(),
++      [](Device* device) { axdimm_destroy_base_device(device); });
++  return device_.get();
++}
++
++void AxdimmDeviceContext::write_rank_data(
++    const void* data,
++    uint64_t layout_handle) {
++  TORCH_INTERNAL_ASSERT(device());
++  const auto* layout = axdimm_get_tables_layout(device(), layout_handle);
++  TORCH_CHECK(
++      layout, "Failed to get AXDIMM layout for handle: ", layout_handle);
++  axdimm_write_rank_data(device(), data, layout);
++}
++
++Device* AxdimmDeviceContext::create_device() {
++  auto device = axdimm_create_base_device();
++  TORCH_CHECK(device, "Axdimm device creation failed");
++  return device;
++}
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+new file mode 100644
+index 00000000..1a509ad8
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+@@ -0,0 +1,29 @@
++#ifndef __AXDIMM_DEVICE_CONTEXT__
++#define __AXDIMM_DEVICE_CONTEXT__
++
++#include "core/api/axdimm_device.h"
++
++#include <c10/util/Exception.h>
++
++#include <memory>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++using Device = AxdimmBaseDevice;
++
++class AxdimmDeviceContext {
++ public:
++  static void write_rank_data(const void* data, uint64_t layout_handle);
++  static Device* device();
++
++ private:
++  static Device* create_device();
++};
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
++
++#endif
+diff --git a/aten/src/ATen/native/axdimm/AxdimmGuard.cpp b/aten/src/ATen/native/axdimm/AxdimmGuard.cpp
+new file mode 100644
+index 00000000..f54b8b89
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmGuard.cpp
+@@ -0,0 +1,8 @@
++#include <c10/core/impl/DeviceGuardImplInterface.h>
++#include <c10/macros/Macros.h>
++
++// This registers device in the global map of supported devices
++// Since for now no specific actions required it's left empty
++C10_REGISTER_GUARD_IMPL(
++    AXDIMM,
++    c10::impl::NoOpDeviceGuardImpl<at::DeviceType::AXDIMM>);
+diff --git a/aten/src/ATen/native/axdimm/AxdimmOpaqueTensor.h b/aten/src/ATen/native/axdimm/AxdimmOpaqueTensor.h
+new file mode 100644
+index 00000000..626d2584
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmOpaqueTensor.h
+@@ -0,0 +1,54 @@
++#ifndef __AXDIMM_OPAQUE_TENSOR__
++#define __AXDIMM_OPAQUE_TENSOR__
++
++#include <ATen/OpaqueTensorImpl.h>
++
++namespace at {
++
++/*!
++ * Minimal implementation for custom OpaqueTensor (tensor without data pointer
++ * to storage). Allows to override c10::TensorImpl methods. OpaqueHandle is
++ * type, that encapsulates device specific data and operations. OpaqueHandle has
++ * no interface requirements Reference to handle can be aquired from at::Tensor
++ * object using: auto impl =
++ * static_cast<at::AxdimmOpaqueTensorImpl<at::native::axdimm::AxdimmTensor>*>(tensor.unsafeGetTensorImpl());
++ * impl->unsafe_opaque_handle() <- returns at::native::axdimm::AxdimmTensor
++ * reference
++ */
++template <typename OpaqueHandle>
++struct AxdimmOpaqueTensorImpl : public OpaqueTensorImpl<OpaqueHandle> {
++  AxdimmOpaqueTensorImpl(
++      at::DispatchKeySet key_set,
++      const caffe2::TypeMeta data_type,
++      c10::Device device,
++      OpaqueHandle opaque_handle,
++      c10::IntArrayRef sizes,
++      c10::IntArrayRef strides)
++      : OpaqueTensorImpl<OpaqueHandle>(
++            key_set,
++            data_type,
++            device,
++            opaque_handle,
++            sizes,
++            true),
++        strides_(strides.vec()) {}
++
++  IntArrayRef strides_custom() const override {
++    return strides_;
++  }
++
++  bool is_contiguous_custom(c10::MemoryFormat memory_format) const override {
++    return true;
++  }
++
++ private:
++  const char* tensorimpl_type_name() const override {
++    return "AxdimmOpaqueTensorImpl";
++  }
++
++  SmallVector<int64_t, 5> strides_;
++};
++
++} // namespace at
++
++#endif
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+new file mode 100644
+index 00000000..f2f1b5fd
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -0,0 +1,102 @@
++#include <c10/util/Logging.h>
++
++#include <ATen/native/axdimm/AxdimmTensor.h>
++
++namespace {
++
++::axdimm_sls_type get_sls_type(const c10::ScalarType& type) {
++  if (type == torch::kFloat32) {
++    return AXDIMM_SLS_FLOAT;
++  } else if (type == torch::kInt32) {
++    return AXDIMM_SLS_UINT32;
++  } else {
++    TORCH_CHECK(false, "Unsupported scalar type");
++  }
++}
++
++} // namespace
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++const AxdimmTensor& convert(const at::Tensor& tensor) {
++  TORCH_INTERNAL_ASSERT(tensor.is_axdimm());
++  auto impl = static_cast<AxdimmTensorImpl*>(tensor.unsafeGetTensorImpl());
++  return impl->unsafe_opaque_handle();
++}
++
++void verify(const at::TensorOptions& options) {
++  TORCH_CHECK(
++      !options.has_requires_grad() || !options.requires_grad(),
++      "'requires_grad' tensor option is not yet supported under Axdimm!");
++
++  TORCH_CHECK(
++      !options.has_pinned_memory() || !options.pinned_memory(),
++      "'pinned_memory' tensor option is not yet supported under Axdimm!");
++
++  TORCH_CHECK(
++      !options.has_layout() || (c10::kStrided == options.layout()),
++      "'layout' tensor option is not yet supported under Axdimm!");
++
++  TORCH_CHECK(
++      !options.has_memory_format() ||
++          (c10::MemoryFormat::Contiguous == options.memory_format_opt()),
++      "'memory_format' tensor option is not yet supported under Axdimm!");
++}
++
++AxdimmLayoutWrapper::~AxdimmLayoutWrapper() {
++  if (AXDIMM_SUCCESS != axdimm_deallocate_tables(device_, layout_handle_)) {
++    LOG(ERROR) << "Failed to deallocate tables for handle: " << layout_handle_;
++  }
++  if (layout_) {
++    axdimm_destroy_tables_layout(layout_);
++  }
++}
++
++void AxdimmTensor::load(
++    const at::Tensor& weights,
++    axd_user_preferences preference) {
++  TORCH_CHECK(
++      weights.dim() == 3, "Axdimm tensor dimensions must be equal to 3");
++  const auto& sizes = weights.sizes();
++  load(weights, sizes[0], sizes[1], sizes[2], preference);
++}
++
++void AxdimmTensor::load(
++    const at::Tensor& weights,
++    uint32_t num_tables,
++    uint32_t features_per_table,
++    uint32_t sparse_feature_size,
++    axd_user_preferences preference) {
++  TORCH_CHECK(num_tables > 0, "Number of tables must be > 0");
++  TORCH_CHECK(features_per_table > 0, "Features per table  must be > 0");
++  TORCH_CHECK(sparse_feature_size > 0, "Sparse feature size must be > 0");
++  TORCH_CHECK(weights.is_contiguous(), "Weights tensor must be contiguous");
++  TORCH_CHECK(
++      weights.scalar_type() == torch::kFloat32 ||
++          weights.scalar_type() == torch::kInt32,
++      "Invalid tensor data type. AXDIMM supports only float32 and int32 tensors as weights");
++  sls_type_ = ::get_sls_type(weights.scalar_type());
++  num_tables_ = num_tables;
++  sparse_feature_size_ = sparse_feature_size;
++  tables_rows_num_.resize(num_tables_);
++  std::fill(
++      std::begin(tables_rows_num_),
++      std::end(tables_rows_num_),
++      features_per_table);
++  layout_ = std::make_shared<AxdimmLayoutWrapper>(
++      get_device(),
++      axdimm_allocate_tables(
++          get_device(),
++          tables_rows_num_.data(),
++          num_tables_,
++          sparse_feature_size_ * weights.dtype().itemsize(),
++          preference));
++  AxdimmDeviceContext::write_rank_data(
++      weights.data_ptr(), layout_->get_layout_handle());
++}
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+new file mode 100644
+index 00000000..40261e67
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -0,0 +1,134 @@
++#ifndef __AXDIMM_TENSOR__
++#define __AXDIMM_TENSOR__
++
++#include "ai/api/axdimm.h"
++#include "core/api/axdimm_device.h"
++
++#include <ATen/ATen.h>
++#include <ATen/native/axdimm/AxdimmDeviceContext.h>
++#include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
++
++#include <torch/library.h>
++#include <torch/types.h>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++void verify(const at::TensorOptions& options);
++
++/*! Used as encapsulated handle for AxdimmOpaqueTensor, which implements
++ * OpaqueTensor interface. Encapsulates device specific data and operations
++ */
++class AxdimmLayoutWrapper {
++ public:
++  AxdimmLayoutWrapper(AxdimmBaseDevice* device, uint64_t layout_handle)
++      : device_(device),
++        layout_handle_(layout_handle),
++        layout_(axdimm_get_tables_layout(device_, layout_handle_)) {
++    TORCH_INTERNAL_ASSERT(device_);
++    TORCH_CHECK(
++        layout_,
++        "Failed to get AXDIMM tables layout for handle: ",
++        layout_handle)
++  }
++
++  ~AxdimmLayoutWrapper();
++
++  const AxdimmTablesLayout* get_tables_layout() const {
++    TORCH_INTERNAL_ASSERT(layout_);
++    return layout_;
++  }
++
++  uint64_t get_layout_handle() const {
++    return layout_handle_;
++  }
++
++ private:
++  AxdimmBaseDevice* device_;
++  uint64_t layout_handle_;
++  AxdimmTablesLayout* layout_;
++};
++
++//! This class represents internal at::Tensor handle, for device specific logic
++//! implementation
++class AxdimmTensor {
++ public:
++  // This constructor required to create empty tensor. Object will be replaced
++  // with tensor copied from CPU tensor
++  AxdimmTensor() = default;
++
++  AxdimmTensor(
++      const at::Tensor& weights,
++      ::axd_user_preferences preference = AXDIMM_ALLOC_AUTO) {
++    load(weights, preference);
++  }
++
++  AxdimmTensor(
++      const at::Tensor& weights,
++      uint32_t num_tables,
++      uint32_t features_per_table,
++      uint32_t sparse_feature_size,
++      axd_user_preferences preference) {
++    load(
++        weights,
++        num_tables,
++        features_per_table,
++        sparse_feature_size,
++        preference);
++  }
++
++  uint32_t get_sparse_feature_size() const {
++    return sparse_feature_size_;
++  }
++
++  uint32_t get_num_tables() const {
++    return num_tables_;
++  }
++
++  const AxdimmTablesLayout* get_tables_layout() const {
++    return layout_->get_tables_layout();
++  }
++
++  const std::vector<uint32_t>& get_tables_rows_num() const {
++    return tables_rows_num_;
++  }
++
++  Device* get_device() const {
++    return AxdimmDeviceContext::device();
++  }
++
++  axdimm_sls_type get_sls_type() const {
++    return sls_type_;
++  }
++
++ private:
++  void load(
++      const at::Tensor& weights,
++      ::axd_user_preferences preference = AXDIMM_ALLOC_AUTO);
++  void load(
++      const at::Tensor& weights,
++      uint32_t num_tables,
++      uint32_t features_per_table,
++      uint32_t sparse_feature_size,
++      axd_user_preferences preference);
++
++  // shared_ptr to be able to copy this tensor as many times as required and
++  // deallocate tables when last tensor is destroyed
++  std::shared_ptr<AxdimmLayoutWrapper> layout_;
++  std::vector<uint32_t> tables_rows_num_;
++  uint32_t sparse_feature_size_{};
++  uint32_t minibatch_size_;
++  uint32_t num_tables_{};
++  axdimm_sls_type sls_type_{};
++};
++
++using AxdimmTensorImpl = AxdimmOpaqueTensorImpl<AxdimmTensor>;
++
++const AxdimmTensor& convert(const at::Tensor& tensor);
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
++
++#endif
+diff --git a/aten/src/ATen/native/axdimm/ops/Copy.cpp b/aten/src/ATen/native/axdimm/ops/Copy.cpp
+new file mode 100644
+index 00000000..7eabab23
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/ops/Copy.cpp
+@@ -0,0 +1,30 @@
++#include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
++#include <ATen/native/axdimm/AxdimmTensor.h>
++
++#include <torch/library.h>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++// implementation is required for dispatched tensor creation
++at::Tensor& copy_axdimm_(
++    at::Tensor& self,
++    const at::Tensor& src,
++    bool non_blocking) {
++  TORCH_INTERNAL_ASSERT(self.is_axdimm());
++  TORCH_CHECK(src.is_cpu(), "Only CPU tensors can be copied to AXDIMM device");
++  at::native::axdimm::AxdimmTensor ten(src);
++  auto impl = static_cast<at::native::axdimm::AxdimmTensorImpl*>(
++      self.unsafeGetTensorImpl());
++  impl->unsafe_opaque_handle() = ten;
++  return self;
++}
++
++TORCH_LIBRARY_IMPL(aten, AXDIMM, m) {
++  m.impl(TORCH_SELECTIVE_NAME("aten::copy_"), TORCH_FN(copy_axdimm_));
++}
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+new file mode 100644
+index 00000000..d9255188
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -0,0 +1,112 @@
++#include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
++#include <ATen/native/axdimm/AxdimmTensor.h>
++
++#include <torch/autograd.h>
++#include <torch/library.h>
++
++namespace {
++
++void transform_offsets(
++    const at::Tensor& offsets,
++    std::vector<uint32_t>& axdimm_lengths_out) {
++  // number of tables * minibatch_size
++  const auto num_tables = offsets.sizes()[0];
++  axdimm_lengths_out.reserve(num_tables * offsets.sizes()[1] - 1);
++  for (size_t table_idx = 0; table_idx < num_tables; ++table_idx) {
++    const auto& batch = offsets[table_idx];
++    for (size_t batch_idx = 0; batch_idx < batch.sizes()[0] - 1; ++batch_idx) {
++      // cast to uint32_t is not available
++      axdimm_lengths_out.push_back(
++          batch[batch_idx + 1].item().to<int32_t>() -
++          batch[batch_idx].item().to<int32_t>());
++    }
++  }
++}
++
++} // namespace
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++at::Tensor embedding_bag_forward_only_axdimm(
++    const at::Tensor& weights,
++    const at::Tensor& indices,
++    const at::Tensor& offsets) {
++  TORCH_INTERNAL_ASSERT(weights.is_axdimm());
++  TORCH_CHECK(indices.is_cpu(), "Indices must be CPU tensor");
++  TORCH_CHECK(offsets.is_cpu(), "Offsets must be CPU tensor");
++  TORCH_CHECK(
++      indices.scalar_type() == torch::kInt32,
++      "Indices tensor type must be Int32")
++  TORCH_CHECK(
++      offsets.scalar_type() == torch::kInt32,
++      "Offsets tensor type must be Int32")
++  TORCH_CHECK(indices.is_contiguous(), "Indices tensor must be contiguous");
++  TORCH_CHECK(offsets.is_contiguous(), "Lengths tensor must be contiguous");
++  TORCH_CHECK(indices.dim() == 1, "Indices must be 1 dimensional");
++  TORCH_CHECK(offsets.dim() == 2, "Offsets must be 2 dimensional");
++
++  const uint32_t minibatch_size = offsets.sizes()[1] - 1;
++
++  const AxdimmTensor& ten = convert(weights);
++
++  TORCH_CHECK(
++      offsets.sizes()[0] == ten.get_num_tables(),
++      "Offsets bags number must be equal to weights tables number");
++
++  uint8_t* psum_buf = new uint8_t
++      [ten.get_num_tables() * minibatch_size * ten.get_sparse_feature_size() *
++       weights.dtype().itemsize()];
++  const auto& tables_rows_num = ten.get_tables_rows_num();
++  auto sls_op_ = axdimm_create_sls_op(
++      minibatch_size,
++      ten.get_sparse_feature_size(),
++      ten.get_num_tables(),
++      const_cast<uint32_t*>(tables_rows_num.data()),
++      nullptr,
++      ten.get_tables_layout(),
++      ten.get_sls_type());
++
++  std::vector<uint32_t> axdimm_lengths;
++  transform_offsets(offsets, axdimm_lengths);
++
++  auto status = axdimm_run_sls(
++      sls_op_,
++      ten.get_device(),
++      axdimm_lengths.data(),
++      static_cast<uint32_t*>(indices.data_ptr()),
++      psum_buf);
++
++  TORCH_CHECK(status == AXDIMM_SUCCESS, "Axdimm embeddings calculation failed");
++
++  return torch::from_blob(
++      psum_buf,
++      {minibatch_size * ten.get_num_tables(), ten.get_sparse_feature_size()},
++      [](void* data) { delete[] static_cast<uint8_t*>(data); },
++      torch::TensorOptions().dtype(weights.dtype()).device(torch::kCPU));
++}
++
++// This allows to define new operator schema for already registered library
++// (aten)
++TORCH_LIBRARY_FRAGMENT(aten, m) {
++  m.def(
++      "aten::embedding_bag_forward_only_axdimm(Tensor weights, Tensor indices, Tensor offsets) -> Tensor");
++}
++
++TORCH_LIBRARY_IMPL(aten, AXDIMM, m) {
++  m.impl(
++      "aten::embedding_bag_forward_only_axdimm",
++      embedding_bag_forward_only_axdimm);
++}
++
++// Disable autograd for operator since it supports only inference
++TORCH_LIBRARY_IMPL(aten, Autograd, m) {
++  m.impl(
++      "aten::embedding_bag_forward_only_axdimm",
++      torch::autograd::autogradNotImplementedFallback());
++}
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
+diff --git a/aten/src/ATen/native/axdimm/ops/Factory.cpp b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+new file mode 100644
+index 00000000..c3e0ab77
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+@@ -0,0 +1,83 @@
++#include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
++#include <ATen/native/axdimm/AxdimmTensor.h>
++#include <c10/core/ScalarTypeToTypeMeta.h>
++
++#include <torch/library.h>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++// Implementation is required for dispatched tensor creation
++at::Tensor empty_strided_axdimm(
++    at::IntArrayRef size,
++    at::IntArrayRef stride,
++    c10::optional<at::ScalarType> dtype = {},
++    c10::optional<at::Layout> layout = {},
++    c10::optional<at::Device> device = {},
++    c10::optional<bool> pin_memory = {}) {
++  auto opts = at::TensorOptions()
++                  .dtype(dtype)
++                  .layout(layout)
++                  .device(device)
++                  .pinned_memory(pin_memory)
++                  .memory_format(c10::MemoryFormat::Contiguous);
++  verify(opts);
++  const at::native::axdimm::AxdimmTensor ten =
++      at::native::axdimm::AxdimmTensor();
++
++  return at::detail::make_tensor<
++      at::AxdimmOpaqueTensorImpl<at::native::axdimm::AxdimmTensor>>(
++      at::DispatchKeySet(at::DispatchKey::AXDIMM),
++      opts.dtype(),
++      at::Device(at::kAXDIMM),
++      ten,
++      size,
++      stride);
++}
++
++TORCH_LIBRARY_IMPL(aten, AXDIMM, m) {
++  m.impl(
++      TORCH_SELECTIVE_NAME("aten::empty_strided"),
++      TORCH_FN(empty_strided_axdimm));
++}
++
++//! Exposes all parameters for axdimm tensor creation. Available in python via:
++//! torch.ops.axdimm.create_tensor
++at::Tensor create_tensor(
++    at::Tensor weights,
++    int64_t num_tables,
++    int64_t features_per_table,
++    int64_t sparse_feature_size,
++    int64_t allocation_preference,
++    c10::optional<at::ScalarType> dtype = {}) {
++  const at::native::axdimm::AxdimmTensor ten = at::native::axdimm::AxdimmTensor(
++      weights,
++      num_tables,
++      features_per_table,
++      sparse_feature_size,
++      static_cast<axd_user_preferences>(allocation_preference));
++  return at::detail::make_tensor<
++      at::AxdimmOpaqueTensorImpl<at::native::axdimm::AxdimmTensor>>(
++      at::DispatchKeySet(at::DispatchKey::AXDIMM),
++      dtype ? c10::scalarTypeToTypeMeta(*dtype)
++            : caffe2::TypeMeta::Make<float>(),
++      at::Device(at::kAXDIMM),
++      ten,
++      weights.sizes(),
++      weights.strides());
++}
++
++TORCH_LIBRARY(axdimm, m) {
++  m.def(TORCH_SELECTIVE_SCHEMA(
++      "axdimm::create_tensor(Tensor weights, int num_tables, int features_per_table, int sparse_feature_size, int allocation_preference, ScalarType?  dtype) -> Tensor"));
++}
++
++TORCH_LIBRARY_IMPL(axdimm, CPU, m) {
++  m.impl(
++      TORCH_SELECTIVE_NAME("axdimm::create_tensor"), TORCH_FN(create_tensor));
++}
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
+diff --git a/aten/src/ATen/native/native_functions.yaml b/aten/src/ATen/native/native_functions.yaml
+index 6464615d..7a86b266 100644
+--- a/aten/src/ATen/native/native_functions.yaml
++++ b/aten/src/ATen/native/native_functions.yaml
+@@ -4068,6 +4068,8 @@
+ 
+ - func: is_vulkan_available() -> bool
+ 
++- func: is_axdimm_available() -> bool
++
+ - func: _nnpack_available() -> bool
+ 
+ - func: _nnpack_spatial_convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[2] padding, int[2] stride=1) -> Tensor
+diff --git a/c10/core/Backend.h b/c10/core/Backend.h
+index 0edc919d..d4601637 100644
+--- a/c10/core/Backend.h
++++ b/c10/core/Backend.h
+@@ -184,6 +184,8 @@ static inline DispatchKey backendToDispatchKey(Backend b) {
+       return DispatchKey::MTIA;
+     case Backend::PrivateUse1:
+       return DispatchKey::PrivateUse1;
++    case Backend::AXDIMM:
++      return DispatchKey::AXDIMM;
+     default:
+       throw std::runtime_error("Unknown backend");
+   }
+@@ -244,6 +246,8 @@ static inline DeviceType backendToDeviceType(Backend b) {
+       return DeviceType::MTIA;
+     case Backend::PrivateUse1:
+       return DeviceType::PrivateUse1;
++    case Backend::AXDIMM:
++      return DeviceType::AXDIMM;
+     case Backend::Undefined:
+       TORCH_CHECK(false, "Undefined backend is not a valid device type");
+     default:
+@@ -310,6 +314,8 @@ static inline const char* toString(Backend b) {
+       return "MTIA";
+     case Backend::PrivateUse1:
+       return "PrivateUseOne";
++    case Backend::AXDIMM:
++      return "AXDIMM";
+     default:
+       return "UNKNOWN_BACKEND";
+   }
+diff --git a/c10/core/Device.cpp b/c10/core/Device.cpp
+index d02eb5e9..7acf17aa 100644
+--- a/c10/core/Device.cpp
++++ b/c10/core/Device.cpp
+@@ -37,6 +37,7 @@ DeviceType parse_type(const std::string& device_string) {
+           {"hpu", DeviceType::HPU},
+           {"mtia", DeviceType::MTIA},
+           {"privateuseone", DeviceType::PrivateUse1},
++          {"axdimm", DeviceType::AXDIMM}
+       }};
+   auto device = std::find_if(
+       types.begin(),
+diff --git a/c10/core/DeviceType.h b/c10/core/DeviceType.h
+index ad76501e..7afbd4ec 100644
+--- a/c10/core/DeviceType.h
++++ b/c10/core/DeviceType.h
+@@ -77,6 +77,7 @@ constexpr DeviceType kLazy = DeviceType::Lazy;
+ constexpr DeviceType kIPU = DeviceType::IPU;
+ constexpr DeviceType kMTIA = DeviceType::MTIA;
+ constexpr DeviceType kPrivateUse1 = DeviceType::PrivateUse1;
++constexpr DeviceType kAXDIMM = DeviceType::AXDIMM;
+ 
+ // define explicit int constant
+ constexpr int COMPILE_TIME_MAX_DEVICE_TYPES =
+diff --git a/c10/core/DispatchKey.cpp b/c10/core/DispatchKey.cpp
+index 91a606b0..3ce8b1ba 100644
+--- a/c10/core/DispatchKey.cpp
++++ b/c10/core/DispatchKey.cpp
+@@ -81,6 +81,8 @@ const char* toString(DispatchKey t) {
+       return "HPU";
+     case DispatchKey::MTIA:
+       return "MTIA";
++    case DispatchKey::AXDIMM:
++      return "AXDIMM";
+ 
+     case DispatchKey::Quantized:
+       return "Quantized";
+@@ -306,6 +308,7 @@ c10::DispatchKey parseDispatchKey(const std::string& k) {
+       {"XPU", c10::DispatchKey::XPU},
+       {"IPU", c10::DispatchKey::IPU},
+       {"HPU", c10::DispatchKey::HPU},
++      {"AXDIMM", c10::DispatchKey::AXDIMM},
+       {"Lazy", c10::DispatchKey::Lazy},
+       {"MTIA", c10::DispatchKey::MTIA},
+       {"NestedTensor", c10::DispatchKey::NestedTensor},
+diff --git a/c10/core/DispatchKey.h b/c10/core/DispatchKey.h
+index 3e2db110..37e42abd 100644
+--- a/c10/core/DispatchKey.h
++++ b/c10/core/DispatchKey.h
+@@ -184,6 +184,7 @@ enum class DispatchKey : uint16_t {
+   ORT,
+ 
+   Vulkan, // TODO: put this in BackendComponents
++  AXDIMM,
+   Metal, // TODO: put this in BackendComponents
+ 
+   // See [Note: Per-Backend Functionality Dispatch Keys]
+@@ -211,7 +212,6 @@ enum class DispatchKey : uint16_t {
+ 
+   // See [Note: Per-Backend Functionality Dispatch Keys]
+   Sparse,
+-  AXDIMM, // AXDIMM
+ 
+   // TODO: Make SparseCsr a functionality key
+   SparseCsrCPU,
+diff --git a/c10/core/DispatchKeySet.h b/c10/core/DispatchKeySet.h
+index df9ac279..9d06a862 100644
+--- a/c10/core/DispatchKeySet.h
++++ b/c10/core/DispatchKeySet.h
+@@ -684,6 +684,7 @@ constexpr DispatchKeySet autogradother_backends =
+         {DispatchKey::FPGA,
+          DispatchKey::ORT,
+          DispatchKey::Vulkan,
++         DispatchKey::AXDIMM, // Adding this will generate default kernels required for tensor operations
+          DispatchKey::Metal,
+          DispatchKey::SparseCsrCPU,
+          DispatchKey::SparseCsrCUDA,
+diff --git a/c10/core/TensorImpl.h b/c10/core/TensorImpl.h
+index 0b35b2a4..6d5a9370 100644
+--- a/c10/core/TensorImpl.h
++++ b/c10/core/TensorImpl.h
+@@ -1177,6 +1177,11 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
+     return device_opt_.has_value() && device_opt_->type() == kVulkan;
+   }
+ 
++  bool is_axdimm() const {
++    static constexpr auto axdimm_ks = DispatchKeySet(DispatchKey::AXDIMM);
++    return key_set_.has_all(axdimm_ks);
++  }
++
+   bool is_metal() const {
+     if (C10_UNLIKELY(device_policy_)) {
+       return device_custom().is_metal();
+diff --git a/c10/core/TensorOptions.h b/c10/core/TensorOptions.h
+index 1fe85665..6518378e 100644
+--- a/c10/core/TensorOptions.h
++++ b/c10/core/TensorOptions.h
+@@ -751,6 +751,9 @@ inline DeviceType dispatchKeyToDeviceType(DispatchKey dispatch_key) {
+ 
+     case DispatchKey::ORT:
+       return DeviceType::ORT;
++
++    case DispatchKey::AXDIMM:
++      return DeviceType::AXDIMM;
+     default:
+       TORCH_CHECK(
+           false,
+diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
+index 8c0e3c24..47c61f2c 100644
+--- a/cmake/Dependencies.cmake
++++ b/cmake/Dependencies.cmake
+@@ -679,6 +679,10 @@ if(USE_VULKAN)
+   list(APPEND Caffe2_DEPENDENCY_LIBS ${Vulkan_LIBS})
+ endif()
+ 
++if(USE_AXDIMM)
++  include_directories(SYSTEM ${CMAKE_AXDIMM_ROOT_PATH})
++endif()
++
+ # ---[ gflags
+ if(USE_GFLAGS)
+   include(${CMAKE_CURRENT_LIST_DIR}/public/gflags.cmake)
+diff --git a/torch/csrc/autograd/python_variable.cpp b/torch/csrc/autograd/python_variable.cpp
+index c75f6126..d29a2eeb 100644
+--- a/torch/csrc/autograd/python_variable.cpp
++++ b/torch/csrc/autograd/python_variable.cpp
+@@ -1265,7 +1265,20 @@ PyObject* THPVariable_is_vulkan(THPVariable* self, void* unused) {
+   END_HANDLE_TH_ERRORS
+ }
+ 
+-PyObject* THPVariable_is_quantized(THPVariable* self, void* unused) {
++PyObject* THPVariable_is_axdimm(THPVariable* self, void* unused)
++{
++  HANDLE_TH_ERRORS
++  if (check_has_torch_function((PyObject *)self)) {
++    return handle_torch_function_getter(self, "is_axdimm");
++  }
++  auto& self_ = THPVariable_Unpack(self);
++  return torch::autograd::utils::wrap(self_.is_axdimm());
++  END_HANDLE_TH_ERRORS
++}
++
++
++PyObject* THPVariable_is_quantized(THPVariable* self, void* unused)
++{
+   HANDLE_TH_ERRORS
+   if (check_has_torch_function((PyObject*)self)) {
+     return handle_torch_function_getter(self, "is_quantized");
+@@ -1445,6 +1458,7 @@ static struct PyGetSetDef THPVariable_properties[] = {
+     {"is_mps", (getter)THPVariable_is_mps, nullptr, nullptr, nullptr},
+     {"is_ort", (getter)THPVariable_is_ort, nullptr, nullptr, nullptr},
+     {"is_vulkan", (getter)THPVariable_is_vulkan, nullptr, nullptr, nullptr},
++    {"is_axdimm", (getter)THPVariable_is_axdimm, nullptr, nullptr, nullptr},
+     {"is_complex", (getter)THPVariable_is_complex, nullptr, nullptr, nullptr},
+     {"is_quantized",
+      (getter)THPVariable_is_quantized,
+diff --git a/torch/csrc/jit/frontend/sugared_value.cpp b/torch/csrc/jit/frontend/sugared_value.cpp
+index 7eb01d32..c566453e 100644
+--- a/torch/csrc/jit/frontend/sugared_value.cpp
++++ b/torch/csrc/jit/frontend/sugared_value.cpp
+@@ -121,6 +121,7 @@ std::shared_ptr<SugaredValue> SimpleValue::attr(
+            {"is_mps", "prim"},
+            {"is_quantized", "prim"},
+            {"is_vulkan", "prim"},
++           {"is_axdimm", "prim"},
+            {"is_ipu", "prim"},
+            {"is_meta", "prim"},
+            {"is_leaf", "aten"},
+diff --git a/torch/csrc/jit/runtime/register_prim_ops.cpp b/torch/csrc/jit/runtime/register_prim_ops.cpp
+index 5bbdd365..54224589 100644
+--- a/torch/csrc/jit/runtime/register_prim_ops.cpp
++++ b/torch/csrc/jit/runtime/register_prim_ops.cpp
+@@ -2371,6 +2371,14 @@ static const std::vector<OperatorGeneratorArgs> opGenArgs1{
+           push(stack, a.is_vulkan());
+         },
+         aliasAnalysisFromSchema()),
++    OperatorGeneratorArgs(
++        TORCH_SELECTIVE_SCHEMA("prim::is_axdimm(Tensor a) -> bool"),
++        [](Stack& stack) {
++          at::Tensor a;
++          pop(stack, a);
++          push(stack, a.is_axdimm());
++        },
++        aliasAnalysisFromSchema()),
+     OperatorGeneratorArgs(
+         TORCH_SELECTIVE_SCHEMA("prim::is_ipu(Tensor a) -> bool"),
+         [](Stack& stack) {
+diff --git a/torch/csrc/utils/tensor_types.cpp b/torch/csrc/utils/tensor_types.cpp
+index decf407b..e36b250a 100644
+--- a/torch/csrc/utils/tensor_types.cpp
++++ b/torch/csrc/utils/tensor_types.cpp
+@@ -49,6 +49,8 @@ static const char* backend_to_string(const at::Backend& backend) {
+       return "torch.xla";
+     case at::Backend::Meta:
+       return "torch.meta";
++    case at::Backend::AXDIMM:
++        return "torch.axdimm";
+     default:
+       AT_ERROR("Unimplemented backend ", backend);
+   }
+diff --git a/torch/nn/modules/__init__.py b/torch/nn/modules/__init__.py
+index 719d20e5..87eb6c8f 100644
+--- a/torch/nn/modules/__init__.py
++++ b/torch/nn/modules/__init__.py
+@@ -23,7 +23,7 @@ from .normalization import LocalResponseNorm, CrossMapLRN2d, LayerNorm, GroupNor
+ from .dropout import Dropout, Dropout1d, Dropout2d, Dropout3d, AlphaDropout, FeatureAlphaDropout
+ from .padding import ReflectionPad1d, ReflectionPad2d, ReflectionPad3d, ReplicationPad1d, ReplicationPad2d, \
+     ReplicationPad3d, ZeroPad2d, ConstantPad1d, ConstantPad2d, ConstantPad3d
+-from .sparse import Embedding, EmbeddingBag
++from .sparse import Embedding, EmbeddingBag, EmbeddingBagAxdimm
+ from .rnn import RNNBase, RNN, LSTM, GRU, \
+     RNNCellBase, RNNCell, LSTMCell, GRUCell
+ from .pixelshuffle import PixelShuffle, PixelUnshuffle
+@@ -51,7 +51,7 @@ __all__ = [
+     'InstanceNorm2d', 'InstanceNorm3d', 'LayerNorm', 'GroupNorm', 'SyncBatchNorm',
+     'Dropout', 'Dropout1d', 'Dropout2d', 'Dropout3d', 'AlphaDropout', 'FeatureAlphaDropout',
+     'ReflectionPad1d', 'ReflectionPad2d', 'ReflectionPad3d', 'ReplicationPad2d', 'ReplicationPad1d', 'ReplicationPad3d',
+-    'CrossMapLRN2d', 'Embedding', 'EmbeddingBag', 'RNNBase', 'RNN', 'LSTM', 'GRU', 'RNNCellBase', 'RNNCell',
++    'CrossMapLRN2d', 'Embedding', 'EmbeddingBag', 'EmbeddingBagAxdimm', 'RNNBase', 'RNN', 'LSTM', 'GRU', 'RNNCellBase', 'RNNCell',
+     'LSTMCell', 'GRUCell', 'PixelShuffle', 'PixelUnshuffle', 'Upsample', 'UpsamplingNearest2d', 'UpsamplingBilinear2d',
+     'PairwiseDistance', 'AdaptiveMaxPool1d', 'AdaptiveMaxPool2d', 'AdaptiveMaxPool3d', 'AdaptiveAvgPool1d',
+     'AdaptiveAvgPool2d', 'AdaptiveAvgPool3d', 'TripletMarginLoss', 'ZeroPad2d', 'ConstantPad1d', 'ConstantPad2d',
+diff --git a/torch/nn/modules/sparse.py b/torch/nn/modules/sparse.py
+index 8f7378c4..d5655d04 100644
+--- a/torch/nn/modules/sparse.py
++++ b/torch/nn/modules/sparse.py
+@@ -223,6 +223,16 @@ class Embedding(Module):
+         return embedding
+ 
+ 
++class EmbeddingBagAxdimm(Module):
++    weight: Tensor
++    def __init__(self, weight):
++        super(EmbeddingBagAxdimm, self).__init__()
++        self.weight = weight
++
++    def forward(self, indices: Tensor, offsets: Tensor) -> Tensor:
++        return torch.ops.aten.embedding_bag_forward_only_axdimm(self.weight, indices, offsets)
++
++
+ class EmbeddingBag(Module):
+     r"""Computes sums or means of 'bags' of embeddings, without instantiating the
+     intermediate embeddings.
+diff --git a/torchgen/model.py b/torchgen/model.py
+index 75f2b089..b8e337ab 100644
+--- a/torchgen/model.py
++++ b/torchgen/model.py
+@@ -72,6 +72,7 @@ class DispatchKey(Enum):
+     FPGA = auto()
+     ORT = auto()
+     Vulkan = auto()
++    AXDIMM = auto()
+     Metal = auto()
+     MKLDNN = auto()
+     OpenGL = auto()
+-- 
+2.34.1
+

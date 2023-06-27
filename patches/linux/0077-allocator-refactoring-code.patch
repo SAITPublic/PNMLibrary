@@ -1,0 +1,478 @@
+From 28cdbb2018233b8486ac864c597f809831c8b9e7 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 12 Jan 2023 08:23:36 +0000
+Subject: [PATCH 077/161] [allocator] refactoring code
+
+Refactoring axdimm_allocator code and encapsulating allocator's mutex.
+This need because kcsan report error
+if mutex is a part of sanitizing struct.
+
+Related: AXDIMM-463
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/dax/axdimm-private.h   |  5 +++
+ drivers/dax/axdimm.c           | 19 +++++----
+ drivers/dax/axdimm_allocator.c | 73 +++++++++++++++++++++++++---------
+ drivers/dax/axdimm_allocator.h | 14 +++----
+ drivers/dax/axdimm_sysfs.c     | 46 ++++++++++-----------
+ drivers/dax/axdimm_sysfs.h     |  4 +-
+ 6 files changed, 98 insertions(+), 63 deletions(-)
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index f2031b5b3..d4aeb3ccf 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -16,6 +16,7 @@
+ #include <linux/libaxdimm.h>
+ #include <linux/semaphore.h>
+ #include <linux/types.h>
++#include <linux/kobject.h>
+ 
+ #define AXDIMM_COPY_FROM_TO_USER(func, error, dst, src, size)                  \
+ 	do {                                                                   \
+@@ -68,8 +69,12 @@ struct axdmem_info {
+ 	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+ };
+ 
++struct axdimm_allocator;
++
+ struct axdimm_dev {
+ 	struct axdmem_info mem_info; /* memory info */
++	struct axdimm_allocator *allocator;
++	struct kobject *kobject;
+ };
+ 
+ static inline int is_axdimm_range(u64 start, u64 end)
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 0f565ec0c..64d340a5f 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -21,14 +21,13 @@
+ MODULE_VERSION(AXDIMM_DRIVER_VERSION);
+ #endif
+ 
+-struct axdimm_allocator axdimm_allocator;
+ struct axdimm_rank_scheduler axdimm_rank_sched;
+ struct axdimm_dev axdimm_device;
+ struct axdimm_process_manager axdimm_proc_mgr;
+ 
+ int axdimm_release(struct inode *node, struct file *f)
+ {
+-	return release_axdimm_process(&axdimm_proc_mgr, &axdimm_allocator,
++	return release_axdimm_process(&axdimm_proc_mgr, axdimm_device.allocator,
+ 				      &axdimm_rank_sched);
+ }
+ 
+@@ -306,7 +305,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+ 		reset_axdimm_rank_scheduler(&axdimm_rank_sched);
+-		retval = reset_axdimm_allocator(&axdimm_allocator,
++		retval = reset_axdimm_allocator(axdimm_device.allocator,
+ 						&axdimm_device.mem_info);
+ 		reset_axdimm_process_manager(&axdimm_proc_mgr);
+ 		break;
+@@ -314,7 +313,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	case GET_MEMORY_OBJECTS_NUM:
+ 	case GET_MEMORY_ALLOCATION:
+ 	case DEALLOCATE_MEMORY:
+-		retval = mem_process_ioctl(cmd, &axdimm_allocator, arg);
++		retval = mem_process_ioctl(cmd, axdimm_device.allocator, arg);
+ 		break;
+ 	case GET_RANK_FOR_WRITE:
+ 	case GET_RANK_FOR_READ:
+@@ -346,8 +345,8 @@ int init_axdimm_device(struct dev_dax *dev_dax)
+ 	/* Initialize device meminfo */
+ 	axdimm_setmeminfo(&axdimm_device.mem_info);
+ 
+-	/* Create sysfs subsystem for the device */
+-	err = build_axdimm_sysfs(&dev_dax->dev.kobj);
++	/* Initialize memory allocator */
++	err = init_axdimm_allocator(&axdimm_device);
+ 	if (err)
+ 		return err;
+ 
+@@ -362,9 +361,9 @@ int init_axdimm_device(struct dev_dax *dev_dax)
+ 	/* Reset ranks status and synchronization primitives */
+ 	init_axdimm_rank_scheduler(&axdimm_rank_sched);
+ 
+-	/* Initialize memory allocator */
+-	return init_axdimm_allocator(&axdimm_allocator,
+-				     &axdimm_device.mem_info);
++	/* Create sysfs subsystem for the device */
++	axdimm_device.kobject = &dev_dax->dev.kobj;
++	return build_axdimm_sysfs(&axdimm_device);
+ }
+ 
+ void cleanup_axdimm_device(void)
+@@ -372,7 +371,7 @@ void cleanup_axdimm_device(void)
+ 	AXDIMM_DBG("Cleaning up AXDIMM device\n");
+ 
+ 	/* Free allocated memory */
+-	cleanup_axdimm_allocator(&axdimm_allocator);
++	cleanup_axdimm_allocator(&axdimm_device);
+ 
+ 	/* Free allocated memory if any user processes alive upon device remove*/
+ 	cleanup_axdimm_process_manager(&axdimm_proc_mgr);
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 7e66efc49..e7498ed24 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -15,6 +15,32 @@
+ 
+ extern struct axdimm_process_manager axdimm_proc_mgr;
+ 
++struct __axdimm_allocator {
++	struct axdimm_allocator data;
++	struct mutex memory_mutex;
++} __allocator;
++
++void lock_allocator(struct axdimm_allocator *alloc)
++{
++	struct __axdimm_allocator *allocator =
++		container_of(alloc, struct __axdimm_allocator, data);
++	mutex_lock(&allocator->memory_mutex);
++}
++
++void unlock_allocator(struct axdimm_allocator *alloc)
++{
++	struct __axdimm_allocator *allocator =
++		container_of(alloc, struct __axdimm_allocator, data);
++	mutex_unlock(&allocator->memory_mutex);
++}
++
++static bool allocator_is_locked(struct axdimm_allocator *alloc)
++{
++	struct __axdimm_allocator *allocator =
++		container_of(alloc, struct __axdimm_allocator, data);
++	return mutex_is_locked(&allocator->memory_mutex);
++}
++
+ static int init_rank_pool(struct axdimm_allocator *alloc, uint8_t rank,
+ 			  uint64_t size)
+ {
+@@ -139,21 +165,22 @@ static int preinit_axdimm_allocator(struct axdimm_allocator *alloc,
+ 	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
+ }
+ 
+-int init_axdimm_allocator(struct axdimm_allocator *alloc,
+-			  struct axdmem_info *mem_info)
++int init_axdimm_allocator(struct axdimm_dev *dev)
+ {
+ 	int err_code;
+ 
++	dev->allocator = &__allocator.data;
++
+ 	AXDIMM_DBG("Initializing AXDIMM allocator\n");
+ 
+-	err_code = preinit_axdimm_allocator(alloc, mem_info);
++	err_code = preinit_axdimm_allocator(dev->allocator, &dev->mem_info);
+ 	if (unlikely(err_code))
+ 		return err_code;
+ 
+-	INIT_LIST_HEAD(&alloc->obj_pack_list);
++	INIT_LIST_HEAD(&dev->allocator->obj_pack_list);
+ 
+ 	/* Protect memory allocation operations */
+-	mutex_init(&alloc->memory_mutex);
++	mutex_init(&__allocator.memory_mutex);
+ 
+ 	return 0;
+ }
+@@ -177,9 +204,9 @@ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ {
+ 	AXDIMM_DBG("Resetting AXDIMM allocator\n");
+ 
+-	if (unlikely(mutex_is_locked(&alloc->memory_mutex))) {
++	if (unlikely(allocator_is_locked(alloc))) {
+ 		AXDIMM_WRN("Mutex unlock forced.\n");
+-		mutex_unlock(&alloc->memory_mutex);
++		unlock_allocator(alloc);
+ 	}
+ 
+ 	cleanup_obj_packs(alloc);
+@@ -188,11 +215,14 @@ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ 	return preinit_axdimm_allocator(alloc, mem_info);
+ }
+ 
+-void cleanup_axdimm_allocator(struct axdimm_allocator *alloc)
++void cleanup_axdimm_allocator(struct axdimm_dev *dev)
+ {
++	struct __axdimm_allocator *allocator =
++		container_of(dev->allocator, struct __axdimm_allocator, data);
++
+ 	AXDIMM_DBG("Cleaning up AXDIMM allocator\n");
+-	reset_axdimm_allocator(alloc, NULL);
+-	mutex_destroy(&alloc->memory_mutex);
++	reset_axdimm_allocator(dev->allocator, NULL);
++	mutex_destroy(&allocator->memory_mutex);
+ }
+ 
+ static int add_obj_pack(struct axdimm_allocator *alloc,
+@@ -380,7 +410,8 @@ static int allocate_objects(struct axdimm_allocator *alloc,
+ 	int err_code = 0;
+ 	uint64_t actual_num = 0;
+ 
+-	mutex_lock(&alloc->memory_mutex);
++	lock_allocator(alloc);
++
+ 	err_code = allocate_in_ranks(num_obj, alloc, objects, request,
+ 				     &actual_num);
+ 	if (unlikely(err_code)) {
+@@ -403,7 +434,7 @@ static int allocate_objects(struct axdimm_allocator *alloc,
+ 		*desc);
+ 
+ alloc_obj_out:
+-	mutex_unlock(&alloc->memory_mutex);
++	unlock_allocator(alloc);
+ 	return err_code;
+ }
+ 
+@@ -520,7 +551,8 @@ static int get_num_obj(struct axdimm_allocator *alloc, uint64_t desc,
+ 	if (unlikely(desc == 0))
+ 		goto out_num_obj;
+ 
+-	mutex_lock(&alloc->memory_mutex);
++	lock_allocator(alloc);
++
+ 	list_for_each(ptr, &alloc->obj_pack_list) {
+ 		pack = list_entry(ptr, struct obj_pack, list);
+ 		if (pack->desc == desc) {
+@@ -532,7 +564,7 @@ static int get_num_obj(struct axdimm_allocator *alloc, uint64_t desc,
+ 	}
+ 
+ unlock_num_obj:
+-	mutex_unlock(&alloc->memory_mutex);
++	unlock_allocator(alloc);
+ out_num_obj:
+ 	return err_code;
+ }
+@@ -576,11 +608,13 @@ static int get_obj_pack(struct axdimm_allocator *alloc,
+ 	struct list_head *ptr;
+ 	struct obj_pack *pack;
+ 
+-	AXDIMM_DBG("Getting allocation for descriptor %llu\n", request->descriptor);
++	AXDIMM_DBG("Getting allocation for descriptor %llu\n",
++		   request->descriptor);
+ 	if (unlikely(request->descriptor == 0))
+ 		goto out;
+ 
+-	mutex_lock(&alloc->memory_mutex);
++	lock_allocator(alloc);
++
+ 	list_for_each(ptr, &alloc->obj_pack_list) {
+ 		pack = list_entry(ptr, struct obj_pack, list);
+ 		if (pack->desc == request->descriptor) {
+@@ -599,7 +633,7 @@ static int get_obj_pack(struct axdimm_allocator *alloc,
+ 	}
+ 
+ unlock:
+-	mutex_unlock(&alloc->memory_mutex);
++	unlock_allocator(alloc);
+ out:
+ 	return err_code;
+ }
+@@ -639,7 +673,8 @@ int deallocate_memory(struct axdimm_allocator *alloc, uint64_t desc)
+ 		goto out;
+ 	}
+ 
+-	mutex_lock(&alloc->memory_mutex);
++	lock_allocator(alloc);
++
+ 	list_for_each_safe(cur, n, &alloc->obj_pack_list) {
+ 		pack = list_entry(cur, struct obj_pack, list);
+ 		if (pack->desc != desc)
+@@ -661,7 +696,7 @@ int deallocate_memory(struct axdimm_allocator *alloc, uint64_t desc)
+ 	}
+ 
+ unlock:
+-	mutex_unlock(&alloc->memory_mutex);
++	unlock_allocator(alloc);
+ out:
+ 	return err_code;
+ }
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+index 9ab9a7833..8efe9f1cf 100644
+--- a/drivers/dax/axdimm_allocator.h
++++ b/drivers/dax/axdimm_allocator.h
+@@ -4,13 +4,13 @@
+ #ifndef __AXDIMM_ALLOCATOR_H__
+ #define __AXDIMM_ALLOCATOR_H__
+ 
+-#include "axdimm-private.h"
+-
+-#include <linux/mutex.h>
+ #include <linux/libaxdimm.h>
+ #include <linux/list.h>
+ #include <linux/types.h>
+ 
++struct axdimm_dev;
++struct axdmem_info;
++
+ /*
+  * Element of the list with memory object packages.
+  * For each userland memory allocation request we generate internal memory
+@@ -45,11 +45,9 @@ struct axdimm_allocator {
+ 	struct list_head obj_pack_list;
+ 	/* Packages counter */
+ 	uint64_t pack_counter;
+-	struct mutex memory_mutex;
+ };
+ 
+-int init_axdimm_allocator(struct axdimm_allocator *alloc,
+-			  struct axdmem_info *mem_info);
++int init_axdimm_allocator(struct axdimm_dev *dev);
+ /*
+  * Not proccess(thread)-safe.
+  * `mem_info` might be NULL, if it is
+@@ -58,9 +56,11 @@ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+  */
+ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ 			   struct axdmem_info *mem_info);
+-void cleanup_axdimm_allocator(struct axdimm_allocator *alloc);
++void cleanup_axdimm_allocator(struct axdimm_dev *dev);
+ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+ 		      unsigned long __user arg);
+ int deallocate_memory(struct axdimm_allocator *alloc, uint64_t desc);
++void lock_allocator(struct axdimm_allocator *alloc);
++void unlock_allocator(struct axdimm_allocator *alloc);
+ 
+ #endif /* __AXDIMM_ALLOCATOR_H__ */
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index f8705eb7e..53f0daf93 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -1,11 +1,12 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
++#include "axdimm_sysfs.h"
+ #include "axdimm_allocator.h"
+ #include "axdimm_log.h"
+ #include "axdimm_rank_scheduler.h"
+-#include "axdimm-private.h"
+ #include "axdimm_process_manager.h"
++#include "axdimm-private.h"
+ 
+ #include <linux/device.h>
+ #include <linux/genalloc.h>
+@@ -20,11 +21,9 @@
+ #define REGION_SYSFS_ATTR_COUNT 2
+ #define WITH_NULL_TERM(var) (var + 1)
+ 
+-extern struct axdimm_dev axdimm_device;
+-extern struct axdimm_allocator axdimm_allocator;
++static struct axdimm_dev *axdimm_device;
+ extern struct axdimm_rank_scheduler axdimm_rank_sched;
+ extern struct axdimm_process_manager axdimm_proc_mgr;
+-
+ static struct kobject *ranks_kobj;
+ 
+ static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+@@ -47,7 +46,7 @@ static ssize_t cleanup_store(struct device *device,
+ {
+ 	if (sysfs_streq(buf, "1")) {
+ 		if (axdimm_proc_manager_cleanup_on(&axdimm_proc_mgr,
+-						   &axdimm_allocator,
++						   axdimm_device->allocator,
+ 						   &axdimm_rank_sched))
+ 			AXDIMM_ERR("Failed to enable resource manager\n");
+ 	} else if (sysfs_streq(buf, "0")) {
+@@ -179,18 +178,18 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[1]) == 0) {
+-		mutex_lock(&axdimm_allocator.memory_mutex);
+-		pool = axdimm_allocator.mem_pools[attr->rank];
++		lock_allocator(axdimm_device->allocator);
++		pool = axdimm_device->allocator->mem_pools[attr->rank];
+ 		size = pool ? gen_pool_size(pool) : 0;
+-		mutex_unlock(&axdimm_allocator.memory_mutex);
++		unlock_allocator(axdimm_device->allocator);
+ 		return sprintf(buf, "%llu\n", size);
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[2]) == 0) {
+-		mutex_lock(&axdimm_allocator.memory_mutex);
+-		pool = axdimm_allocator.mem_pools[attr->rank];
++		lock_allocator(axdimm_device->allocator);
++		pool = axdimm_device->allocator->mem_pools[attr->rank];
+ 		free_size = pool ? gen_pool_avail(pool) : 0;
+-		mutex_unlock(&axdimm_allocator.memory_mutex);
++		unlock_allocator(axdimm_device->allocator);
+ 		return sprintf(buf, "%llu\n", free_size);
+ 	}
+ 
+@@ -217,11 +216,7 @@ static ssize_t rank_attr_show(struct kobject *kobj, struct attribute *attr,
+ }
+ 
+ static const char *const region_group_name[] = {
+-	"base",
+-	"inst",
+-	"cfgr",
+-	"tags",
+-	"psum",
++	"base", "inst", "cfgr", "tags", "psum",
+ };
+ 
+ static const char *const region_attr_name[] = {
+@@ -234,14 +229,14 @@ static ssize_t region_show(struct region_attribute *attr, char *buf)
+ 	if (strcmp(attr->attr.name, region_attr_name[0]) == 0)
+ 		return sprintf(
+ 			buf, "%llu\n",
+-			axdimm_device.mem_info.mem_size[attr->rank % NUM_OF_CS]
+-						       [attr->region]);
++			axdimm_device->mem_info.mem_size[attr->rank % NUM_OF_CS]
++							[attr->region]);
+ 
+ 	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+-		return sprintf(
+-			buf, "%llu\n",
+-			axdimm_device.mem_info.mem_offset[attr->rank % NUM_OF_CS]
+-							 [attr->region]);
++		return sprintf(buf, "%llu\n",
++			       axdimm_device->mem_info
++				       .mem_offset[attr->rank % NUM_OF_CS]
++						  [attr->region]);
+ 
+ 	return 0;
+ }
+@@ -394,14 +389,15 @@ static int build_rank_sysfs(struct kobject *kobj, uint8_t rank)
+ 	return err;
+ }
+ 
+-int build_axdimm_sysfs(struct kobject *kobj)
++int build_axdimm_sysfs(struct axdimm_dev *dev)
+ {
+ 	int rank;
+ 	int err = 0;
+ 
+-	AXDIMM_DBG("Building AXDIMM sysfs\n");
++	axdimm_device = dev;
+ 
+-	ranks_kobj = kobject_create_and_add("ranks", kobj);
++	AXDIMM_DBG("Building AXDIMM sysfs\n");
++	ranks_kobj = kobject_create_and_add("ranks", dev->kobject);
+ 	if (sysfs_create_groups(ranks_kobj, dev_attr_groups)) {
+ 		err = -ENOMEM;
+ 		goto axdimm_sysfs_out;
+diff --git a/drivers/dax/axdimm_sysfs.h b/drivers/dax/axdimm_sysfs.h
+index 0d95d3baa..4340998ed 100644
+--- a/drivers/dax/axdimm_sysfs.h
++++ b/drivers/dax/axdimm_sysfs.h
+@@ -4,9 +4,9 @@
+ #ifndef __AXDIMM_SYSFS__
+ #define __AXDIMM_SYSFS__
+ 
+-#include <linux/kobject.h>
++struct axdimm_dev;
+ 
+-int build_axdimm_sysfs(struct kobject *kobj);
++int build_axdimm_sysfs(struct axdimm_dev *dev);
+ void destroy_axdimm_sysfs(void);
+ 
+ #endif /* __AXDIMM_SYSFS__ */
+-- 
+2.34.1
+

@@ -1,0 +1,185 @@
+From 1897401603f190f89e46f0e3c41f19fdc59c433d Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 17 Jan 2023 11:18:09 +0300
+Subject: [PATCH 078/161] [allocator][kcsan] Add kcsan access asserts
+
+Add kcsan exclusive access asserts to allocator's structure
+
+Related: AXDIMM-463
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/dax/axdimm_allocator.c | 123 ++++++++++++++++++---------------
+ 1 file changed, 67 insertions(+), 56 deletions(-)
+
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index e7498ed24..596fb5c62 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -411,28 +411,30 @@ static int allocate_objects(struct axdimm_allocator *alloc,
+ 	uint64_t actual_num = 0;
+ 
+ 	lock_allocator(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-	err_code = allocate_in_ranks(num_obj, alloc, objects, request,
+-				     &actual_num);
+-	if (unlikely(err_code)) {
+-		if (deallocate_objects(alloc, objects, actual_num))
+-			AXDIMM_ERR("Failed partial deallocation\n");
+-		goto alloc_obj_out;
+-	}
+-
+-	err_code = add_obj_pack(alloc, objects, num_obj);
+-	if (unlikely(err_code)) {
+-		AXDIMM_ERR("Failed to add objects package\n");
+-		goto alloc_obj_out;
+-	}
++		err_code = allocate_in_ranks(num_obj, alloc, objects, request,
++					     &actual_num);
++		if (unlikely(err_code)) {
++			if (deallocate_objects(alloc, objects, actual_num))
++				AXDIMM_ERR("Failed partial deallocation\n");
++			goto alloc_obj_out;
++		}
+ 
+-	/* Return new descriptor to user space */
+-	*desc = alloc->pack_counter;
++		err_code = add_obj_pack(alloc, objects, num_obj);
++		if (unlikely(err_code)) {
++			AXDIMM_ERR("Failed to add objects package\n");
++			goto alloc_obj_out;
++		}
+ 
+-	AXDIMM_DBG(
+-		"Allocation succeeded, returning package descriptor = [%llu]\n",
+-		*desc);
++		/* Return new descriptor to user space */
++		*desc = alloc->pack_counter;
+ 
++		AXDIMM_DBG(
++			"Allocation succeeded, returning package descriptor = [%llu]\n",
++			*desc);
++	}
+ alloc_obj_out:
+ 	unlock_allocator(alloc);
+ 	return err_code;
+@@ -552,14 +554,18 @@ static int get_num_obj(struct axdimm_allocator *alloc, uint64_t desc,
+ 		goto out_num_obj;
+ 
+ 	lock_allocator(alloc);
+-
+-	list_for_each(ptr, &alloc->obj_pack_list) {
+-		pack = list_entry(ptr, struct obj_pack, list);
+-		if (pack->desc == desc) {
+-			*num_obj = pack->num_obj;
+-			AXDIMM_DBG("Number of objects: [%llu]\n", *num_obj);
+-			err_code = 0;
+-			goto unlock_num_obj;
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++
++		list_for_each(ptr, &alloc->obj_pack_list) {
++			pack = list_entry(ptr, struct obj_pack, list);
++			if (pack->desc == desc) {
++				*num_obj = pack->num_obj;
++				AXDIMM_DBG("Number of objects: [%llu]\n",
++					   *num_obj);
++				err_code = 0;
++				goto unlock_num_obj;
++			}
+ 		}
+ 	}
+ 
+@@ -614,24 +620,27 @@ static int get_obj_pack(struct axdimm_allocator *alloc,
+ 		goto out;
+ 
+ 	lock_allocator(alloc);
+-
+-	list_for_each(ptr, &alloc->obj_pack_list) {
+-		pack = list_entry(ptr, struct obj_pack, list);
+-		if (pack->desc == request->descriptor) {
+-			if (request->num_objects < pack->num_obj) {
+-				AXDIMM_ERR(
+-					"The output memory size is too small to store the [%llu] package objects\n",
+-					pack->num_obj);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++
++		list_for_each(ptr, &alloc->obj_pack_list) {
++			pack = list_entry(ptr, struct obj_pack, list);
++			if (pack->desc == request->descriptor) {
++				if (request->num_objects < pack->num_obj) {
++					AXDIMM_ERR(
++						"The output memory size is too small to store the [%llu] package objects\n",
++						pack->num_obj);
++					goto unlock;
++				}
++				AXDIMM_COPY_TO_USER(
++					err_code, request->objects,
++					pack->objects,
++					pack->num_obj *
++						sizeof(struct axd_memory_object));
+ 				goto unlock;
+ 			}
+-			AXDIMM_COPY_TO_USER(
+-				err_code, request->objects, pack->objects,
+-				pack->num_obj *
+-					sizeof(struct axd_memory_object));
+-			goto unlock;
+ 		}
+ 	}
+-
+ unlock:
+ 	unlock_allocator(alloc);
+ out:
+@@ -674,27 +683,29 @@ int deallocate_memory(struct axdimm_allocator *alloc, uint64_t desc)
+ 	}
+ 
+ 	lock_allocator(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-	list_for_each_safe(cur, n, &alloc->obj_pack_list) {
+-		pack = list_entry(cur, struct obj_pack, list);
+-		if (pack->desc != desc)
+-			continue;
++		list_for_each_safe(cur, n, &alloc->obj_pack_list) {
++			pack = list_entry(cur, struct obj_pack, list);
++			if (pack->desc != desc)
++				continue;
+ 
+-		err_code =
+-			deallocate_objects(alloc, pack->objects, pack->num_obj);
+-		if (err_code) {
+-			AXDIMM_ERR(
+-				"Failed to deallocate memory by descriptor [%llu]\n",
+-				desc);
+-		}
++			err_code = deallocate_objects(alloc, pack->objects,
++						      pack->num_obj);
++			if (err_code) {
++				AXDIMM_ERR(
++					"Failed to deallocate memory by descriptor [%llu]\n",
++					desc);
++			}
+ 
+-		kfree(pack->objects);
+-		list_del(cur);
+-		kfree(pack);
++			kfree(pack->objects);
++			list_del(cur);
++			kfree(pack);
+ 
+-		goto unlock;
++			goto unlock;
++		}
+ 	}
+-
+ unlock:
+ 	unlock_allocator(alloc);
+ out:
+-- 
+2.34.1
+

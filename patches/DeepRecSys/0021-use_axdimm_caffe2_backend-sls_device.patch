@@ -1,0 +1,99 @@
+From c25cd4bda9b98b6f4836858b077dcbfda66ac905 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Wed, 28 Sep 2022 15:04:48 +0300
+Subject: [PATCH 21/33] use_axdimm_caffe2_backend -> sls_device
+
+Semantics of these flags partially overlaps: flag `use_axdimm` tells
+DeepRecSys to use AxDIMM, but set `sls_device` option has the same
+semantics: if this option is set to `axdimm` or `cpu`, then we use
+AxDIMM backend anyway.
+
+Resolves AXDIMM-285.
+---
+ DeepRecSys.py            | 4 ++--
+ models/dlrm_s_caffe2.py  | 4 ++--
+ run_DeepRecSys_axdimm.sh | 2 +-
+ utils/utils.py           | 3 +--
+ 4 files changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index 8779960..c730f15 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -142,7 +142,7 @@ def DeepRecSys():
+       else exit("(axdimm) sls_dtype: {0} is not supported.".format(args.sls_dtype))
+ 
+     tables_descriptor = 0
+-    if args.use_axdimm_caffe2_backend:
++    if args.sls_device:
+       ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+ 
+       if args.use_secndp_algo:
+@@ -287,7 +287,7 @@ def DeepRecSys():
+ 
+     status = 0
+     # [AXDIMM caffe2 backend] Destroy AXDIMM for parent process.
+-    if args.use_axdimm_caffe2_backend:
++    if args.sls_device:
+       if args.use_secndp_algo:
+         status = workspace.SecureAxdimmCloser()
+       else:
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index 918051a..69dfc99 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -108,7 +108,7 @@ class DLRM_Wrapper(object):
+             print("(Wrapper) Using CPU...")
+ 
+         self.accel_en = accel_en
+-        self.use_axdimm_caffe2_backend = cli_args.use_axdimm_caffe2_backend
++        self.use_axdimm_caffe2_backend = cli_args.sls_device is not None
+ 
+         num_tables = len(cli_args.arch_embedding_size.split("-"))
+ 
+@@ -481,7 +481,7 @@ class DLRM_Net(object):
+         # ##########################
+         # setup AXDIMM device
+         # ##########################
+-        self.use_axdimm_caffe2_backend = cli_args.use_axdimm_caffe2_backend
++        self.use_axdimm_caffe2_backend = cli_args.sls_device is not None
+         self.tables_descriptor = tables_descriptor
+ 
+         if cli_args.arch_interaction_op == "dot":
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index c314f60..5726be9 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -144,7 +144,7 @@ fi
+ 
+ engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
+ 
+-axdimm_args="--use_axdimm_caffe2_backend --table_weight_path $table_weight_path $USE_SECURE_ALGO $USE_SGX $TAG_VERIFICATION --sls_device $SLS_DEVICE --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
++axdimm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $USE_SGX $TAG_VERIFICATION --sls_device $SLS_DEVICE --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
+ # axdimm_args=""
+ 
+ avg_arrival_rate=1
+diff --git a/utils/utils.py b/utils/utils.py
+index 82967f0..1601bb1 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -130,7 +130,6 @@ def cli():
+     # =========================================================================================
+     # AXDIMM configuration
+     # =========================================================================================
+-    parser.add_argument('--use_axdimm_caffe2_backend', action="store_true", default=False)
+     parser.add_argument("--table_weight_path", type=str, default="./pretrained/real_0.5M_120table")
+ 
+     mem_help = "Set the memory preference for AXDIMM"
+@@ -148,7 +147,7 @@ def cli():
+     parser.add_argument("--use_secndp_algo", action="store_true", default=False)
+     parser.add_argument("--use_sgx", action="store_true", default=False)
+     parser.add_argument("--use_tags", action="store_true", default=False)
+-    parser.add_argument("--sls_device", type=str, default="axdimm")
++    parser.add_argument("--sls_device", type=str, default=None)
+     parser.add_argument("--sls_dtype", type=str, choices=["float32", "int32"], default="float32")
+     parser.add_argument("--private_tables", dest='share_tables', action="store_false", default=True)
+ 
+-- 
+2.34.1
+

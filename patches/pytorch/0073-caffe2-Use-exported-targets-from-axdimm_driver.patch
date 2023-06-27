@@ -1,0 +1,34 @@
+From 985014b531ad7e6407e9c7cf909545855f587050 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Mon, 3 Oct 2022 09:33:30 +0000
+Subject: [PATCH 073/128] [caffe2] Use exported targets from axdimm_driver
+
+---
+ caffe2/CMakeLists.txt | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index c18dd420..474ad23c 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1374,11 +1374,15 @@ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE
+ 
+ if (USE_AXDIMM)
+   target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+-  set(AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/libAxdimmAI.so" "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecure.so")
++  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/cmake")
++  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/cmake")
++  find_package(AxdimmAI REQUIRED)
++  find_package(AxdimmSecure REQUIRED)
++  set(AXDIMM_LIBS Axdimm::AxdimmSecure Axdimm::AxdimmAI)
+ 
+   if (USE_AXDIMM_SGX)
+     target_compile_definitions(torch_axdimm PUBLIC -DSGX_ENABLE)
+-    list(APPEND AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecureSgx.so")
++    list(APPEND AXDIMM_LIBS Axdimm::AxdimmSecureSgx)
+   endif ()
+ 
+   target_link_libraries(torch_axdimm PUBLIC ${AXDIMM_LIBS})
+-- 
+2.34.1
+

@@ -1,0 +1,191 @@
+From e25edf65b5204c55306191e7adf617195871fef9 Mon Sep 17 00:00:00 2001
+From: "p.bred" <p.bred@samsung.com>
+Date: Thu, 16 Jun 2022 11:25:36 +0300
+Subject: [PATCH 025/161] [drivers/dax/axdimm] Add memory scale option (#4)
+
+* add AXDIMM memory range scaling option in DAX driver.
+  This is actual for the simulator, the default value reduces
+  memory consumption 64GB -> 16GB.
+* only the BASE block is scaled.
+* current usage formula: final memory range = 64/(2^scale) GB
+
+Resolves: AXDIMM-250
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ DAX_HOW_TO_BUILD.md            |  1 +
+ drivers/dax/Kconfig            | 10 +++++++++
+ drivers/dax/axdimm-private.h   | 15 +++++++++++---
+ drivers/dax/axdimm.c           | 37 +++++++++++++++++++++++++++++-----
+ include/uapi/linux/libaxdimm.h |  4 ----
+ 5 files changed, 55 insertions(+), 12 deletions(-)
+
+diff --git a/DAX_HOW_TO_BUILD.md b/DAX_HOW_TO_BUILD.md
+index 7a4740e42..2afe5b908 100644
+--- a/DAX_HOW_TO_BUILD.md
++++ b/DAX_HOW_TO_BUILD.md
+@@ -15,6 +15,7 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+   KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+   PMEM DAX: support the deprecated /sys/class/dax interface (DEV_DAX_PMEM_COMPAT) [N/m/?] n
+   A base physical address of AXDIMM range in gigabytes (AXDIMM_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
++  A scale of AXDIMM memory range (AXDIMM_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 0 for FPGA)
+ ```
+ 
+ # DAX driver only
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index f549ead89..9cee4bd44 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -84,4 +84,14 @@ config AXDIMM_BASE_ADDR
+ 	  This value is used to detect AXDIMM range in DAX driver and
+ 	  mao respectively.
+ 
++config AXDIMM_MEMORY_SCALE
++	int "A scale of AXDIMM memory range"
++	depends on DEV_DAX
++	range 0 4
++	default 2
++	help
++	  This value is used to scale AXDIMM memory range in DAX driver.
++	  For default memory range = 64 gigabytes and scale = 2,
++	  total range = 64/(2^scale) = 16 gigabytes.
++
+ endif
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index 52a9f18a4..98b86bf27 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -1,15 +1,24 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+ 
++#include "dax-private.h"
++
+ #include <linux/fs.h>
+ #include <linux/libaxdimm.h>
+-#include "dax-private.h"
++#include <linux/types.h>
++
++/* A scale of AXDIMM memory range */
++#define AXDIMM_MEMORY_SCALE ((uint64_t)CONFIG_AXDIMM_MEMORY_SCALE)
++
++/* Base offset for each CS */
++#define EMBT_BASE_CS0_OFFSET ((uint64_t)0x0)
++#define EMBT_BASE_CS1_OFFSET ((uint64_t)(0x800000000 >> AXDIMM_MEMORY_SCALE))
+ 
+ /* Total Memory size for AXDIMM */
+-#define AXDIMM_MEMORY_SIZE 0x1000000000
++#define AXDIMM_MEMORY_SIZE ((uint64_t)(0x1000000000 >> AXDIMM_MEMORY_SCALE))
+ 
+ /* Start address of AXDIMM */
+-#define AXDIMM_BASE_ADDR ((unsigned long long)CONFIG_AXDIMM_BASE_ADDR << 30)
++#define AXDIMM_BASE_ADDR ((uint64_t)CONFIG_AXDIMM_BASE_ADDR << 30)
+ 
+ /* The enumeration of axdimm memory addresses */
+ typedef enum _axd_mem_regions_e {
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 87af95630..21c835f1f 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -104,35 +104,62 @@ static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+ 
+ 	tmp_x = (row_t >> 3) & 0x1;
+ 	tmp = bankgroup & 0x1;
++	/* BG0 bit[6], always 0 */
+ 	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 6);
+ 
+ 	tmp_x = (row_t >> 2) & 0x1;
+ 	tmp = (channel >> 1) & 0x1;
++	/* HA bit[7], always 0 */
+ 	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 7);
+ 
++	/* Column bits[8:14], all 0 */
+ 	addr += ((((uint64_t)column >> 3) & 0x7f) << 8);
+ 
++	/* Row R0-R2 bits[15:17], all 0 */
+ 	addr += (((uint64_t)row_t & 0x7) << 15);
+ 
+ 	tmp_x = (row_t >> 5) & 0x1;
+ 	tmp = (bankgroup >> 1) & 0x1;
++	/* BG1 bit[18], always 0 */
+ 	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 18);
+ 
+ 	tmp_x = (row_t >> 6) & 0x1;
+ 	tmp = bank & 0x1;
++	/* BA0 bit[19], always 0 */
+ 	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 19);
+ 
+ 	tmp_x = (row_t >> 7) & 0x1;
+ 	tmp = (bank >> 1) & 0x1;
++	/* BA1 bit[20], always 0 */
+ 	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 20);
+ 
++	/* Row R3 bit[21], always 0 */
+ 	addr += (((row_t >> 3) & 0x1) << 21);
++	/*
++	 * Row R5-R10 bit[22:27], different for INST/CFGR/PSUM,
++	 * it's a shift of INST/CFGR/PSUM blocks relative to the end of BASE,
++	 * this defines the start and indirectly the size of INST/CFGR/PSUM.
++	 * We don't scale these blocks, because it contains specific fixed
++	 * size buffers and registers.
++	 * Now total (INST + CFGR + PSUM) blocks size = 1 GB.
++	 */
+ 	addr += (((row_t >> 5) & 0x7f) << 22);
++	/* Row R4 bit[29], always 0 */
+ 	addr += (((row_t >> 4) & 0x1) << 29);
+-	addr += (((row_t >> 12) & 0x1f) << 30);
++	/*
++	 * Row R12-R16 bit[30:34], same non-zero for INST/CFGR/PSUM,
++	 * it's a common shift for INST/CONF/PSUM relative to the start of BASE,
++	 * in other words it's a BASE block size.
++	 */
++	addr += ((row_t >> 12) & 0x1f) >> AXDIMM_MEMORY_SCALE << 30;
+ 
+-	addr += ((uint64_t)rank << 35);
+-	addr += (((uint64_t)channel & 0x1) << 36);
++	/*
++	 * CS bit[35], Chip Select bit, it also scales to proper switch
++	 * between CS when using scale on a simulator.
++	 */
++	addr += ((uint64_t)rank << 35) >> AXDIMM_MEMORY_SCALE;
++	/* CH bit[36], always 0 */
++	addr += (((uint64_t)channel & 0x1) << 36) >> AXDIMM_MEMORY_SCALE;
+ 
+ 	return addr;
+ }
+@@ -147,7 +174,7 @@ static void axdimm_setmeminfo(struct axdmem_info *mem_info)
+ 		mem_info->mem_offset[cs][AXDIMM_BLOCK_BASE] =
+ 			(cs & 1) ?
+ 				EMBT_BASE_CS1_OFFSET :
+-				EMBT_BASE_CS0_OFFSET; // CS0: rank 0,2  CS1: rank 1,3
++				EMBT_BASE_CS0_OFFSET; // CS0: rank 0,2	CS1: rank 1,3
+ 		mem_info->mem_offset[cs][AXDIMM_BLOCK_INST] =
+ 			axdimm_GetHexAddress(AXDIMM_CH_ID, cs, 0, 0, 0x1F000,
+ 					     0);
+@@ -300,7 +327,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	 * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
+ 	 */
+ 	if (_IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC) {
+-		printk(KERN_INFO " _IOC_TYPE(cmd) :      %u\n", _IOC_TYPE(cmd));
++		printk(KERN_INFO " _IOC_TYPE(cmd) :	 %u\n", _IOC_TYPE(cmd));
+ 		printk(KERN_INFO " AXDIMM_IOC_MAGIC:   %u\n", AXDIMM_IOC_MAGIC);
+ 		printk(KERN_WARNING
+ 		       "[SAIT] axdimm: _IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC => false. Aborting ioctl\n");
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 6a34b9142..29781c580 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -24,10 +24,6 @@
+ #define REG_SLS_EXEC 0x40
+ #define REG_POLLING 0x840
+ 
+-/* Base offset for each CS */
+-#define EMBT_BASE_CS0_OFFSET 0x0
+-#define EMBT_BASE_CS1_OFFSET 0x800000000
+-
+ #define MEM_SEG_NUM 4
+ 
+ /* number of Home Agent(# of MC at CPU) */
+-- 
+2.34.1
+

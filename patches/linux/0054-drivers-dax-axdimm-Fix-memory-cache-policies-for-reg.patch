@@ -1,0 +1,45 @@
+From 855e5e6d96f1005f8c4ed0202bd16b43fe674a98 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 21 Oct 2022 11:58:49 +0900
+Subject: [PATCH 054/161] [drivers/dax/axdimm] Fix memory cache policies for
+ regions
+
+After introducing TAG region axd_mem_regions_e values changed and check in
+'get_page_prot' became invalid. Fix this by checking for region type
+explicitly instead of relying on extremely error-prone ordering.
+
+Resolves: AXDIMM-459.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 6188f365d..5c2ba65cd 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -224,6 +224,11 @@ static int setup_axdimm_ranges(struct dev_dax *dev_dax)
+ 	return rc;
+ }
+ 
++static bool is_writecombine_region(int region_no)
++{
++	return region_no == AXDIMM_BASE_CS0 || region_no == AXDIMM_BASE_CS1;
++}
++
+ static pgprot_t get_page_prot(struct vm_area_struct *vma)
+ {
+ 	unsigned long offset[NUM_OF_MEM_REGION];
+@@ -236,7 +241,7 @@ static pgprot_t get_page_prot(struct vm_area_struct *vma)
+ 
+ 	for (i = 0; i < NUM_OF_MEM_REGION - 1; ++i) {
+ 		if (phys_offset >= offset[i] && phys_offset < offset[i + 1]) {
+-			if (i % 2 == 0)
++			if (is_writecombine_region(i))
+ 				return pgprot_writecombine(vma->vm_page_prot);
+ 			return vma->vm_page_prot;
+ 		}
+-- 
+2.34.1
+

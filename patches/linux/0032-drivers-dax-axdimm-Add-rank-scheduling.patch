@@ -1,0 +1,326 @@
+From 9a26e1610f60765442f7cc779238988969ee6ecd Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Fri, 15 Jul 2022 14:53:25 +0300
+Subject: [PATCH 032/161] [drivers/dax/axdimm] Add rank scheduling
+
+Resolves: AXDIMM-48
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/dax/Makefile                |   1 +
+ drivers/dax/axdimm.c                |  14 +++
+ drivers/dax/axdimm_rank_scheduler.c | 170 ++++++++++++++++++++++++++++
+ drivers/dax/axdimm_rank_scheduler.h |  27 +++++
+ include/uapi/linux/libaxdimm.h      |  17 +--
+ 5 files changed, 222 insertions(+), 7 deletions(-)
+ create mode 100644 drivers/dax/axdimm_rank_scheduler.c
+ create mode 100644 drivers/dax/axdimm_rank_scheduler.h
+
+diff --git a/drivers/dax/Makefile b/drivers/dax/Makefile
+index 7af067884..9d193e2f0 100644
+--- a/drivers/dax/Makefile
++++ b/drivers/dax/Makefile
+@@ -10,6 +10,7 @@ device_dax-y := device.o
+ CFLAGS_axdimm.o += -DAXDIMM_DRIVER_VERSION=\"$(shell git describe --first-parent --abbrev=0 --dirty --always)\"
+ device_dax-y += axdimm.o
+ device_dax-y += axdimm_allocator.o
++device_dax-y += axdimm_rank_scheduler.o
+ dax_pmem-y := pmem.o
+ 
+ obj-y += hmem/
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 0504b5f1f..901d79547 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+ 
++#include "axdimm_rank_scheduler.h"
+ #include "axdimm_allocator.h"
+ #include "axdimm-private.h"
+ #include "axdimm_log.h"
+@@ -27,6 +28,7 @@ MODULE_VERSION(AXDIMM_DRIVER_VERSION);
+ typedef struct axdmem_info axdmem_info;
+ 
+ struct axdimm_allocator axdimm_allocator;
++struct axdimm_rank_scheduler axdimm_rank_sched;
+ 
+ /* Helper structure containing auxiliary info for AXDIMM device */
+ static struct axdimm_dev {
+@@ -367,6 +369,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 			up(&axdimm_device.sem_axdimm);
+ 		}
+ 		reset_axdimm_allocator(&axdimm_allocator);
++		reset_axdimm_rank_scheduler(&axdimm_rank_sched);
+ 		break;
+ 	case SET_SC_LOCK:
+ 		if (down_interruptible(&axdimm_device.sem_axdimm)) {
+@@ -383,6 +386,14 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	case DEALLOCATE_MEMORY:
+ 		retval = mem_process_ioctl(cmd, &axdimm_allocator, arg);
+ 		break;
++	case GET_RANK_FOR_WRITE:
++	case GET_RANK_FOR_READ:
++		retval = get_axdimm_rank(&axdimm_rank_sched, cmd, arg);
++		break;
++	case RELEASE_READ_RANK:
++	case RELEASE_WRITE_RANK:
++		retval = release_axdimm_rank(&axdimm_rank_sched, cmd, arg);
++		break;
+ 	default:
+ 		return retval;
+ 	}
+@@ -411,6 +422,9 @@ void init_axdimm_device(struct dev_dax *dev_dax)
+ 
+ 	/* Initialize memory allocator */
+ 	init_axdimm_allocator(&axdimm_allocator, &axdimm_device.mem_info);
++
++	/* Reset ranks status and synchronization primitives */
++	reset_axdimm_rank_scheduler(&axdimm_rank_sched);
+ }
+ 
+ void cleanup_axdimm_device()
+diff --git a/drivers/dax/axdimm_rank_scheduler.c b/drivers/dax/axdimm_rank_scheduler.c
+new file mode 100644
+index 000000000..d03f9025f
+--- /dev/null
++++ b/drivers/dax/axdimm_rank_scheduler.c
+@@ -0,0 +1,170 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#include "axdimm_rank_scheduler.h"
++#include "axdimm_log.h"
++
++#include <linux/bitops.h>
++#include <linux/uaccess.h>
++
++#define BUSY_STATE (1)
++#define IDLE_STATE (0)
++#define MAX_MSK_VAL ((1 << NUM_OF_RANK) - 1)
++
++static unsigned long acquire_free_rank(struct axdimm_rank_scheduler *rank_sched,
++					unsigned int rw_msk,
++					unsigned int wo_msk)
++{
++	unsigned long rank;
++	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++
++	rank = __ffs(rw_msk ? rw_msk : wo_msk);
++
++	axd_rs[rank].wr_stat = BUSY_STATE;
++	return rank;
++}
++
++static void find_free_ranks(struct axdimm_rank_scheduler *rank_sched,
++			     unsigned int msk, unsigned int *rw_msk,
++			     unsigned int *wo_msk)
++{
++	size_t rank;
++	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++
++	/* fill wo_msk and rw_msk according to actual read and write
++         * rank statuses and user requested mask */
++	for (rank = 0; rank < NUM_OF_RANK; rank++) {
++		if (msk & (1 << rank) && axd_rs[rank].wr_stat == IDLE_STATE) {
++			if (axd_rs[rank].rd_stat == IDLE_STATE) {
++				*rw_msk |= (1 << rank);
++			} else {
++				*wo_msk |= (1 << rank);
++			}
++		}
++	}
++}
++
++void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched)
++{
++	size_t rank;
++
++	/* set all ranks as idle */
++	for (rank = 0; rank < NUM_OF_RANK; rank++) {
++		rank_sched->axd_rank_stats[rank].wr_stat = IDLE_STATE;
++		rank_sched->axd_rank_stats[rank].rd_stat = IDLE_STATE;
++	}
++
++	mutex_init(&rank_sched->rank_stat_lock);
++}
++
++static int get_rank_write(struct axdimm_rank_scheduler *rank_sched,
++			  unsigned int msk)
++{
++	int ret = -1;
++	/* masks for saving available ranks in corresponding bits */
++	unsigned int rw_mask = 0;
++	unsigned int wo_mask = 0;
++
++	if (msk > MAX_MSK_VAL) {
++		AXDIMM_ERR("Invalid mask value: %x\n", msk);
++		return ret;
++	}
++
++	mutex_lock(&rank_sched->rank_stat_lock);
++
++	find_free_ranks(rank_sched, msk, &rw_mask, &wo_mask);
++
++	if (rw_mask || wo_mask) {
++		ret = acquire_free_rank(rank_sched, rw_mask, wo_mask);
++	}
++
++	mutex_unlock(&rank_sched->rank_stat_lock);
++
++	return ret;
++}
++
++static int get_rank_read(struct axdimm_rank_scheduler *rank_sched,
++			 unsigned int rank_id)
++{
++	int ret = -1;
++	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++
++	if (rank_id > (NUM_OF_RANK - 1)) {
++		AXDIMM_ERR("Invalid rank value: %x\n", rank_id);
++		return ret;
++	}
++
++	mutex_lock(&rank_sched->rank_stat_lock);
++
++	if (axd_rs[rank_id].rd_stat == IDLE_STATE) {
++		ret = rank_id;
++		axd_rs[rank_id].rd_stat = BUSY_STATE;
++	}
++
++	mutex_unlock(&rank_sched->rank_stat_lock);
++
++	return ret;
++}
++
++static int release_rank_write(struct axdimm_rank_scheduler *rank_sched,
++			      unsigned int rank_id)
++{
++	int ret = 0;
++	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++
++	if (rank_id > (NUM_OF_RANK - 1)) {
++		AXDIMM_ERR("Invalid rank value: %x\n", rank_id);
++		return -1;
++	}
++
++	mutex_lock(&rank_sched->rank_stat_lock);
++	axd_rs[rank_id].wr_stat = IDLE_STATE;
++	mutex_unlock(&rank_sched->rank_stat_lock);
++
++	return ret;
++}
++
++static int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
++			     unsigned int rank_id)
++{
++	int ret = 0;
++	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
++
++	if (rank_id > (NUM_OF_RANK - 1)) {
++		AXDIMM_ERR("Invalid rank value: %x\n", rank_id);
++		return -1;
++	}
++
++	mutex_lock(&rank_sched->rank_stat_lock);
++	axd_rs[rank_id].rd_stat = IDLE_STATE;
++	mutex_unlock(&rank_sched->rank_stat_lock);
++	return ret;
++}
++
++int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
++	     unsigned int arg)
++{
++	int ret = -1;
++
++	if (cmd == GET_RANK_FOR_WRITE) {
++		ret = get_rank_write(rank_sched, arg);
++	} else if (cmd == GET_RANK_FOR_READ) {
++		ret = get_rank_read(rank_sched, arg);
++	}
++
++	return ret;
++}
++
++int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
++		 unsigned int arg)
++{
++	int ret = -1;
++
++	if (cmd == RELEASE_WRITE_RANK) {
++		ret = release_rank_write(rank_sched, arg);
++	} else if (cmd == RELEASE_READ_RANK) {
++		ret = release_rank_read(rank_sched, arg);
++	}
++
++	return ret;
++}
+diff --git a/drivers/dax/axdimm_rank_scheduler.h b/drivers/dax/axdimm_rank_scheduler.h
+new file mode 100644
+index 000000000..4cd6c1b23
+--- /dev/null
++++ b/drivers/dax/axdimm_rank_scheduler.h
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++
++#ifndef __AXDIMM_RANK_SCHEDULER_H__
++#define __AXDIMM_RANK_SCHEDULER_H__
++
++#include <linux/libaxdimm.h>
++#include <linux/types.h>
++#include <linux/mutex.h>
++
++struct axdimm_rank_scheduler {
++	/* struct for managing rank read and write status */
++	struct axdimm_rank_stat_t {
++		uint8_t wr_stat;
++		uint8_t rd_stat;
++	} axd_rank_stats[NUM_OF_RANK];
++	struct mutex rank_stat_lock;
++};
++
++void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched);
++int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
++	     unsigned int arg);
++int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
++		 unsigned int arg);
++
++#endif
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index fd04e996e..ee64c1fb2 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -123,16 +123,19 @@ struct axd_num_objects_request {
+ #define WHICH_BUFFER _IOR(AXDIMM_IOC_MAGIC, 3, int)
+ #define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
+ #define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
+-#define GET_RANK _IOR(AXDIMM_IOC_MAGIC, 6, int)
+ #define ALLOCATE_MEMORY                                                        \
+-	_IOWR(AXDIMM_IOC_MAGIC, 7, struct axd_memory_alloc_request *)
++	_IOWR(AXDIMM_IOC_MAGIC, 6, struct axd_memory_alloc_request *)
+ #define GET_MEMORY_OBJECTS_NUM                                                 \
+-	_IOWR(AXDIMM_IOC_MAGIC, 8, struct axd_num_objects_request *)
++	_IOWR(AXDIMM_IOC_MAGIC, 7, struct axd_num_objects_request *)
+ #define GET_MEMORY_ALLOCATION                                                  \
+-	_IOWR(AXDIMM_IOC_MAGIC, 9, struct axd_memory_alloc *)
+-#define DEALLOCATE_MEMORY _IOW(AXDIMM_IOC_MAGIC, 10, uint64_t)
+-
+-#define AXDIMM_IOC_MAXNR (10)
++	_IOWR(AXDIMM_IOC_MAGIC, 8, struct axd_memory_alloc *)
++#define DEALLOCATE_MEMORY _IOW(AXDIMM_IOC_MAGIC, 9, uint64_t)
++#define GET_RANK_FOR_WRITE _IOW(AXDIMM_IOC_MAGIC, 10, unsigned int)
++#define GET_RANK_FOR_READ _IOW(AXDIMM_IOC_MAGIC, 11, unsigned int)
++#define RELEASE_WRITE_RANK _IOW(AXDIMM_IOC_MAGIC, 12, unsigned int)
++#define RELEASE_READ_RANK _IOW(AXDIMM_IOC_MAGIC, 13, unsigned int)
++
++#define AXDIMM_IOC_MAXNR (13)
+ 
+ #endif
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,28 @@
+From d81786ea879ed9f163529ca38fdeb916735a9d75 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Sun, 23 Jul 2023 23:53:06 -0400
+Subject: [PATCH 144/161] [zSwap] Fix kconfig
+
+- remove redundant colon
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 191cb4de4..48c1c25ba 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -19,7 +19,7 @@ config PNM_ZSWAP
+ 	  option allows to create zswap-related devices and enables build
+ 	  of kernel zswap-pnm library.
+ 
+-config PNM_ZSWAP_MODIFY_ZBUD:
++config PNM_ZSWAP_MODIFY_ZBUD
+     bool "Modify allocation policy in zbud allocator"
+     depends on PNM_ZSWAP
+     default y
+-- 
+2.34.1
+

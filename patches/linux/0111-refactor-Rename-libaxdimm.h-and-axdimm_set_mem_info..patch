@@ -1,0 +1,249 @@
+From f050811219bbb7de9e2398e0da93fadb818aad3a Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 23 May 2023 04:56:19 +0000
+Subject: [PATCH 111/161] [refactor] Rename libaxdimm.h and
+ axdimm_set_mem_info.h
+
+Complete 'axdimm' -> 'sls' transition by renaming 2 last headers:
+
+* libaxdimm.h -> pnm_sls_mem_topology.h
+* axdimm_set_mem_info.h -> pnm_sls_set_mem_info.h
+
+Also, remove 'AXDIMM_' prefix from related macroses.
+
+Related to: MCS23-925
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/sls_dax.c                         |  4 ++--
+ drivers/pnm/sls_resource/sls.c                |  4 ++--
+ ..._set_mem_info.h => pnm_sls_set_mem_info.h} | 20 +++++++++----------
+ include/linux/sls_common.h                    |  2 +-
+ .../{libaxdimm.h => pnm_sls_mem_topology.h}   | 18 +++++++----------
+ include/uapi/linux/sls_resources.h            | 10 ++++------
+ install_sls_headers.sh                        |  6 +++---
+ 7 files changed, 29 insertions(+), 35 deletions(-)
+ rename include/linux/{axdimm_set_mem_info.h => pnm_sls_set_mem_info.h} (87%)
+ rename include/uapi/linux/{libaxdimm.h => pnm_sls_mem_topology.h} (81%)
+
+diff --git a/drivers/dax/sls_dax.c b/drivers/dax/sls_dax.c
+index d5c1b2451..abf6ef34f 100644
+--- a/drivers/dax/sls_dax.c
++++ b/drivers/dax/sls_dax.c
+@@ -3,7 +3,7 @@
+ 
+ #include "sls_dax.h"
+ 
+-#include <linux/axdimm_set_mem_info.h>
++#include <linux/pnm_sls_set_mem_info.h>
+ #include <linux/pgtable.h>
+ #include <linux/memremap.h>
+ #include <linux/pagemap.h>
+@@ -17,7 +17,7 @@ static const struct sls_mem_info *get_mem_info(void)
+ 	static bool mem_info_initialized;
+ 
+ 	if (!mem_info_initialized)
+-		axdimm_set_mem_info(&mem_info);
++		sls_set_mem_info(&mem_info);
+ 
+ 	return &mem_info;
+ }
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 519760160..17d1f3930 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -6,7 +6,7 @@
+ #include "sls_sysfs.h"
+ #include "sls_log.h"
+ 
+-#include <linux/axdimm_set_mem_info.h>
++#include <linux/pnm_sls_set_mem_info.h>
+ #include <linux/cdev.h>
+ #include <linux/dax.h>
+ #include <linux/fs.h>
+@@ -204,7 +204,7 @@ int init_sls_device(void)
+ 		goto out;
+ 
+ 	/* Initialize device mem_info */
+-	axdimm_set_mem_info(&sls_device.mem_info);
++	sls_set_mem_info(&sls_device.mem_info);
+ 
+ 	/* Initialize memory allocator */
+ 	err = init_sls_allocator(&sls_device);
+diff --git a/include/linux/axdimm_set_mem_info.h b/include/linux/pnm_sls_set_mem_info.h
+similarity index 87%
+rename from include/linux/axdimm_set_mem_info.h
+rename to include/linux/pnm_sls_set_mem_info.h
+index c48ff30ea..9b58867d0 100644
+--- a/include/linux/axdimm_set_mem_info.h
++++ b/include/linux/pnm_sls_set_mem_info.h
+@@ -8,14 +8,14 @@
+  * only uses definitions from sls_common.h.
+  */
+ 
+-#ifndef __AXDIMM_SET_MEM_INFO_H__
+-#define __AXDIMM_SET_MEM_INFO_H__
++#ifndef __SLS_SET_MEM_INFO_H__
++#define __SLS_SET_MEM_INFO_H__
+ 
+ #include <linux/sls_common.h>
+ #include <linux/types.h>
+ 
+-static uint64_t axdimm_make_address(int channel, int rank, int bankgroup,
+-				    int bank, int row, int column)
++static uint64_t sls_make_address(int channel, int rank, int bankgroup, int bank,
++				 int row, int column)
+ {
+ 	uint64_t addr = 0;
+ 	uint64_t tmp_x = 0, tmp = 0, row_t = (uint64_t)row;
+@@ -84,7 +84,7 @@ static uint64_t axdimm_make_address(int channel, int rank, int bankgroup,
+ 	return addr;
+ }
+ 
+-static void axdimm_set_mem_info(struct sls_mem_info *mem_info)
++static void sls_set_mem_info(struct sls_mem_info *mem_info)
+ {
+ 	int cs;
+ 
+@@ -96,13 +96,13 @@ static void axdimm_set_mem_info(struct sls_mem_info *mem_info)
+ 				EMBT_BASE_CS1_OFFSET :
+ 				EMBT_BASE_CS0_OFFSET; // CS0: rank 0,2	CS1: rank 1,3
+ 		mem_info->mem_offset[cs][SLS_BLOCK_INST] =
+-			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F000, 0);
++			sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F000, 0);
+ 		mem_info->mem_offset[cs][SLS_BLOCK_CFGR] =
+-			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F100, 0);
++			sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F100, 0);
+ 		mem_info->mem_offset[cs][SLS_BLOCK_TAGS] =
+-			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F200, 0);
++			sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F200, 0);
+ 		mem_info->mem_offset[cs][SLS_BLOCK_PSUM] =
+-			axdimm_make_address(AXDIMM_CH_ID, cs, 0, 0, 0x1F400, 0);
++			sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F400, 0);
+ 
+ 		/* init register size for each cs */
+ 		mem_info->mem_size[cs][SLS_BLOCK_BASE] =
+@@ -125,4 +125,4 @@ static void axdimm_set_mem_info(struct sls_mem_info *mem_info)
+ 	}
+ }
+ 
+-#endif /* __AXDIMM_SET_MEM_INFO_H__ */
++#endif /* __SLS_SET_MEM_INFO_H__ */
+diff --git a/include/linux/sls_common.h b/include/linux/sls_common.h
+index fca49822d..4d7d25ead 100644
+--- a/include/linux/sls_common.h
++++ b/include/linux/sls_common.h
+@@ -9,7 +9,7 @@
+ #ifndef __SLS_COMMON_H__
+ #define __SLS_COMMON_H__
+ 
+-#include <linux/libaxdimm.h>
++#include <linux/pnm_sls_mem_topology.h>
+ #include <linux/sls_resources.h>
+ #include <linux/types.h>
+ 
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/pnm_sls_mem_topology.h
+similarity index 81%
+rename from include/uapi/linux/libaxdimm.h
+rename to include/uapi/linux/pnm_sls_mem_topology.h
+index c03ea0e2e..f004a51d2 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/pnm_sls_mem_topology.h
+@@ -9,8 +9,8 @@
+  * electronic, mechanical, manual or otherwise, or disclosed to third parties
+  * without the express written permission of Samsung Electronics.
+  */
+-#ifndef __LIBAXDIMM_H__
+-#define __LIBAXDIMM_H__
++#ifndef __PNM_SLS_MEM_TOPOLOGY_H__
++#define __PNM_SLS_MEM_TOPOLOGY_H__
+ 
+ #ifdef __KERNEL__
+ #include <linux/types.h>
+@@ -19,10 +19,7 @@
+ #endif
+ 
+ /* Interleaving Stride length : 128Bytes (0x80) */
+-#define AXDIMM_STRIDE_LENGTH 0x80
+-
+-/* [TODO: @y-lavrinenko] Redundant and unused. Should be removed*/
+-#define MEM_SEG_NUM 5
++#define INTERLEAVING_STRIDE_LENGTH 0x80
+ 
+ /* number of Home Agent(# of MC at CPU) */
+ #define NUM_OF_HA 2
+@@ -33,11 +30,11 @@
+ /* number of CS(# of rank connected to one CH) */
+ #define NUM_OF_CS 2
+ 
+-/* channel ID used by axdimm */
+-#define AXDIMM_CH_ID 0
++/* channel ID used by SLS accelerator */
++#define SLS_CH_ID 0
+ 
+ /* total number of ranks for axdimm */
+-#define AXDIMM_NUM_OF_RANK 4
++#define NUM_OF_RANK 4
+ 
+ /* number of ranks on one chip select */
+ #define NUM_RANKS_PER_CS (NUM_OF_RANK / NUM_OF_CS)
+@@ -48,7 +45,6 @@
+ /* Rank interleaving unit size (Bytes) */
+ #define RANK_INTERLEAVING_SIZE 0x80
+ 
+-
+ #endif
+ 
+-/* __LIBAXDIMM_H__ */
++/* __PNM_SLS_MEM_TOPOLOGY_H__ */
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 604795806..d6e0ff431 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -17,9 +17,8 @@
+ #else
+ #include <stdint.h> // for uint64_t
+ #endif
+-#include <linux/libaxdimm.h>
+ 
+-#define NUM_OF_RANK AXDIMM_NUM_OF_RANK
++#include <linux/pnm_sls_mem_topology.h>
+ 
+ /* Offset at config reg */
+ #define REG_SLS_EN 0x0
+@@ -178,12 +177,11 @@ struct sls_num_objects_request {
+ #define SET_FIRST_BUFFER _IO(SLS_IOC_MAGIC, 1)
+ #define SET_SECOND_BUFFER _IO(SLS_IOC_MAGIC, 2)
+ #define WHICH_BUFFER _IOR(SLS_IOC_MAGIC, 3, int)
+-#define ALLOCATE_MEMORY                                                        \
++#define ALLOCATE_MEMORY \
+ 	_IOWR(SLS_IOC_MAGIC, 4, struct sls_memory_alloc_request *)
+-#define GET_MEMORY_OBJECTS_NUM                                                 \
++#define GET_MEMORY_OBJECTS_NUM \
+ 	_IOWR(SLS_IOC_MAGIC, 5, struct sls_num_objects_request *)
+-#define GET_MEMORY_ALLOCATION                                                  \
+-	_IOWR(SLS_IOC_MAGIC, 6, struct sls_memory_alloc *)
++#define GET_MEMORY_ALLOCATION _IOWR(SLS_IOC_MAGIC, 6, struct sls_memory_alloc *)
+ #define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 7, uint64_t)
+ #define GET_RANK_FOR_WRITE _IOW(SLS_IOC_MAGIC, 8, unsigned int)
+ #define GET_RANK_FOR_READ _IOW(SLS_IOC_MAGIC, 9, unsigned int)
+diff --git a/install_sls_headers.sh b/install_sls_headers.sh
+index 00bcad25f..1da3fc5dc 100755
+--- a/install_sls_headers.sh
++++ b/install_sls_headers.sh
+@@ -4,9 +4,9 @@
+ 
+ set -e
+ 
+-sudo cp -v include/uapi/linux/libaxdimm.h /usr/include/linux
+-sudo cp -v include/uapi/linux/libaxdimm.h \
+- /usr/src/linux-headers-`uname -r`/include/uapi/linux/libaxdimm.h
++sudo cp -v include/uapi/linux/pnm_sls_mem_topology.h /usr/include/linux
++sudo cp -v include/uapi/linux/pnm_sls_mem_topology.h \
++ /usr/src/linux-headers-`uname -r`/include/uapi/linux/pnm_sls_mem_topology.h
+ 
+ sudo cp -v include/uapi/linux/sls_resources.h /usr/include/linux
+ sudo cp -v include/uapi/linux/sls_resources.h \
+-- 
+2.34.1
+

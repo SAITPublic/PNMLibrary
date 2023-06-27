@@ -1,0 +1,26 @@
+From 1807a5bbc4ce2960d7663b0325d77aaf335171dd Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Fri, 22 Jul 2022 10:47:52 +0300
+Subject: [PATCH 13/33] Don't run DLRM SGX requested and enclave path is not
+ set
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ run_DeepRecSys_axdimm.sh | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index a3643ba..4e814cb 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -116,6 +116,7 @@ if [ "$USE_SGX" ] && [ -z "${SECNDP_ENCLAVE_PATH}"  ]
+ then
+   echo "Set path to enclave file *.signed.so in env. variable SECNDP_ENCLAVE_PATH"
+   echo "Example: export SECNDP_ENCLAVE_PATH=/home/yalavrinenko/git/axdimm_lib/driver/build/secure/AxdimmSecureEnclave.signed.so"
++  exit 1
+ fi
+ 
+ 
+-- 
+2.34.1
+

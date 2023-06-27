@@ -1,0 +1,27 @@
+From 4d675492e380daf2b7acc9cc29d4af1d50df85a8 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Thu, 3 Nov 2022 15:39:08 +0000
+Subject: [PATCH 082/128] [gloo] Update to include patch for linux 6.0
+ compatibility.
+
+Related-to: AXDIMM-433
+---
+ .gitmodules | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/.gitmodules b/.gitmodules
+index 282746ed..057699f2 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -33,7 +33,7 @@
+ [submodule "third_party/gloo"]
+     ignore = dirty
+     path = third_party/gloo
+-    url = https://github.com/facebookincubator/gloo
++    url = https://github.com/cdluminate/gloo
+ [submodule "third_party/NNPACK_deps/pthreadpool"]
+     ignore = dirty
+     path = third_party/pthreadpool
+-- 
+2.34.1
+

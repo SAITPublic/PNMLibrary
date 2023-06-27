@@ -1,0 +1,35 @@
+From 33d6e7640a14492d11452cc690c8638c35583f5c Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 01:58:03 +0300
+Subject: [PATCH 088/128] [aten] Refactor precompiled op to use new convert
+ function
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp b/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp
+index d24fbbc7..7baf8c07 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmPrecompiledOp.cpp
+@@ -1,4 +1,5 @@
+ #include <ATen/native/axdimm/AxdimmPrecompiledOp.h>
++#include <ATen/native/axdimm/AxdimmTensorConvert.h>
+ 
+ #include <algorithm>
+ 
+@@ -13,7 +14,7 @@ AxdimmPrecompiledOp::AxdimmPrecompiledOp(
+     const at::Tensor& offsets) {
+   const auto num_tables = offsets.sizes()[0];
+   const auto minibatch_size = offsets.sizes()[1] - 1;
+-  const AxdimmTensor& ten = convert(weights);
++  const AxdimmTensor& ten = convert<AxdimmTensor>(weights);
+   lookups_.reserve(num_tables);
+ 
+   auto batch = static_cast<const uint32_t*>(offsets.data_ptr());
+-- 
+2.34.1
+

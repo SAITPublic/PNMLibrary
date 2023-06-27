@@ -1,0 +1,281 @@
+From 344329e274de6fedf0b067ebcb10c5f3b2dfd0c9 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Tue, 16 May 2023 18:02:42 +0300
+Subject: [PATCH 122/128] [refactor] Sync with PNMLinux renaming
+
+Resolves: MCS23-925
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ aten/src/ATen/native/pnm/PNMBaseTensor.h       | 6 +++---
+ aten/src/ATen/native/pnm/PNMSecureTensor.cpp   | 8 ++++----
+ aten/src/ATen/native/pnm/PNMSecureTensor.h     | 6 +++---
+ aten/src/ATen/native/pnm/PNMTensor.cpp         | 6 +++---
+ aten/src/ATen/native/pnm/PNMTensor.h           | 6 +++---
+ aten/src/ATen/native/pnm/ops/Factory.cpp       | 8 ++++----
+ caffe2/operators/lengths_reducer_ops_pnm.cc    | 4 ++--
+ caffe2/operators/lengths_reducer_ops_sec_pnm.h | 6 +++---
+ caffe2/python/pybind_state_pnm.cc              | 2 +-
+ 9 files changed, 26 insertions(+), 26 deletions(-)
+
+diff --git a/aten/src/ATen/native/pnm/PNMBaseTensor.h b/aten/src/ATen/native/pnm/PNMBaseTensor.h
+index 25e2ea9f..21c69fc9 100644
+--- a/aten/src/ATen/native/pnm/PNMBaseTensor.h
++++ b/aten/src/ATen/native/pnm/PNMBaseTensor.h
+@@ -47,7 +47,7 @@ class PnmBaseTensor {
+       PnmTensorType tensor_type,
+       uint32_t num_tables,
+       uint32_t sparse_feature_size,
+-      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL)
++      sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL)
+       : weights_path_(weights_path),
+         scalar_type_(scalar_type),
+         num_tables_(num_tables),
+@@ -85,7 +85,7 @@ class PnmBaseTensor {
+       uint32_t num_tables,
+       uint32_t features_per_table,
+       uint32_t sparse_feature_size,
+-      axd_user_preferences preference)
++      sls_user_preferences preference)
+       : scalar_type_(weights.scalar_type()),
+         num_tables_(num_tables),
+         sparse_feature_size_(sparse_feature_size),
+@@ -163,7 +163,7 @@ class PnmBaseTensor {
+   size_t tables_size_{};
+   uint32_t num_tables_{};
+   uint32_t sparse_feature_size_{};
+-  axd_user_preferences preference_{};
++  sls_user_preferences preference_{};
+   PnmTensorType type_{};
+ };
+ 
+diff --git a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+index e8b7f105..e830c456 100644
+--- a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+@@ -20,7 +20,7 @@ PnmSecureTensor::PnmSecureTensor(
+     PnmTensorType tensor_type,
+     uint32_t num_tables,
+     uint32_t sparse_feature_size,
+-    axd_user_preferences preference,
++    sls_user_preferences preference,
+     bool with_tag)
+     : PnmBaseTensor(
+           weights_path,
+@@ -40,7 +40,7 @@ PnmSecureTensor::PnmSecureTensor(
+     uint32_t num_tables,
+     uint32_t features_per_table,
+     uint32_t sparse_feature_size,
+-    axd_user_preferences preference,
++    sls_user_preferences preference,
+     bool with_tag)
+     : PnmBaseTensor(
+           weights,
+@@ -57,7 +57,7 @@ PnmSecureTensor::PnmSecureTensor(
+ PnmSecureTensor::PnmSecureTensor(
+     const at::Tensor& weights,
+     PnmTensorType type,
+-    axd_user_preferences preference,
++    sls_user_preferences preference,
+     bool with_tag)
+     : PnmBaseTensor(
+           weights,
+@@ -93,7 +93,7 @@ void PnmSecureTensor::load(const void* weights_data) {
+       .rows = rows_view,
+       .sparse_feature_size = sparse_feature_size_,
+       .with_tag = with_tag_,
+-      .preference = static_cast<axd_user_preferences>(preference_)});
++      .preference = static_cast<sls_user_preferences>(preference_)});
+   runner_->init(&args);
+ 
+   if (scalar_type_ == torch::kFloat32) {
+diff --git a/aten/src/ATen/native/pnm/PNMSecureTensor.h b/aten/src/ATen/native/pnm/PNMSecureTensor.h
+index 7ee40851..d64d654e 100644
+--- a/aten/src/ATen/native/pnm/PNMSecureTensor.h
++++ b/aten/src/ATen/native/pnm/PNMSecureTensor.h
+@@ -25,7 +25,7 @@ class PnmSecureTensor : public PnmBaseTensor {
+       PnmTensorType tensor_type,
+       uint32_t num_tables,
+       uint32_t sparse_feature_size,
+-      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
++      sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL,
+       bool with_tag = false);
+   PnmSecureTensor(
+       const at::Tensor& tables,
+@@ -33,13 +33,13 @@ class PnmSecureTensor : public PnmBaseTensor {
+       uint32_t num_tables,
+       uint32_t features_per_table,
+       uint32_t sparse_feature_size,
+-      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
++      sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL,
+       bool with_tag = false);
+ 
+   PnmSecureTensor(
+       const at::Tensor& weights,
+       PnmTensorType type,
+-      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL,
++      sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL,
+       bool with_tag = false);
+ 
+   bool with_tag() const {
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.cpp b/aten/src/ATen/native/pnm/PNMTensor.cpp
+index ad6f81ca..0374ea67 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMTensor.cpp
+@@ -22,7 +22,7 @@ namespace at {
+ namespace native {
+ namespace pnm {
+ 
+-PnmTensor::PnmTensor(const at::Tensor& weights, axd_user_preferences preference)
++PnmTensor::PnmTensor(const at::Tensor& weights, sls_user_preferences preference)
+     : PnmBaseTensor(
+           weights,
+           PnmTensorType::PNM_SIMPLE,
+@@ -39,7 +39,7 @@ PnmTensor::PnmTensor(
+     uint32_t num_tables,
+     uint32_t features_per_table,
+     uint32_t sparse_feature_size,
+-    axd_user_preferences preference)
++    sls_user_preferences preference)
+     : PnmBaseTensor(
+           weights,
+           PnmTensorType::PNM_SIMPLE,
+@@ -56,7 +56,7 @@ PnmTensor::PnmTensor(
+     const at::Tensor& tables_rows_num,
+     uint32_t num_tables,
+     uint32_t sparse_feature_size,
+-    axd_user_preferences preference)
++    sls_user_preferences preference)
+     : PnmBaseTensor(
+           weights_path,
+           scalar_type,
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.h b/aten/src/ATen/native/pnm/PNMTensor.h
+index 707ccfb6..64e82378 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.h
++++ b/aten/src/ATen/native/pnm/PNMTensor.h
+@@ -28,14 +28,14 @@ class PnmTensor : public PnmBaseTensor {
+  public:
+   PnmTensor(
+       const at::Tensor& weights,
+-      ::axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL);
++      ::sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL);
+ 
+   PnmTensor(
+       const at::Tensor& weights,
+       uint32_t num_tables,
+       uint32_t features_per_table,
+       uint32_t sparse_feature_size,
+-      axd_user_preferences preference);
++      sls_user_preferences preference);
+ 
+   PnmTensor(
+       const std::string& weights_path,
+@@ -43,7 +43,7 @@ class PnmTensor : public PnmBaseTensor {
+       const at::Tensor& tables_rows_num,
+       uint32_t num_tables,
+       uint32_t sparse_feature_size,
+-      axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL);
++      sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL);
+ 
+   const ::pnm::memory::EmbeddedTables* get_tables_layout() const {
+     return tables_.get();
+diff --git a/aten/src/ATen/native/pnm/ops/Factory.cpp b/aten/src/ATen/native/pnm/ops/Factory.cpp
+index dd0de3a0..e0afbe1d 100644
+--- a/aten/src/ATen/native/pnm/ops/Factory.cpp
++++ b/aten/src/ATen/native/pnm/ops/Factory.cpp
+@@ -90,7 +90,7 @@ at::Tensor create_tensor_from_weights(
+           num_tables,
+           features_per_table,
+           sparse_feature_size,
+-          static_cast<axd_user_preferences>(allocation_preference));
++          static_cast<sls_user_preferences>(allocation_preference));
+       break;
+     case PnmTensorType::PNM_SECURE:
+       tensor = std::make_shared<PnmSecureTensor>(
+@@ -99,7 +99,7 @@ at::Tensor create_tensor_from_weights(
+           num_tables,
+           features_per_table,
+           sparse_feature_size,
+-          static_cast<axd_user_preferences>(allocation_preference),
++          static_cast<sls_user_preferences>(allocation_preference),
+           *with_tag);
+       break;
+   }
+@@ -130,7 +130,7 @@ at::Tensor create_tensor_from_file(
+           tables_rows_num,
+           num_tables,
+           sparse_feature_size,
+-          static_cast<axd_user_preferences>(allocation_preference));
++          static_cast<sls_user_preferences>(allocation_preference));
+       break;
+     case PnmTensorType::PNM_SECURE:
+       tensor = std::make_shared<PnmSecureTensor>(
+@@ -140,7 +140,7 @@ at::Tensor create_tensor_from_file(
+           tensor_type,
+           num_tables,
+           sparse_feature_size,
+-          static_cast<axd_user_preferences>(allocation_preference),
++          static_cast<sls_user_preferences>(allocation_preference),
+           *with_tag);
+       break;
+   }
+diff --git a/caffe2/operators/lengths_reducer_ops_pnm.cc b/caffe2/operators/lengths_reducer_ops_pnm.cc
+index e41a419b..3768212d 100644
+--- a/caffe2/operators/lengths_reducer_ops_pnm.cc
++++ b/caffe2/operators/lengths_reducer_ops_pnm.cc
+@@ -356,8 +356,8 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+     CAFFE_ENFORCE_NE(data, MAP_FAILED, "Fail to map embedded tables file");
+ 
+     auto memory_preference =
+-        static_cast<axd_user_preferences>(this->template GetSingleArgument<int>(
+-            "mem_preference", AXDIMM_ALLOC_AUTO));
++        static_cast<sls_user_preferences>(this->template GetSingleArgument<int>(
++            "mem_preference", SLS_ALLOC_AUTO));
+ 
+     tables_ = pnm::memory::EmbeddedTables::create(
+         pnm::make_view<const uint8_t>(
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_pnm.h b/caffe2/operators/lengths_reducer_ops_sec_pnm.h
+index 4325c0b5..02068987 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_pnm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_pnm.h
+@@ -98,7 +98,7 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+         CAFFE_ENFORCE_EQ(
+             num_indices_per_lookup_[i],
+             0,
+-            "Multiple axd_init calls are not supported at the moment.");
++            "Multiple sls_init calls are not supported at the moment.");
+         num_indices_per_lookup_[i] = *lengths.begin();
+       }
+ 
+@@ -176,13 +176,13 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+               << " Tables size in bytes: " << tables_size_bytes;
+ 
+     const auto memory_preference = this->template GetSingleArgument<int>(
+-        "mem_preference", AXDIMM_ALLOC_AUTO);
++        "mem_preference", SLS_ALLOC_AUTO);
+ 
+     sls::secure::DeviceArguments args(sls::secure::UntrustedDeviceParams{
+         .rows = rows,
+         .sparse_feature_size = sparse_feature_size,
+         .with_tag = with_tag_,
+-        .preference = static_cast<axd_user_preferences>(memory_preference)});
++        .preference = static_cast<sls_user_preferences>(memory_preference)});
+     runner_->init(&args);
+ 
+     runner_->load_tables(data.begin(), rows, sparse_feature_size, with_tag_);
+diff --git a/caffe2/python/pybind_state_pnm.cc b/caffe2/python/pybind_state_pnm.cc
+index e1a3cf3c..144c2b07 100644
+--- a/caffe2/python/pybind_state_pnm.cc
++++ b/caffe2/python/pybind_state_pnm.cc
+@@ -77,7 +77,7 @@ void addPNMGlobalMethods(py::module& m) {
+               table_entry,
+               row_size_in_bytes,
+               pnm_ctx,
+-              static_cast<axd_user_preferences>(mem_preference));
++              static_cast<sls_user_preferences>(mem_preference));
+ 
+           munmap(const_cast<uint8_t*>(addr), file_size);
+           ::close(fd);
+-- 
+2.34.1
+

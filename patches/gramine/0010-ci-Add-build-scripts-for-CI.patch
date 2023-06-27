@@ -1,0 +1,70 @@
+From 4d2acccf3f06e3193c64c7f6d182f1482212d4d6 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 13 Oct 2022 16:43:36 +0300
+Subject: [PATCH 10/27] [ci] Add build scripts for CI
+
+Related to: AXDIMM-396
+---
+ CI-Scripts/build.sh     | 11 +++++++++++
+ CI-Scripts/env.sh       |  9 +++++++++
+ CI-Scripts/run_tests.sh | 13 +++++++++++++
+ 3 files changed, 33 insertions(+)
+ create mode 100755 CI-Scripts/build.sh
+ create mode 100755 CI-Scripts/env.sh
+ create mode 100755 CI-Scripts/run_tests.sh
+
+diff --git a/CI-Scripts/build.sh b/CI-Scripts/build.sh
+new file mode 100755
+index 00000000..7918054d
+--- /dev/null
++++ b/CI-Scripts/build.sh
+@@ -0,0 +1,11 @@
++#!/bin/sh
++set -e
++
++. $(dirname "$0")/env.sh
++
++cd $ROOT_DIR
++mkdir -p $BIN_DIR
++rm ./build -rf
++meson setup build/ --buildtype=debugoptimized -Ddirect=enabled -Dsgx=enabled -Dsgx_driver=upstream --prefix=$BIN_DIR
++ninja -C build/
++ninja -C build/ install
+\ No newline at end of file
+diff --git a/CI-Scripts/env.sh b/CI-Scripts/env.sh
+new file mode 100755
+index 00000000..fa14188d
+--- /dev/null
++++ b/CI-Scripts/env.sh
+@@ -0,0 +1,9 @@
++#!/bin/sh
++
++SCRIPT_DIR=$(dirname "$0")
++ROOT_DIR=`realpath $SCRIPT_DIR/../`
++BIN_DIR="$ROOT_DIR/gramine-bin"
++
++export PATH=$PATH:"$BIN_DIR/bin"
++export PYTHONPATH=$PYTHONPATH:"$BIN_DIR/lib/python3.8/site-packages"
++export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:"$BIN_DIR/lib/x86_64-linux-gnu/pkgconfig"
+diff --git a/CI-Scripts/run_tests.sh b/CI-Scripts/run_tests.sh
+new file mode 100755
+index 00000000..c552e003
+--- /dev/null
++++ b/CI-Scripts/run_tests.sh
+@@ -0,0 +1,13 @@
++#!/bin/sh
++set -e
++
++. $(dirname "$0")/env.sh
++
++gramine-sgx-gen-private-key -f
++
++SECNDP_APP_DIR="$ROOT_DIR/application/axdimm_secndp_test"
++cd $SECNDP_APP_DIR
++make clean
++make SGX=1
++gramine-direct secndp
++gramine-sgx secndp
+-- 
+2.34.1
+

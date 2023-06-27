@@ -1,0 +1,10 @@
+[unsigned-integer-overflow]
+src:/usr/*include/*
+[unsigned-shift-base]
+src:/usr/*include/*/bitset
+[unsigned-shift-base]
+src:/usr/*include/*/random.tcc
+[unsigned-integer-overflow|unsigned-shift-base]
+src:*/fmt/*.h
+[implicit-integer-sign-change]
+src:/usr/*include/*/uniform_int_dist.h

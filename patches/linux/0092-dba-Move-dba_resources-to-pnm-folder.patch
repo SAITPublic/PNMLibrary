@@ -1,0 +1,84 @@
+From 1d3289a119f59cc7c8684fe02b8c3ac2985408f7 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 29 Mar 2023 16:03:05 +0300
+Subject: [PATCH 092/161] [dba] Move dba_resources to pnm folder
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/Kconfig                                  | 2 +-
+ drivers/Makefile                                 | 2 +-
+ drivers/{dba_resource => pnm}/Kconfig            | 0
+ drivers/pnm/Makefile                             | 4 ++++
+ drivers/{ => pnm}/dba_resource/Makefile          | 0
+ drivers/{ => pnm}/dba_resource/dba_allocator.c   | 0
+ drivers/{ => pnm}/dba_resource/dba_allocator.h   | 0
+ drivers/{ => pnm}/dba_resource/dba_log.h         | 0
+ drivers/{ => pnm}/dba_resource/resource_device.c | 0
+ 9 files changed, 6 insertions(+), 2 deletions(-)
+ rename drivers/{dba_resource => pnm}/Kconfig (100%)
+ create mode 100644 drivers/pnm/Makefile
+ rename drivers/{ => pnm}/dba_resource/Makefile (100%)
+ rename drivers/{ => pnm}/dba_resource/dba_allocator.c (100%)
+ rename drivers/{ => pnm}/dba_resource/dba_allocator.h (100%)
+ rename drivers/{ => pnm}/dba_resource/dba_log.h (100%)
+ rename drivers/{ => pnm}/dba_resource/resource_device.c (100%)
+
+diff --git a/drivers/Kconfig b/drivers/Kconfig
+index af21814ab..57704d947 100644
+--- a/drivers/Kconfig
++++ b/drivers/Kconfig
+@@ -239,6 +239,6 @@ source "drivers/peci/Kconfig"
+ 
+ source "drivers/hte/Kconfig"
+ 
+-source "drivers/dba_resource/Kconfig"
++source "drivers/pnm/Kconfig"
+ 
+ endmenu
+diff --git a/drivers/Makefile b/drivers/Makefile
+index 1fe05951c..78a1a953f 100644
+--- a/drivers/Makefile
++++ b/drivers/Makefile
+@@ -189,4 +189,4 @@ obj-$(CONFIG_COUNTER)		+= counter/
+ obj-$(CONFIG_MOST)		+= most/
+ obj-$(CONFIG_PECI)		+= peci/
+ obj-$(CONFIG_HTE)		+= hte/
+-obj-$(CONFIG_DBA_RESOURCE) += dba_resource/
++obj-$(CONFIG_DBA_RESOURCE) += pnm/
+diff --git a/drivers/dba_resource/Kconfig b/drivers/pnm/Kconfig
+similarity index 100%
+rename from drivers/dba_resource/Kconfig
+rename to drivers/pnm/Kconfig
+diff --git a/drivers/pnm/Makefile b/drivers/pnm/Makefile
+new file mode 100644
+index 000000000..0d5f7eaff
+--- /dev/null
++++ b/drivers/pnm/Makefile
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: GPL-2.0
++
++obj-y += dba_resource/
++
+diff --git a/drivers/dba_resource/Makefile b/drivers/pnm/dba_resource/Makefile
+similarity index 100%
+rename from drivers/dba_resource/Makefile
+rename to drivers/pnm/dba_resource/Makefile
+diff --git a/drivers/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+similarity index 100%
+rename from drivers/dba_resource/dba_allocator.c
+rename to drivers/pnm/dba_resource/dba_allocator.c
+diff --git a/drivers/dba_resource/dba_allocator.h b/drivers/pnm/dba_resource/dba_allocator.h
+similarity index 100%
+rename from drivers/dba_resource/dba_allocator.h
+rename to drivers/pnm/dba_resource/dba_allocator.h
+diff --git a/drivers/dba_resource/dba_log.h b/drivers/pnm/dba_resource/dba_log.h
+similarity index 100%
+rename from drivers/dba_resource/dba_log.h
+rename to drivers/pnm/dba_resource/dba_log.h
+diff --git a/drivers/dba_resource/resource_device.c b/drivers/pnm/dba_resource/resource_device.c
+similarity index 100%
+rename from drivers/dba_resource/resource_device.c
+rename to drivers/pnm/dba_resource/resource_device.c
+-- 
+2.34.1
+

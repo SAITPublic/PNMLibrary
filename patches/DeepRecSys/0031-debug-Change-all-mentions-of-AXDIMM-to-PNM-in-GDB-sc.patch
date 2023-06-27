@@ -1,0 +1,56 @@
+From 24dfaf94d7a8b581a41b53bccfabfb9e3f7ad9a6 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Fri, 23 Jun 2023 15:03:39 +0300
+Subject: [PATCH 31/33] [debug] Change all mentions of AXDIMM to PNM in GDB
+ scripts.
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ debug/init.gdb   | 2 +-
+ debug/pnm-gdb.py | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/debug/init.gdb b/debug/init.gdb
+index dca80ee..932b116 100644
+--- a/debug/init.gdb
++++ b/debug/init.gdb
+@@ -19,5 +19,5 @@ source debug/pnm-gdb.py
+ # Set a flag on quit so that the script doesn't cause GDB to crash.
+ # Yes, GDB is a bit fragile.
+ define hook-quit
+-  set $axdimm_gdb_quit_flag = 1
++  set $pnm_gdb_quit_flag = 1
+ end
+diff --git a/debug/pnm-gdb.py b/debug/pnm-gdb.py
+index 1ff34a2..b49a4ea 100644
+--- a/debug/pnm-gdb.py
++++ b/debug/pnm-gdb.py
+@@ -19,7 +19,7 @@ class InferiorHandler:
+     Action: switch to its parent and continue it in the background,
+     unless the user is exiting GDB.
+     """
+-    if gdb.convenience_variable('axdimm_gdb_quit_flag') is None:
++    if gdb.convenience_variable('pnm_gdb_quit_flag') is None:
+       gdb.post_event(lambda: self._continue_parent(event.inferior))
+ 
+   def _continue_parent(self, inferior):
+@@ -79,14 +79,14 @@ inferior_handler = InferiorHandler()
+ gdb.events.new_inferior.connect(inferior_handler.new_inferior_handler)
+ gdb.events.exited.connect(inferior_handler.exited_handler)
+ 
+-# Preload symbols from AXDIMM libraries.
++# Preload symbols from PNM libraries.
+ libraries_to_load = ['libpnm.so', 'libsls_secure.so']
+ for lib in libraries_to_load:
+   load_symbols_by_library_name(lib)
+ 
+ welcome_message = '''
+ ==========
+-GDB has been set up to debug AXDIMM libraries in the DeepRecSys application.
++GDB has been set up to debug PNM libraries in the DeepRecSys application.
+ It will trace the main Python process and all its children as separate
+ inferiors. All inferiors will run in the background and only stop in
+ breakpoints, watchpoints, catchpoints and similar places. If desired, they
+-- 
+2.34.1
+

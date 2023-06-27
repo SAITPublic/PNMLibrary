@@ -1,0 +1,109 @@
+From 5be4ba6f54b1679584e9079e0391c65bc52c1872 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 13 Jun 2022 10:47:23 +0900
+Subject: [PATCH 045/128] [caffe2] Support new AxdimmMemoryObject based API for
+ tables and new psum type
+
+* now before creating AxdimmTablesLayout one need to create AxdimmMemoryObject
+  which carries allocation information.
+* psum buffer has 'uint8_t *' type now in AXDIMM API, reflect this change in
+  user code.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc |  6 ++++--
+ caffe2/python/_import_c_extension.py           |  2 +-
+ caffe2/python/pybind_state_axdimm.cc           | 12 +++++++++++-
+ 3 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 19ac3766..558c2109 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -232,12 +232,14 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       for (int i = 0; i < block_size_; ++i) {
+         table_entry_list[i] = Input(tables_vec_start_idx_ + i).size(0);
+       }
++
++      // Create model context for SLS operation.
+       model_context_ = axdimm_create_model_context(
+           M,
+           D,
+           block_size_,
+           table_entry_list.data(),
+-          num_indices_per_lookup_.data());
++          num_indices_per_lookup_.data(), AXDIMM_SLS_FLOAT);
+ 
+       exec_context_ = axdimm_create_execution_context(model_context_, device_);
+     }
+@@ -303,7 +305,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         tables_layout_,
+         (uint32_t*)lengths_blocked_,
+         (uint32_t*)indices_blocked_,
+-        output_buf /* psum buffer */
++        (uint8_t*)output_buf /* psum buffer */
+     );
+ 
+     return status == 0;
+diff --git a/caffe2/python/_import_c_extension.py b/caffe2/python/_import_c_extension.py
+index 432c5c8b..478b3afe 100644
+--- a/caffe2/python/_import_c_extension.py
++++ b/caffe2/python/_import_c_extension.py
+@@ -39,7 +39,7 @@ with extension_loader.DlopenGuard():
+                 has_axdimm_support = True
+                 logging.info('This caffe2 python run has AXDIMM support!')
+             except ImportError as axdimm_e:
+-                logging.info('Failed to import AXDIMM module: {}'.format(axdimm_e))
++                logging.warning('Failed to import AXDIMM module: {}'.format(axdimm_e))
+                 try:
+                     from caffe2.python.caffe2_pybind11_state import *  # noqa
+                 except ImportError as cpu_e:
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 099af5c8..6767aaa5 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -15,14 +15,17 @@
+ #include "caffe2/python/pybind_state_registry.h"
+ 
+ #include "ai/api/axdimm.h"
++#include "core/api/axdimm_memory.h"
+ 
+ #include <fcntl.h>
+ #include <sys/mman.h>
+ #include <unistd.h>
+ 
+ namespace {
++
+ static AxdimmBaseDevice* base_device = nullptr;
+ static AxdimmTablesLayout* tables_layout = nullptr;
++static AxdimmMemoryObject* memory_object = nullptr;
+ 
+ std::string load_shared_tables(
+     AxdimmBaseDevice* device,
+@@ -67,15 +70,22 @@ void addAXDIMMGlobalMethods(py::module& m) {
+         CAFFE_ENFORCE_EQ(
+             nullptr, base_device, "Multiple AXDIMM devices are not supported.");
+         base_device = axdimm_create_base_device();
++
++        uint64_t tables_offsets[4] = {0, 0, 0, 0};
++        memory_object = axdimm_allocate_memory_object(
++            table_entry.size(), tables_offsets, 0xf);
++
+         tables_layout = axdimm_create_tables_layout(
+-            table_entry.data(), table_entry.size(), row_size, 0xf);
++            table_entry.data(), table_entry.size(), row_size, memory_object);
+         return load_shared_tables(base_device, tables_layout, weight_file);
+       });
+   m.def("axdimm_closer", []() {
+     axdimm_destroy_base_device(base_device);
++    axdimm_destroy_memory_object(memory_object);
+     axdimm_destroy_tables_layout(tables_layout);
+     base_device = nullptr;
+     tables_layout = nullptr;
++    memory_object = nullptr;
+     return 0;
+   });
+ }
+-- 
+2.34.1
+

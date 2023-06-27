@@ -1,0 +1,50 @@
+From dd1bad2b5a6172eaa831b910721c66ef7cbea214 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Mon, 5 Dec 2022 13:37:45 +0000
+Subject: [PATCH 096/128] [caffe2] Adapt to PyTorch 1.13.1
+
+Resolves AXDIMM-496
+
+Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>
+---
+ caffe2/CMakeLists.txt                       | 4 ++++
+ caffe2/operators/operator_fallback_axdimm.h | 4 ++--
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 5babb37b..c4ae81d2 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -2009,6 +2009,10 @@ if(BUILD_PYTHON)
+     target_include_directories(caffe2_pybind11_state_axdimm PRIVATE ${Caffe2_CPU_INCLUDE} ${Caffe2_AXDIMM_INCLUDE})
+     target_link_libraries(caffe2_pybind11_state_axdimm PRIVATE torch_library python::python pybind::pybind11)
+ 
++    if(USE_MKLDNN)
++        target_link_libraries(caffe2_pybind11_state_axdimm PRIVATE caffe2::mkldnn)
++    endif()
++
+     if(WIN32)
+       target_link_libraries(caffe2_pybind11_state_axdimm ${PYTHON_LIBRARIES})
+     endif(WIN32)
+diff --git a/caffe2/operators/operator_fallback_axdimm.h b/caffe2/operators/operator_fallback_axdimm.h
+index c5e56e80..c0d86c8a 100644
+--- a/caffe2/operators/operator_fallback_axdimm.h
++++ b/caffe2/operators/operator_fallback_axdimm.h
+@@ -52,12 +52,12 @@ class AXDIMMFallbackOpEx final : public Operator<AXDIMMContext> {
+     // Set up the symbols for the local workspace.
+     for (const string& name : def.input()) {
+       local_input_blobs_.push_back(local_ws_.CreateBlob(name));
+-      CHECK_NOTNULL(local_input_blobs_.back());
++      TORCH_CHECK_NOTNULL(local_input_blobs_.back());
+     }
+     base_op_ = CreateOperator(base_def_, &local_ws_);
+     for (const string& name : def.output()) {
+       local_output_blobs_.push_back(local_ws_.GetBlob(name));
+-      CHECK_NOTNULL(local_output_blobs_.back());
++      TORCH_CHECK_NOTNULL(local_output_blobs_.back());
+     }
+   }
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,50 @@
+From f165fc1642f92fe1561914e15d468605afc2da0e Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Thu, 22 Jun 2023 17:05:27 +0300
+Subject: [PATCH 125/128] [cmake] Adapt to new library structure.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Change PNM library names in accordance with SAIT/PNMLibrary#554:
+
+- `PnmAI` → `pnm`
+- `PnmAISecure` → `sls_secure`
+
+References: MCS23-907
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ caffe2/CMakeLists.txt    | 2 +-
+ cmake/Dependencies.cmake | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 03ba060d..b112f196 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1998,7 +1998,7 @@ if(BUILD_PYTHON)
+     target_include_directories(caffe2_pybind11_state_pnm PRIVATE $<INSTALL_INTERFACE:include>)
+     target_include_directories(caffe2_pybind11_state_pnm PRIVATE ${Caffe2_CPU_INCLUDE} ${Caffe2_PNM_INCLUDE})
+     target_link_libraries(caffe2_pybind11_state_pnm PRIVATE torch_library python::python pybind::pybind11)
+-    target_link_libraries(caffe2_pybind11_state_pnm PRIVATE PNM::PnmAI)
++    target_link_libraries(caffe2_pybind11_state_pnm PRIVATE PNM::pnm)
+ 
+     if(USE_MKLDNN)
+         target_link_libraries(caffe2_pybind11_state_pnm PRIVATE caffe2::mkldnn)
+diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
+index e7faebd3..0f483d5c 100644
+--- a/cmake/Dependencies.cmake
++++ b/cmake/Dependencies.cmake
+@@ -1831,7 +1831,7 @@ if(USE_PNM)
+   list(APPEND CMAKE_PREFIX_PATH ${PNM_INSTALL_DIR})
+   find_package(PNMLib REQUIRED)
+ 
+-  set(PNM_LIBS PNM::PnmAISecure PNM::PnmAI)
++  set(PNM_LIBS PNM::sls_secure PNM::pnm)
+ 
+   list(APPEND Caffe2_DEPENDENCY_LIBS ${PNM_LIBS})
+   list(APPEND Caffe2_PNM_DEPENDENCY_LIBS ${PNM_LIBS})
+-- 
+2.34.1
+

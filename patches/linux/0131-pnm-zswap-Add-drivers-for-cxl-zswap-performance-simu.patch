@@ -1,0 +1,1755 @@
+From 8323a220e96dc8515cde82fab3247bcd1edc1929 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Mon, 10 Jul 2023 21:37:27 -0400
+Subject: [PATCH 131/161] [pnm][zswap] Add drivers for cxl-zswap performance
+ simulator
+
+The implementation of cxl-zswap performance simulator was added.
+Here we introduce multiple modules to evaluate base timings for
+zswap operation.
+
+Related to: MCS23-1322
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ drivers/pnm/Makefile              |   1 +
+ drivers/pnm/zswap/Makefile        |  10 +
+ drivers/pnm/zswap/compress_unit.c | 401 +++++++++++++++++
+ drivers/pnm/zswap/compress_unit.h |  16 +
+ drivers/pnm/zswap/cxl_pnm_drv.c   | 554 +++++++++++++++++++++++
+ drivers/pnm/zswap/pnm_sim.c       | 705 ++++++++++++++++++++++++++++++
+ 6 files changed, 1687 insertions(+)
+ create mode 100644 drivers/pnm/zswap/Makefile
+ create mode 100644 drivers/pnm/zswap/compress_unit.c
+ create mode 100644 drivers/pnm/zswap/compress_unit.h
+ create mode 100644 drivers/pnm/zswap/cxl_pnm_drv.c
+ create mode 100644 drivers/pnm/zswap/pnm_sim.c
+
+diff --git a/drivers/pnm/Makefile b/drivers/pnm/Makefile
+index 795a87298..2b419a74c 100644
+--- a/drivers/pnm/Makefile
++++ b/drivers/pnm/Makefile
+@@ -2,3 +2,4 @@
+ 
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource/
+ obj-$(CONFIG_DBA_RESOURCE) += dba_resource/
++obj-$(CONFIG_PNM_ZSWAP) += zswap/
+diff --git a/drivers/pnm/zswap/Makefile b/drivers/pnm/zswap/Makefile
+new file mode 100644
+index 000000000..b67f07d86
+--- /dev/null
++++ b/drivers/pnm/zswap/Makefile
+@@ -0,0 +1,10 @@
++# SPDX-License-Identifier: GPL-2.0
++
++#[TODO: @y-lavrinenko] Rename modules
++obj-$(CONFIG_PNM_ZSWAP) += cxl_pnm_drv.o
++obj-$(CONFIG_PNM_ZSWAP) += pnm_sim.o
++obj-$(CONFIG_PNM_ZSWAP) += compress_unit.o
++
++cxl_pnm_drv-y := cxl_pnm_drv.o
++pnm_sim-y := pnm_sim.o
++compress_unit-y := compress_unit.o
+diff --git a/drivers/pnm/zswap/compress_unit.c b/drivers/pnm/zswap/compress_unit.c
+new file mode 100644
+index 000000000..85e6c8417
+--- /dev/null
++++ b/drivers/pnm/zswap/compress_unit.c
+@@ -0,0 +1,401 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
++
++#include "compress_unit.h"
++
++#include <linux/smp.h>
++#include <asm/unaligned.h>
++#include <linux/kernel.h>
++#include <linux/log2.h>
++#include <linux/math64.h>
++#include <linux/module.h>
++#include <linux/pnm/cxl_zswap.h>
++#include <linux/pnm/cxl_zswap_sim.h>
++#include <linux/slab.h>
++
++/***************************************************/
++/* Emulation Parameters for Performance Estimation */
++
++/* Parameters of PNM Simulator */
++
++/* Set clock frequency for HOST CPU */
++static unsigned int host_cpu_clk_freq = 2400; /* MHz */
++module_param_named(host_cpu_clock_frequency, host_cpu_clk_freq, uint, 0644);
++
++/* Set clock frequency for CXL PNM */
++static unsigned int cxl_pnm_clk_freq = 800; /* MHz */
++module_param_named(cxl_pnm_clock_frequency, cxl_pnm_clk_freq, uint, 0644);
++
++/* Parameters for (de)compression engine */
++static unsigned int lz_compress_ratio = 50; /* % */
++module_param_named(lz_compress_ratio, lz_compress_ratio, uint, 0644);
++
++static unsigned int huffman_compress_ratio = 70; /* % */
++module_param_named(huffman_compress_ratio, huffman_compress_ratio, uint, 0644);
++
++/* PNM Compression Logic */
++
++/* The number of ways in compress unit */
++static unsigned int compress_way = 4;
++module_param_named(compress_way, compress_way, uint, 0644);
++
++/* LZ77 Compression */
++
++/* Huffman Encoder
++ *
++ *        Input
++ *          |
++ *  [Frequency Counter]
++ *          |
++ *  [   Merge Sorter  ]
++ *          |
++ *  [   Queue Logic   ] (Queue Controller + 2 Queue)
++ *          |
++ *  [   Bitmap Logic  ] (Bitmap Controller + Bitmap Table + Bitmap OR + Code
++ *          |            Table)
++ *  [    Tree Logic   ] (Tree + Selector)
++ *          |
++ *  [     Shifter     ]
++ *          |
++ *  [   OR operation  ]
++ *          |
++ *  [     Resizer     ]
++ *          |
++ *  [    Data FIFO    ]
++ *          |
++ *  [     Arbiter     ]
++ *
++ */
++
++/* The number of frequency counter */
++static unsigned int huffman_freq_counter_parallel = 4;
++module_param_named(huffman_freq_counter_parallel, huffman_freq_counter_parallel,
++		   uint, 0644);
++
++/* The number of symbols */
++static unsigned int huffman_symbols = 16; /* 256 => 16 */
++module_param_named(huffman_symbols, huffman_symbols, uint, 0644);
++
++/* Parallelization level of tree */
++static unsigned int huffman_parallel_level = 1;
++module_param_named(huffman_parallel_level, huffman_parallel_level, uint, 0644);
++
++/* PNM Decompression Logic */
++
++/* The number of ways in decompress unit */
++static unsigned int decompress_way = 1;
++module_param_named(decompress_way, decompress_way, uint, 0644);
++
++/* LZ77 Decompression */
++
++/* Huffman Decoder
++ *
++ *        Input
++ *          |
++ *  Input Data Supplier
++ *  -------------------
++ *  [   Input Buffer  ]
++ *          |
++ *  [   Search Logic  ]
++ *  -------------------
++ *          |
++ *   Group of Engines
++ *  -------------------
++ *  [ P to S Converter]
++ *          |
++ *  [  Decoding Unit  ]
++ *          |
++ *  [  Output Buffer  ]
++ *  -------------------
++ *          |
++ *       Output
++ *
++ */
++
++/* Huffman Decoder */
++/* Latency to read meta data */
++static unsigned int meta_read_latency = 24; /* cycles */
++module_param_named(meta_read_latency, meta_read_latency, uint, 0644);
++
++/* Level of bit parallelism */
++static unsigned int bit_parallel_level = 8;
++module_param_named(bit_parallel_level, bit_parallel_level, uint, 0644);
++
++/* Enable/disable log for simulator */
++static bool log_enabled;
++module_param_named(log_enabled, log_enabled, bool, 0644);
++
++/* memcpy with AVX512 NTA */
++void memcpy_nta(void *dst, const void *src, size_t len)
++{
++	kernel_fpu_begin();
++
++	while (len >= 64) {
++		asm("vmovntdqa (%0), %%zmm0\n"
++		    "vmovaps %%zmm0, (%1)\n" ::"r"(src),
++		    "r"(dst)
++		    : "memory");
++		src += 64;
++		dst += 64;
++		len -= 64;
++	}
++	while (len--) {
++		asm("movntdqa (%0), %%xmm0\n"
++		    "movaps %%xmm0, (%1)\n" ::"r"(src),
++		    "r"(dst)
++		    : "memory");
++		src += 16;
++		dst += 16;
++	}
++
++	// __asm__ __volatile__ ("sfence":::"memory");
++	// __asm__ __volatile__ ("vzeroupper");
++
++	kernel_fpu_end();
++}
++
++static void write_page_to_srcbuf(struct unit_info *unit)
++{
++}
++
++static void write_zpage_to_srcbuf(struct unit_info *unit)
++{
++}
++
++static int lz77_compress_page(struct unit_info *unit)
++{
++	int ret = 0;
++	struct instruction *fetched_inst = &unit->inst;
++	size_t in_len = fetched_inst->src_size;
++
++	/* variables for calculating latency of lz77 compression */
++	size_t cycle_lz77_compress = 0;
++
++	size_t lz_output = 0;
++	size_t each_input = 0;
++
++	/* formula for latency of LZ77 compression */
++	lz_output = div_u64(in_len * lz_compress_ratio, 100);
++	each_input = div_u64(lz_output, compress_way); /* M */
++	cycle_lz77_compress = div_u64(each_input, 2);
++
++	unit->dst_size = lz_output;
++	unit->consumed_cycles += cycle_lz77_compress;
++
++	// pr_info("[PNM] LZ77 COMPRESS, CYCLES %ld  SIZE %d\n",
++	// cycle_lz77_compress, unit->dst_size);
++
++	return ret;
++}
++
++/* output of decompression unit is directly written to dst buffer */
++static int lz77_decompress_page(struct unit_info *unit)
++{
++	int ret = 0;
++	size_t in_len = div_u64(PAGE_SIZE * lz_compress_ratio, 100);
++
++	/* variables for calculating latency of lz77 decompression */
++	size_t cycle_lz77_decompress = 0;
++
++	size_t each_input_size = div_u64(in_len * 8, compress_way);
++
++	/* formula for latency of lz77 compression */
++	cycle_lz77_decompress = div_u64(each_input_size, 16);
++	cycle_lz77_decompress =
++		cycle_lz77_decompress * div_u64(compress_way, decompress_way);
++
++	unit->dst_size = div_u64(in_len * 100, lz_compress_ratio);
++	unit->consumed_cycles += cycle_lz77_decompress;
++	unit->delay_cycles = div_u64(unit->consumed_cycles * host_cpu_clk_freq,
++				     cxl_pnm_clk_freq);
++
++	// pr_info("[PNM] LZ77 DECOMPRESS, CYCLES %ld  SIZE %d\n",
++	//         cycle_lz77_decompress, unit->dst_size);
++
++	return ret;
++}
++
++/* output of compression unit is directly written to dst buffer */
++static int encode_huffman(struct unit_info *unit)
++{
++	int ret = 0;
++	struct instruction *fetched_inst = &unit->inst;
++	size_t in_len = fetched_inst->src_size;
++
++	/* variables for calculating latency of huffman encoding */
++	size_t cycle_huffman_encode = 0;
++
++	size_t lz_output = div_u64(in_len * lz_compress_ratio, 100);
++	size_t each_input = div_u64(lz_output, 4); /* M */
++	size_t tmp_input = div_u64(each_input * 8, ilog2(huffman_symbols));
++
++	size_t freq_counter = div_u64(tmp_input, huffman_freq_counter_parallel);
++	size_t merge_sorter = ilog2(huffman_symbols); /* log2(# symbols) */
++	size_t code_table_gen = huffman_symbols + 4;
++	size_t tree_selector = 1;
++	size_t shifter = div_u64(tmp_input, huffman_parallel_level);
++	size_t or_operation = 1;
++	size_t resizer = 1;
++
++	/* formula for latency of huffman encoding */
++	cycle_huffman_encode = freq_counter + merge_sorter + code_table_gen +
++			       tree_selector + shifter + or_operation + resizer;
++
++	unit->dst_size = div_u64(lz_output * huffman_compress_ratio, 100);
++	unit->consumed_cycles += cycle_huffman_encode;
++	unit->delay_cycles = div_u64(unit->consumed_cycles * host_cpu_clk_freq,
++				     cxl_pnm_clk_freq);
++
++	// pr_info("[PNM] HUFFMAN ENCODE, CYCLES %ld  SIZE %d\n",
++	//         cycle_huffman_encode, unit->dst_size);
++
++	return ret;
++}
++
++static int decode_huffman(struct unit_info *unit)
++{
++	int ret = 0;
++	size_t in_len = div_u64(PAGE_SIZE * lz_compress_ratio, 100);
++
++	/* variables for calculating latency of huffman decoding */
++	size_t cycle_huffman_decode = 0;
++
++	size_t huffman_input = div_u64(in_len * huffman_compress_ratio, 100);
++	size_t each_input = div_u64(huffman_input * 8, compress_way);
++
++	size_t input_buffer = 1;
++	size_t search_logic = 1;
++
++	size_t decompress_engine = div_u64(each_input, bit_parallel_level);
++
++	/* formula for latency of huffman decoding */
++	WARN_ON(compress_way < decompress_way);
++	cycle_huffman_decode = meta_read_latency + input_buffer + search_logic +
++			       decompress_engine;
++	cycle_huffman_decode =
++		cycle_huffman_decode * div_u64(compress_way, decompress_way);
++
++	unit->dst_size = in_len;
++	unit->consumed_cycles += cycle_huffman_decode;
++
++	// pr_info("[PNM] HUFFMAN DECODE, CYCLES %ld  SIZE %d\n",
++	//         cycle_huffman_decode, unit->dst_size);
++
++	return ret;
++}
++
++static void transmit_page_to_dstpage(struct unit_info *unit)
++{
++}
++
++static void transmit_zpage_to_dstpage(struct unit_info *unit)
++{
++}
++
++/* Cycle delay function for simulator */
++static void delay_cycles(int cycles)
++{
++	int i;
++
++	for (i = 0; i < cycles; i++)
++		asm volatile("nop" ::: "memory");
++}
++
++/* functions to predict the performance improvement of pnm offloading */
++int pnm_compress_sim(struct unit_info *unit, void __iomem *hidden_pool)
++{
++	struct instruction *fetched_inst = &unit->inst;
++	unsigned char *in = fetched_inst->src_addr;
++	/* this is for backup of original page in hidden pool */
++	pgoff_t offset = fetched_inst->offset;
++
++	u64 memcpy_start, memcpy_end;
++	u64 started, internal_time, finished;
++
++	internal_time = rdtsc_ordered();
++	started = unit->started;
++
++	/* hidden space for simulator */
++	memcpy_start = rdtsc_ordered();
++	if (cpu_feature_enabled(X86_FEATURE_AVX512F))
++		memcpy_nta(hidden_pool + (offset << 12), in, PAGE_SIZE);
++	else
++		memcpy(hidden_pool + (offset << 12), in, PAGE_SIZE);
++
++	memcpy_end = rdtsc_ordered();
++	WARN_ON((offset << 12) > HIDDEN_POOL_SIZE);
++
++	write_page_to_srcbuf(unit);
++
++	lz77_compress_page(unit);
++
++	encode_huffman(unit);
++
++	transmit_zpage_to_dstpage(unit);
++
++	finished = rdtsc_ordered();
++
++	while ((finished - started) < unit->delay_cycles) {
++		delay_cycles(1);
++		finished = rdtsc_ordered();
++	}
++
++	if (unlikely(log_enabled))
++		pr_info("[PNM] COMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
++			fetched_inst->offset, unit->dst_size,
++			unit->consumed_cycles, unit->delay_cycles,
++			finished - started, memcpy_end - memcpy_start);
++
++	return 0;
++}
++
++int pnm_decompress_sim(struct unit_info *unit, void __iomem *hidden_pool)
++{
++	struct instruction *fetched_inst = &unit->inst;
++	unsigned char *out = fetched_inst->dst_addr;
++	pgoff_t offset = fetched_inst->offset;
++
++	u64 memcpy_start, memcpy_end;
++	u64 started, finished;
++
++	started = unit->started;
++
++	/* hidden space for simulator */
++	memcpy_start = rdtsc_ordered();
++	if (cpu_feature_enabled(X86_FEATURE_AVX512F))
++		memcpy_nta(out, hidden_pool + (offset << 12), PAGE_SIZE);
++	else
++		memcpy(out, hidden_pool + (offset << 12), PAGE_SIZE);
++
++	memcpy_end = rdtsc_ordered();
++	WARN_ON((offset << 12) > HIDDEN_POOL_SIZE);
++
++	write_zpage_to_srcbuf(unit);
++
++	decode_huffman(unit);
++
++	lz77_decompress_page(unit);
++
++	transmit_page_to_dstpage(unit);
++
++	finished = rdtsc_ordered();
++
++	while ((finished - started) < unit->delay_cycles) {
++		delay_cycles(1);
++		finished = rdtsc_ordered();
++	}
++
++	if (unlikely(log_enabled))
++		pr_info("[PNM] DECOMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
++			fetched_inst->offset, unit->dst_size,
++			unit->consumed_cycles, unit->delay_cycles,
++			finished - started, memcpy_end - memcpy_start);
++
++	return 0;
++}
++
++MODULE_AUTHOR("Samsung");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("compression unit");
+diff --git a/drivers/pnm/zswap/compress_unit.h b/drivers/pnm/zswap/compress_unit.h
+new file mode 100644
+index 000000000..c42b39349
+--- /dev/null
++++ b/drivers/pnm/zswap/compress_unit.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __COMPRESSION_UNIT_H__
++#define __COMPRESSION_UNIT_H__
++
++#include <linux/pnm/cxl_zswap.h>
++#include <linux/pnm/cxl_zswap_sim.h>
++
++// Functions to predict the performance improvement of
++// PNM offloading
++int pnm_compress_sim(struct unit_info *c_unit, void __iomem *hidden_pool);
++
++int pnm_decompress_sim(struct unit_info *d_unit, void __iomem *hidden_pool);
++
++#endif /* __COMPRESSION_UNIT_H__ */
+diff --git a/drivers/pnm/zswap/cxl_pnm_drv.c b/drivers/pnm/zswap/cxl_pnm_drv.c
+new file mode 100644
+index 000000000..7a3b4aa1d
+--- /dev/null
++++ b/drivers/pnm/zswap/cxl_pnm_drv.c
+@@ -0,0 +1,554 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#include <linux/io.h>
++#include <linux/debugfs.h>
++#include <linux/kernel.h>
++#include <linux/kthread.h> //kthread_create(), kthread_run()
++#include <linux/list.h>
++#include <linux/mm.h>
++#include <linux/mm_types.h>
++#include <linux/module.h>
++#include <asm/timer.h>
++#include <linux/pnm/cxl_zswap_driver.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++
++// #define IOAT_DMA
++
++#define DRV_CPU (8) // isolated CPU for PNM device driver
++
++// /********Definitions************/
++#define PNM_DEVICE_NAME ("pnm")
++
++#define PNM_DEBUG_ON 1
++#if defined(PNM_DEBUG_ON)
++#define pnm_debug(dev, fmt, arg...) dev_dbg(dev, fmt, ##arg)
++#else
++#define pnm_debug(fmt, arg...)
++#endif
++
++/*********************************
++ * PNM Device Driver Parameters
++ **********************************/
++
++/* Enable/disable cxl_pnm_drv */
++static bool pnm_drv_enabled;
++static int cxl_pnm_drv_run(const char *, const struct kernel_param *);
++static const struct kernel_param_ops cxl_pnm_drv_run_param_ops = {
++	.set = cxl_pnm_drv_run,
++	.get = param_get_bool,
++};
++module_param_cb(pnm_drv_enabled, &cxl_pnm_drv_run_param_ops, &pnm_drv_enabled,
++		0644);
++
++// define global variable
++struct pnm_device *internal_dev;
++static atomic_t pnm_user = ATOMIC_INIT(1);
++
++// define helper macro for register/buffer set/get function definition
++#define SET_PNM_UNCACHE_FUNC(dev, offset, args, size)                        \
++	memcpy_toio(dev->uncache_mem_base_addr + offset, (const void *)args, \
++		    size)
++#define GET_PNM_UNCACHE_FUNC(dev, offset, args, size) \
++	memcpy_fromio((void *)args, dev->uncache_mem_base_addr + offset, size)
++#define SET_PNM_CACHE_FUNC(dev, offset, args, size) \
++	memcpy_toio(dev->cache_mem_base_addr + offset, (const void *)args, size)
++#define GET_PNM_CACHE_FUNC(dev, offset, args, size) \
++	memcpy_fromio((void *)args, dev->cache_mem_base_addr + offset, size)
++
++// get pnm hw info, need to modify to adapt to multiple devices
++void get_pnm_hw_info(struct cxl_pnm_hw_info *hw_info)
++{
++	hw_info->base_addr = CXL_PNM_BASE_ADDR;
++	hw_info->size = CXL_PNM_MEMORY_SIZE;
++}
++
++static int pnm_memory_init(struct pnm_device *dev)
++{
++	int ret = 0;
++
++	// get pnm hw info
++	get_pnm_hw_info(&(dev->hw_info));
++
++	// map physical memory address to kernel virtual address
++	dev->uncache_mem_base_addr = ioremap(
++		dev->hw_info.base_addr + UNCACHE_MEM_OFFSET, UNCACHE_MEM_SIZE);
++	dev->cache_mem_base_addr = ioremap_cache(
++		dev->hw_info.base_addr + CACHE_MEM_OFFSET, CACHE_MEM_SIZE);
++	if (!dev->uncache_mem_base_addr || !dev->cache_mem_base_addr) {
++		pr_err("[pnm_drv]: failed to ioremap memory for pnm device\n");
++		ret = -1;
++	}
++
++	return ret;
++}
++
++static int pnm_register_init(struct pnm_device *dev)
++{
++	int ret = 0;
++	enum CONF_REG_VAL enable_reg_val = ON;
++	enum CONF_REG_VAL exec_reg_val = OFF;
++	enum CONF_REG_VAL reset_reg_val = OFF;
++	enum STATUS_REG_VAL status_reg_val = IDLE;
++
++	// init config_reg value
++	set_reg_enable((unsigned long)&enable_reg_val, sizeof(enable_reg_val));
++	set_reg_exec((unsigned long)&exec_reg_val, sizeof(exec_reg_val));
++	set_reg_reset((unsigned long)&reset_reg_val, sizeof(reset_reg_val));
++
++	// set status register as IDLE
++	set_reg_status((unsigned long)&status_reg_val, sizeof(status_reg_val));
++
++	return ret;
++}
++
++// void pnm_run_zswap(unsigned long args, unsigned int size) {
++//     // TODO
++//     // 1 write instruction to INST_BUF
++//     // 2 set CONF_REG
++//     // then daemon thread is waked up
++//
++//      @LY-Zhang
++//      From Yuehua Dai:
++//      I think we may simplify DD logic.
++//      Basic logic for interactions between lib and driver could be as
++//      follows:
++//       1) lib call dd API to submit instructions to CXL_PNM
++//       2) lib call dd API to triger execution
++//       3) lib check CXL_PNM status by calling dd API to read status reg.
++//       4) lib call dd API to get results
++//       5) lib returns to app.
++//      From this sequence, i think dd will be greatly simplifed: just
++//      providing some synchronous APIs for lib, all the logic is handled by lib.
++//
++//     // struct pnm_device *pnmdev = internal_dev;
++//     memcpy_toio(internal_dev->inst_buf_addr, (const void *)args, size);
++// }
++// EXPORT_SYMBOL(pnm_run_zswap);
++
++// set/get instruction buffer
++void set_buf_inst(unsigned long args, unsigned int size)
++{
++	SET_PNM_UNCACHE_FUNC(internal_dev, CXL_PNM_OFFSET_INST_BUF, args, size);
++}
++// EXPORT_SYMBOL(set_buf_inst);
++
++void get_buf_inst(unsigned long args, unsigned int size)
++{
++	GET_PNM_UNCACHE_FUNC(internal_dev, CXL_PNM_OFFSET_INST_BUF, args, size);
++}
++// EXPORT_SYMBOL(get_buf_inst);
++
++// set/get enable register
++void set_reg_enable(unsigned long args, unsigned int size)
++{
++	SET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_EN, args, size);
++}
++// EXPORT_SYMBOL(set_reg_enable);
++void get_reg_enable(unsigned long args, unsigned int size)
++{
++	GET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_EN, args, size);
++}
++// EXPORT_SYMBOL(get_reg_enable);
++
++// set/get exec register
++void set_reg_exec(unsigned long args, unsigned int size)
++{
++	SET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_EXEC, args, size);
++}
++// EXPORT_SYMBOL(set_reg_exec);
++void get_reg_exec(unsigned long args, unsigned int size)
++{
++	GET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_EXEC, args, size);
++}
++// EXPORT_SYMBOL(get_reg_exec);
++
++// set/get reset register
++void set_reg_reset(unsigned long args, unsigned int size)
++{
++	SET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_RESET, args, size);
++}
++// EXPORT_SYMBOL(set_reg_reset);
++void get_reg_reset(unsigned long args, unsigned int size)
++{
++	GET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_RESET, args, size);
++}
++// EXPORT_SYMBOL(get_reg_reset);
++
++// set/get status register
++void set_reg_status(unsigned long args, unsigned int size)
++{
++	SET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_STATUS, args, size);
++}
++// EXPORT_SYMBOL(set_reg_status);
++void get_reg_status(unsigned long args, unsigned int size)
++{
++	GET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_STATUS, args, size);
++}
++// EXPORT_SYMBOL(get_reg_status);
++
++// set/get result buffer
++void set_buf_res(unsigned long args, unsigned int size)
++{
++	SET_PNM_CACHE_FUNC(internal_dev, CXL_PNM_OFFSET_RSLT_BUF, args, size);
++}
++// EXPORT_SYMBOL(set_buf_res);
++void get_buf_res(unsigned long args, unsigned int size)
++{
++	GET_PNM_CACHE_FUNC(internal_dev, CXL_PNM_OFFSET_RSLT_BUF, args, size);
++}
++// EXPORT_SYMBOL(get_buf_res);
++
++// set/get page_cache_full register
++void set_reg_tmp_addr(unsigned long args, unsigned int size)
++{
++	SET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_MEM_BASE_ADDR, args, size);
++}
++// EXPORT_SYMBOL(set_reg_tmp_addr);
++void get_reg_tmp_addr(unsigned long args, unsigned int size)
++{
++	GET_PNM_UNCACHE_FUNC(internal_dev, REG_PNM_MEM_BASE_ADDR, args, size);
++}
++// EXPORT_SYMBOL(get_reg_tmp_addr);
++
++int pnm_driver_run(struct instruction *instbuf, size_t *out_len)
++{
++	return cxl_pnm_offload(instbuf, out_len);
++}
++
++static int pnm_open(struct inode *inode, struct file *filp)
++{
++	// From Yuehua Dai.
++	// @LY-Zhang needs to be sure what's private_data here?
++	// As i understand, here, private_data should be NULL?
++	// Basic logic is check file status, and alloca private dev data, and then
++	// assign to private data.
++	// struct miscdevice *miscdev = filp->private_data;
++	// struct pnm_device *pnmdev =
++	// container_of(miscdev, struct pnm_device, mdev);
++
++	if (!atomic_dec_and_test(&pnm_user)) {
++		atomic_inc(&pnm_user);
++		return -EBUSY;
++	}
++
++	// filp->private_data = pnmdev;
++	return 0;
++}
++
++static int pnm_release(struct inode *inode, struct file *filp)
++{
++	atomic_inc(&pnm_user);
++	return 0;
++}
++
++union pnm_ctl_data {
++	enum CONF_REG_VAL conf_reg_val;
++	struct instruction new_inst;
++	size_t out_len;
++	unsigned long in_offset;
++};
++
++static long pnm_ioctl(struct file *filp, unsigned int cmd, unsigned long args)
++{
++	int ret = 0;
++	enum CONF_REG_VAL status = ON;
++	union pnm_ctl_data *data =
++		kzalloc(sizeof(union pnm_ctl_data), GFP_KERNEL);
++	int ioctl_dir = _IOC_DIR(cmd);
++
++	if (_IOC_TYPE(cmd) != PNM_IOC_MAGIC || _IOC_NR(cmd) < PNM_IOC_MIN_NR ||
++	    _IOC_NR(cmd) > PNM_IOC_MAX_NR) {
++		pr_err("[pnm_drv]: invalid ioctl req:%d\n", _IOC_NR(cmd));
++		return -EINVAL;
++	}
++
++	if (copy_from_user(data, (void __user *)args, _IOC_SIZE(cmd))) {
++		pr_info("[pnm_drv]: copy_from_user failed\n");
++		return -EFAULT;
++	}
++	switch (cmd) {
++	case PNM_IOC_ZCXL_FRONTSWAP_STORE: {
++		// when test zcxl_frontswap_store API, uncommet line 296-308
++		// u64 started, finished;
++		// struct page *src_page = alloc_page(GFP_KERNEL);
++		// unsigned type = 0;
++		// memset(page_address(src_page), 1, PAGE_SIZE);
++		// started = rdtsc_ordered();
++		// int ret = zcxl_frontswap_store(type, data->in_offset, src_page);
++		// finished = rdtsc_ordered();
++		// if (ret != 0) {
++		//     pr_err("err: failed zcxl_frontswap_store.\n");
++		// }
++		// pr_info("[PNM] zcxl_frontswap_store %lld cycles, Offset[%ld]\n",
++		//             finished - started, data->in_offset);
++		// __free_page(src_page);
++		break;
++	}
++	case PNM_IOC_ZCXL_FRONTSWAP_LOAD: {
++		// when test zcxl_frontswap_load API, uncommet line 313-333
++		// u64 started, finished;
++		// struct page *src_page = alloc_page(GFP_KERNEL);
++		// unsigned type = 0;
++		// int i;
++		// memset(page_address(src_page), 0, PAGE_SIZE);
++		// started = rdtsc_ordered();
++		// int ret = zcxl_frontswap_load(type, data->in_offset, src_page);
++		// finished = rdtsc_ordered();
++		// if (ret != 0) {
++		//     pr_err("err: failed zcxl_frontswap_load.\n");
++		// }
++		// pr_info("[PNM] zcxl_frontswap_load %lld cycles, Offset[%ld]\n",
++		//             finished - started, data->in_offset);
++		// u8 *ptr = page_address(src_page);
++		// for (i = 0; i < PAGE_SIZE; i++) {
++		//     if (ptr[i] != 1) {
++		//         pr_err("err: failed zcxl_frontswap_load.\n");
++		//         break;
++		//     }
++		// }
++		// __free_page(src_page);
++		break;
++	}
++	case PNM_IOC_RUN_ZSWAP: {
++		set_buf_inst(args, _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_SET_ENABLE_REG: {
++		set_reg_enable(args, _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_GET_ENABLE_REG: {
++		get_reg_enable((unsigned long)&data->conf_reg_val,
++			       _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_SET_EXEC_REG: {
++		set_reg_exec(args, _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_SET_RESET_REG: {
++		set_reg_reset(args, _IOC_SIZE(cmd));
++		set_reg_enable((unsigned long)&status, 4);
++		break;
++	}
++	case PNM_IOC_SET_STATUS_REG: {
++		set_reg_status(args, _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_GET_STATUS_REG: {
++		get_reg_status(args, _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_GET_RES_BUFF: {
++		get_buf_res(args, _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_SET_TMP_ADDR_REG: {
++		set_reg_tmp_addr(args, _IOC_SIZE(cmd));
++		break;
++	}
++	case PNM_IOC_GET_TMP_ADDR_REG: {
++		get_reg_tmp_addr(args, _IOC_SIZE(cmd));
++		break;
++	}
++	default: {
++		return -ENOTTY;
++	}
++	};
++
++	if (ioctl_dir & _IOC_READ) {
++		if (copy_to_user((void __user *)args, data, _IOC_SIZE(cmd))) {
++			pr_err("[pnm_drv]: copy to user failed\n");
++			return -EFAULT;
++		}
++	}
++	return ret;
++}
++
++/*
++ * @LY-Zhang
++ * From Yuehua Dai: from driver view of point, we have ioctl to get/set reg
++ * values. libs or simulator can read/write CXL_PNM memory through mmap. It
++ * seems that read/write are not needed. So, we need to consider the neccessity
++ * of read/write here
++ */
++ssize_t pnm_read_iter(struct kiocb *iocb, struct iov_iter *to)
++{
++	// TODO
++	return 0;
++}
++
++ssize_t pnm_write_iter(struct kiocb *iocb, struct iov_iter *from)
++{
++	// TODO
++	return 0;
++}
++
++static const struct file_operations pnm_fops = {
++	.owner = THIS_MODULE,
++	.open = pnm_open,
++	.release = pnm_release,
++	.unlocked_ioctl = pnm_ioctl,
++	.read_iter = pnm_read_iter,
++	.write_iter = pnm_write_iter,
++};
++
++// TODO
++static int kt_daemon(void *__unused)
++{
++	return 0;
++}
++
++static int _cxl_pnm_drv_run(void)
++{
++	struct task_struct *exec_daemon;
++	int ret = 0;
++	// create pnm device
++	struct pnm_device *pnmdev;
++
++	pnmdev = kzalloc(sizeof(struct pnm_device), GFP_KERNEL);
++	if (!pnmdev) {
++		ret = -ENOMEM;
++		goto end;
++	}
++	// set device information and register the device
++	pnmdev->mdev.minor = MISC_DYNAMIC_MINOR;
++	pnmdev->mdev.name = PNM_DEVICE_NAME;
++	pnmdev->mdev.fops = &pnm_fops;
++	pnmdev->mdev.parent = NULL;
++	ret = misc_register(&pnmdev->mdev);
++	if (ret) {
++		pr_err("[pnm_drv]: failed to register pnm misc device\n");
++		goto reg_error;
++	}
++	pr_info("[pnm_drv]: successfully register pnm misc device\n");
++
++	// create and run daemon thread
++	exec_daemon = kthread_create(kt_daemon, NULL, "kt-pnm-drv-daemon");
++	if (!IS_ERR(exec_daemon)) {
++		pr_err("[pnm_drv]: kthread_bind\n");
++		kthread_bind(exec_daemon, DRV_CPU);
++		pr_err("[pnm_drv]: wake_up_process\n");
++		wake_up_process(exec_daemon);
++	} else {
++		WARN_ON(1);
++	}
++
++	// create debug fs
++	pnmdev->debug_fs = debugfs_create_dir("pnm", NULL);
++	if (!pnmdev->debug_fs)
++		pr_err("[pnm_drv]: failed to create debug fs for pnm\n");
++	pnm_debug(pnmdev->mdev.this_device, "[pnm_drv]: init done\n");
++	internal_dev = pnmdev;
++
++	// init memory for pnm device
++	if (pnm_memory_init(pnmdev)) {
++		pr_err("[pnm_drv]: failed to init pnm memory info\n");
++		goto mem_error;
++	}
++
++	// init register for pnm device
++	pnm_register_init(pnmdev);
++
++	return ret;
++
++mem_error:
++	misc_deregister(&pnmdev->mdev);
++	debugfs_remove_recursive(pnmdev->debug_fs);
++
++reg_error:
++	kfree(pnmdev);
++
++end:
++	return ret;
++}
++
++static struct pnm_driver pnm_zcxl_driver = {
++	.type = "pnm",
++	.owner = THIS_MODULE,
++	.set_buf_inst = set_buf_inst,
++	.get_buf_inst = get_buf_inst,
++	.set_reg_enable = set_reg_enable,
++	.get_reg_enable = get_reg_enable,
++	.set_reg_exec = set_reg_exec,
++	.get_reg_exec = get_reg_exec,
++	.set_reg_reset = set_reg_reset,
++	.get_reg_reset = get_reg_reset,
++	.set_reg_status = set_reg_status,
++	.get_reg_status = get_reg_status,
++	.get_buf_res = get_buf_res,
++	.set_buf_res = set_buf_res,
++	.set_reg_tmp_addr = set_reg_tmp_addr,
++	.get_reg_tmp_addr = get_reg_tmp_addr,
++	.pnm_driver_run = pnm_driver_run,
++};
++MODULE_ALIAS("zcxl-pnm");
++
++static int cxl_pnm_drv_run(const char *val, const struct kernel_param *kp)
++{
++	int ret = 0;
++
++	pr_info("[pnm_drv]: %s\n", __func__);
++
++	// init cxl pnm device
++	ret = _cxl_pnm_drv_run();
++	if (ret < 0)
++		pr_err("[pnm_drv]: %s failed\n", __func__);
++
++	// register pnm_driver
++	pnm_register_driver(&pnm_zcxl_driver);
++	pr_info("[pnm_drv]: cxl_pnm_drv loaded\n");
++
++	// request dma chann
++#ifdef IOAT_DMA
++	if (dma_request_chann() == -1)
++		pr_err("[pnm_drv]: dma_request_chann failed\n");
++#endif
++
++	return param_set_bool(val, kp);
++}
++
++static int __init pnm_drv_init(void)
++{
++	pr_info("[pnm_drv]: %s\n", __func__);
++
++	return 0;
++}
++
++static void __exit pnm_drv_exit(void)
++{
++	struct pnm_device *pnmdev = internal_dev;
++	// unmap physical memory
++	iounmap(pnmdev->uncache_mem_base_addr);
++	iounmap(pnmdev->cache_mem_base_addr);
++
++	// unregister misc device
++	misc_deregister(&pnmdev->mdev);
++
++	// remove debugfs
++	debugfs_remove_recursive(pnmdev->debug_fs);
++
++	// free pnmdev
++	kfree(pnmdev);
++
++	// unregister pnm driver
++	pnm_unregister_driver(&pnm_zcxl_driver);
++
++	// release dma chan
++#ifdef IOAT_DMA
++	if (dma_release_chann() == -1)
++		pr_err("[pnm_drv]: dma_release_chann failed\n");
++#endif
++
++	pr_info("unloaded.\n");
++}
++
++MODULE_AUTHOR("Samsung");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("device driver for pnm simulator");
++
++module_init(pnm_drv_init);
++module_exit(pnm_drv_exit);
+diff --git a/drivers/pnm/zswap/pnm_sim.c b/drivers/pnm/zswap/pnm_sim.c
+new file mode 100644
+index 000000000..d188eba8e
+--- /dev/null
++++ b/drivers/pnm/zswap/pnm_sim.c
+@@ -0,0 +1,705 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++
++#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
++
++#include <asm/barrier.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <asm/msr.h>
++#include <asm/timer.h>
++#include <linux/circ_buf.h>
++#include <linux/delay.h>
++#include <linux/freezer.h>
++#include <linux/init.h>
++#include <linux/irqflags.h>
++#include <linux/kthread.h>
++#include <linux/ktime.h>
++#include <linux/list.h>
++#include <linux/lzo.h>
++#include <linux/module.h>
++#include <linux/pnm/cxl_zswap.h>
++#include <linux/pnm/cxl_zswap_driver.h>
++#include <linux/pnm/cxl_zswap_sim.h>
++#include <linux/sched.h>
++#include <linux/semaphore.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++#include <linux/vmalloc.h>
++#include <linux/workqueue.h>
++
++#include "compress_unit.h"
++
++static struct pnm_info *pnm_ctrl;
++
++/* Kill ktheads for system halt */
++static bool sim_should_stop;
++
++/*********************************
++ * PNM Simulator Parameters
++ **********************************/
++
++/* Set the maximum number of compress logic */
++static unsigned int num_comp_unit = 4;
++module_param_named(num_comp_unit, num_comp_unit, uint, 0644);
++
++/* Set the maximum number of decompress logic */
++static unsigned int num_dcomp_unit = 4;
++module_param_named(num_dcomp_unit, num_dcomp_unit, uint, 0644);
++
++/* Set the maximum number of (de)compress logic */
++static unsigned int inst_queue_depth = 8;
++module_param_named(inst_queue_depth, inst_queue_depth, uint, 0644);
++
++/* Set the maximum number of completion queue */
++static unsigned int completion_queue_depth = 8;
++module_param_named(completion_queue_depth, completion_queue_depth, uint, 0644);
++
++/* Set the start core for pnm units */
++static unsigned int pnm_core = 8;
++module_param_named(pnm_core, pnm_core, uint, 0644);
++
++/* Timeout for poll nsec */
++static unsigned long unit_poll_ns = 100000;
++module_param_named(unit_poll_ns, unit_poll_ns, ulong, 0644);
++
++/* Timeout for poll nsec */
++static unsigned long read_poll_ns = 10000000000;
++module_param_named(read_poll_ns, read_poll_ns, ulong, 0644);
++
++/* Enable/disable log for simulator */
++static bool log_enabled;
++module_param_named(log_enabled, log_enabled, bool, 0644);
++
++/* Enable/disable pnm_simulator */
++static bool pnm_sim_enabled;
++static int pnm_sim_setup(const char *, const struct kernel_param *);
++static const struct kernel_param_ops pnm_sim_param_ops = {
++	.set = pnm_sim_setup,
++	.get = param_get_bool,
++};
++module_param_cb(enabled, &pnm_sim_param_ops, &pnm_sim_enabled, 0644);
++
++/* for compression */
++int inst_comp(struct instruction *pnm_inst, size_t *out_len)
++{
++	int pnm_id;
++	pid_t tid = current->pid;
++	int status = CXL_PNM_FAILURE;
++	ktime_t kstarted, kdeadline;
++	u64 started;
++
++	started = rdtsc();
++
++	// unit scheduling with round robin policy
++	//  1.  find an unit which is idle
++	//  2.  insert an instruction into unit->inst
++	//  3.  change the state of pnm selected
++	spin_lock(&pnm_ctrl->compress_lock);
++	if (unlikely(log_enabled))
++		pr_info("[HOST-C][%d] IDLE UNITs %d\n", tid,
++			atomic_read(&pnm_ctrl->num_idle_comp_unit));
++
++	if (atomic_read(&pnm_ctrl->num_idle_comp_unit) == 0) {
++		spin_unlock(&pnm_ctrl->compress_lock);
++		pr_info("all compress unit is utilized\n");
++		return status;
++	}
++
++	for (pnm_id = 0; pnm_id < pnm_ctrl->num_compress; pnm_id++) {
++		/* to check if an unit is idle */
++		if (READ_ONCE(pnm_ctrl->compress[pnm_id].is_idle)) {
++			atomic_dec(&pnm_ctrl->num_idle_comp_unit);
++			WRITE_ONCE(pnm_ctrl->compress[pnm_id].is_idle, false);
++			status = CXL_PNM_APPROVAL;
++			break;
++		}
++	}
++	spin_unlock(&pnm_ctrl->compress_lock);
++
++	if (status != CXL_PNM_APPROVAL)
++		return status;
++
++	if (unlikely(log_enabled))
++		pr_info("[HOST-C][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
++			tid, pnm_id, pnm_ctrl->compress[pnm_id].state,
++			atomic_read(&pnm_ctrl->num_idle_comp_unit));
++
++	pnm_ctrl->compress[pnm_id].started = started;
++
++	/* fetch the instruction to selected pnm unit */
++	memcpy(&pnm_ctrl->compress[pnm_id].inst, pnm_inst,
++	       sizeof(struct instruction));
++
++	/* update the state of pnm unit */
++	WRITE_ONCE(pnm_ctrl->compress[pnm_id].state, RUNNING);
++
++	/* wait for result of pnm with polling */
++	kstarted = ktime_get();
++	kdeadline = ktime_add_ns(kstarted, read_poll_ns);
++	do {
++		if (pnm_ctrl->compress[pnm_id].done) {
++			*out_len = pnm_ctrl->compress[pnm_id].dst_size;
++
++			if (unlikely(log_enabled))
++				pr_info("[HOST-C][%d] READ RESULT [%d] [%ld]\n",
++					tid, pnm_id, *out_len);
++
++			WRITE_ONCE(pnm_ctrl->compress[pnm_id].state, IDLE);
++			WRITE_ONCE(pnm_ctrl->compress[pnm_id].is_idle, true);
++			atomic_inc(&pnm_ctrl->num_idle_comp_unit);
++			return CXL_PNM_SUCCESS;
++		}
++	} while (ktime_before(ktime_get(), kdeadline));
++
++	WRITE_ONCE(pnm_ctrl->compress[pnm_id].state, FAILED);
++	WRITE_ONCE(pnm_ctrl->compress[pnm_id].is_idle, true);
++	atomic_inc(&pnm_ctrl->num_idle_comp_unit);
++
++	if (unlikely(log_enabled))
++		/* Timeout: Failed to get result */
++		pr_info("[HOST-C][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
++			pnm_ctrl->compress[pnm_id].commit.tid,
++			ktime_get() - kstarted);
++
++	return status;
++}
++
++/* for decompression */
++int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
++{
++	int pnm_id;
++	pid_t tid = current->pid;
++	int status = CXL_PNM_FAILURE;
++	ktime_t kstarted, kdeadline;
++	u64 started;
++
++	started = rdtsc();
++
++	//[TODO, ]: need to execute software decompression when there are not idle units
++	if (unlikely(log_enabled))
++		pr_info("[HOST-D][%d] IDLE UNITs %d\n", tid,
++			atomic_read(&pnm_ctrl->num_idle_decomp_unit));
++
++	while (!sim_should_stop) {
++		if (atomic_read(&pnm_ctrl->num_idle_decomp_unit) > 0)
++			break;
++	}
++
++	// unit scheduling with round robin policy
++	//  1.  find an unit which is idle
++	//  2.  insert an instruction into unit->inst
++	//  3.  change the state of pnm selected
++	spin_lock(&pnm_ctrl->decompress_lock);
++	for (pnm_id = 0; pnm_id < pnm_ctrl->num_decompress; pnm_id++) {
++		/* to check if an unit is idle */
++		if (READ_ONCE(pnm_ctrl->decompress[pnm_id].is_idle)) {
++			atomic_dec(&pnm_ctrl->num_idle_decomp_unit);
++			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].is_idle, false);
++			status = CXL_PNM_APPROVAL;
++			break;
++		}
++	}
++	spin_unlock(&pnm_ctrl->decompress_lock);
++
++	if (status != CXL_PNM_APPROVAL)
++		return status;
++
++	if (unlikely(log_enabled))
++		pr_info("[HOST-D][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
++			tid, pnm_id, pnm_ctrl->decompress[pnm_id].state,
++			atomic_read(&pnm_ctrl->num_idle_decomp_unit));
++
++	pnm_ctrl->decompress[pnm_id].started = started;
++
++	/* fetch the instruction to selected pnm unit */
++	memcpy(&pnm_ctrl->decompress[pnm_id].inst, pnm_inst,
++	       sizeof(struct instruction));
++
++	/* update the state of pnm unit */
++	WRITE_ONCE(pnm_ctrl->decompress[pnm_id].state, RUNNING);
++
++	/* wait for result of pnm with polling */
++	kstarted = ktime_get();
++	kdeadline = ktime_add_ns(kstarted, read_poll_ns);
++	do {
++		/* to check if state of pnm_unit is DONE */
++		if (READ_ONCE(pnm_ctrl->decompress[pnm_id].done)) {
++			*out_len = pnm_ctrl->decompress[pnm_id].dst_size;
++
++			if (unlikely(log_enabled))
++				pr_info("[HOST-D][%d] READ RESULT [%d] [%ld]\n",
++					tid, pnm_id, *out_len);
++
++			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].state, IDLE);
++			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].is_idle, true);
++			atomic_inc(&pnm_ctrl->num_idle_decomp_unit);
++			return CXL_PNM_SUCCESS;
++		}
++	} while (ktime_before(ktime_get(), kdeadline));
++
++	WRITE_ONCE(pnm_ctrl->decompress[pnm_id].state, FAILED);
++	WRITE_ONCE(pnm_ctrl->decompress[pnm_id].is_idle, true);
++	atomic_inc(&pnm_ctrl->num_idle_decomp_unit);
++
++	if (unlikely(log_enabled))
++		pr_info("[HOST-D][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
++			pnm_ctrl->decompress[pnm_id].commit.tid,
++			ktime_get() - kstarted);
++
++	return status;
++}
++
++/* functions to predict the performance improvement of pnm offloading */
++int cxl_pnm_offload(struct instruction *pnm_inst, size_t *out_len)
++{
++	int status;
++
++	if (unlikely(log_enabled))
++		pr_info("[HOST] OFFLOADING TO PNM\n");
++
++	if (pnm_inst->opcode == CXL_PNM_OP_COMP_STORE) {
++		status = inst_comp(pnm_inst, out_len);
++
++		if (unlikely(log_enabled))
++			pr_info("[HOST] PNM COMPRESSION FINISHED %d\n", status);
++	} else if (pnm_inst->opcode == CXL_PNM_OP_DECOMP_LOAD) {
++		status = inst_decomp(pnm_inst, out_len);
++
++		if (unlikely(log_enabled))
++			pr_info("[HOST] PNM DECOMPRESSION FINISHED %d\n",
++				status);
++	} else {
++		pr_err("pnm opcode error %d\n", pnm_inst->opcode);
++		status = CXL_PNM_ERROR_INVALID_ARGUMENTS;
++	}
++
++	return status;
++}
++
++int pnm_compress_unit(void *p)
++{
++	int status;
++	struct unit_info *unit = (struct unit_info *)p;
++	struct commit *commit_out = &unit->commit;
++	ktime_t started, finished;
++
++	while (!kthread_should_stop() || !sim_should_stop) {
++		started = ktime_get();
++		finished = ktime_add_ns(started, unit_poll_ns);
++		do {
++			if (READ_ONCE(unit->state) & RUNNING)
++				break;
++
++			if (kthread_should_stop() || sim_should_stop)
++				break;
++
++		} while (ktime_before(ktime_get(), finished));
++
++		if (READ_ONCE(unit->state) & RUNNING) {
++			if (unlikely(log_enabled))
++				pr_info("[PNM-C][%d] STATE [RUNNING] - READY TO RUN\n",
++					unit->inst.tid);
++
++			/* for exception */
++			if (unit->inst.opcode != CXL_PNM_OP_COMP_STORE) {
++				/* update the state of pnm unit */
++				WRITE_ONCE(unit->state, FAILED);
++
++				if (unlikely(log_enabled))
++					pr_info("[PNM-C][%d] STATE [FAILED] - OPCODE ERROR\n",
++						unit->inst.tid);
++			}
++
++			/* execute compression unit */
++			status = pnm_compress_sim(unit, pnm_ctrl->hidden_pool);
++
++			/* init for next execution */
++			unit->started = 0;
++			unit->finished = 0;
++			unit->consumed_cycles = 0;
++			unit->delay_cycles = 0;
++
++			/* TODO: register update & completion queue */
++			commit_out->opcode = unit->inst.opcode;
++			commit_out->tid = unit->inst.tid;
++			commit_out->dst_size = unit->dst_size;
++			commit_out->offset = unit->inst.offset;
++			commit_out->status = CXL_PNM_SUCCESS;
++
++			/* update the state of pnm unit */
++			WRITE_ONCE(unit->state, DONE);
++			WRITE_ONCE(unit->done, true);
++
++			if (unlikely(log_enabled))
++				pr_info("[PNM-C][%d] STATE [DONE] - FINISH\n",
++					unit->inst.tid);
++
++			/* wait until the thread takes results */
++			while (!kthread_should_stop() || !sim_should_stop) {
++				if (READ_ONCE(unit->state) & IDLE) {
++					/* update statistics of pnm unit */
++					unit->num_used++;
++					unit->num_succ++;
++
++					WRITE_ONCE(unit->done, false);
++
++					if (unlikely(log_enabled))
++						pr_info("[PNM-C][%d] STATE [IDLE] - HOST GET RESULT\n",
++							unit->inst.tid);
++
++					break;
++				}
++
++				if (READ_ONCE(unit->state) & FAILED)
++					break;
++			}
++		}
++
++		if (READ_ONCE(unit->state) & FAILED) {
++			if (unlikely(log_enabled))
++				pr_info("[PNM-C][%d] STATE [FAILED]\n",
++					unit->inst.tid);
++
++			/* init for next execution */
++			unit->started = 0;
++			unit->finished = 0;
++			unit->consumed_cycles = 0;
++			unit->delay_cycles = 0;
++
++			/* TODO: register update & completion queue */
++			commit_out->opcode = 0;
++			commit_out->tid = 0;
++			commit_out->dst_size = 0;
++			commit_out->offset = 0;
++			commit_out->status = CXL_PNM_FAILURE;
++
++			/* update the state of pnm unit */
++			WRITE_ONCE(unit->state, IDLE);
++
++			if (unlikely(log_enabled))
++				pr_info("[PNM-C][%d] STATE [IDLE]\n",
++					unit->inst.tid);
++
++			/* update statistics of pnm unit */
++			unit->num_used++;
++			unit->num_failed++;
++
++			if (unlikely(log_enabled))
++				pr_info("[PNM-C][%d] IDLE UNITs %d\n",
++					unit->inst.tid,
++					atomic_read(
++						&pnm_ctrl->num_idle_comp_unit));
++		}
++	}
++
++	return 0;
++}
++
++int pnm_decompress_unit(void *p)
++{
++	int status;
++	struct unit_info *unit = (struct unit_info *)p;
++	struct commit *commit_out = &unit->commit;
++	ktime_t started, finished;
++
++	while (!kthread_should_stop() || !sim_should_stop) {
++		started = ktime_get();
++		finished = ktime_add_ns(started, unit_poll_ns);
++		do {
++			if (READ_ONCE(unit->state) & RUNNING)
++				break;
++
++			if (kthread_should_stop() || sim_should_stop)
++				break;
++
++		} while (ktime_before(ktime_get(), finished));
++
++		if (READ_ONCE(unit->state) & RUNNING) {
++			if (unlikely(log_enabled))
++				pr_info("[PNM-D][%d] STATE [RUNNING] - READY TO RUN\n",
++					unit->inst.tid);
++
++			/* for exception */
++			if (unit->inst.opcode != CXL_PNM_OP_DECOMP_LOAD) {
++				/* update the state of pnm unit */
++				WRITE_ONCE(unit->state, FAILED);
++
++				if (unlikely(log_enabled))
++					pr_info("[PNM-D][%d] STATE [FAILED] - OPCODE ERROR\n",
++						unit->inst.tid);
++			}
++
++			/* execute decompression unit */
++			status =
++				pnm_decompress_sim(unit, pnm_ctrl->hidden_pool);
++
++			/* init for next execution */
++			unit->started = 0;
++			unit->finished = 0;
++			unit->consumed_cycles = 0;
++			unit->delay_cycles = 0;
++
++			/* TODO: register update & completion queue */
++			commit_out->opcode = unit->inst.opcode;
++			commit_out->tid = unit->inst.tid;
++			commit_out->dst_size = unit->dst_size;
++			commit_out->offset = unit->inst.offset;
++			commit_out->status = CXL_PNM_SUCCESS;
++
++			/* update the state of pnm unit */
++			WRITE_ONCE(unit->state, DONE);
++			WRITE_ONCE(unit->done, true);
++
++			if (unlikely(log_enabled))
++				pr_info("[PNM-D][%d] STATE [DONE] - FINISH\n",
++					unit->inst.tid);
++
++			/* wait until the thread takes results */
++			while (!kthread_should_stop() || !sim_should_stop) {
++				if (READ_ONCE(unit->state) & IDLE) {
++					/* update statistics of pnm unit */
++					unit->num_used++;
++					unit->num_succ++;
++
++					WRITE_ONCE(unit->done, false);
++
++					if (unlikely(log_enabled))
++						pr_info("[PNM-D][%d] STATE [IDLE] - HOST GET RESULT\n",
++							unit->inst.tid);
++
++					break;
++				}
++
++				if (READ_ONCE(unit->state) & FAILED)
++					break;
++			}
++		}
++
++		if (READ_ONCE(unit->state) == FAILED) {
++			if (unlikely(log_enabled))
++				pr_info("[PNM-D][%d] STATE [FAILED]\n",
++					unit->inst.tid);
++
++			/* init for next execution */
++			unit->started = 0;
++			unit->finished = 0;
++			unit->consumed_cycles = 0;
++			unit->delay_cycles = 0;
++
++			/* TODO: register update & completion queue */
++			commit_out->opcode = 0;
++			commit_out->tid = 0;
++			commit_out->dst_size = 0;
++			commit_out->offset = 0;
++			commit_out->status = 0;
++
++			/* update the state of pnm unit */
++			WRITE_ONCE(unit->state, IDLE);
++
++			if (unlikely(log_enabled))
++				pr_info("[PNM-D][%d] STATE [IDLE]\n",
++					unit->inst.tid);
++
++			unit->num_used++;
++			unit->num_failed++;
++
++			if (unlikely(log_enabled))
++				pr_info("[PNM-D][%d] IDLE UNITs %d\n",
++					unit->inst.tid,
++					atomic_read(
++						&pnm_ctrl->num_idle_decomp_unit));
++		}
++	}
++
++	return 0;
++}
++
++static int __init cxl_pnm_sim_init(void)
++{
++	pr_info("[pnm_sim] simulator loaded!\n");
++	return 0;
++}
++
++static void __exit cxl_pnm_sim_exit(void)
++{
++	int i;
++
++	/* pnm_sim threads stop */
++	for (i = 0; i < pnm_ctrl->num_compress; i++)
++		kthread_stop(pnm_ctrl->compress[i].task_unit);
++
++	for (i = 0; i < pnm_ctrl->num_decompress; i++)
++		kthread_stop(pnm_ctrl->decompress[i].task_unit);
++
++	sim_should_stop = true;
++
++	pr_info("[pnm_sim] simulator exit!\n");
++}
++
++/* initialization for queues in PNM
++ *   - instruction queue for compress units
++ *   - instruction queue for decompress units
++ *   - completion queue for processed instructions
++ */
++static void pnm_queue_gen(void)
++{
++	pnm_ctrl->c_q.addr = ioremap_cache(C_QUEUE_BASE_ADDR, C_QUEUE_SIZE);
++	if (pnm_ctrl->c_q.addr != NULL) {
++		pnm_ctrl->c_q.size =
++			inst_queue_depth * sizeof(struct instruction);
++		pnm_ctrl->c_q.head = 0;
++		pnm_ctrl->c_q.tail = 0;
++		pr_info("[pnm_sim] compress_queue: 0x%p-0x%p %7d bytes\n",
++			(void *)C_QUEUE_BASE_ADDR, (void *)C_QUEUE_BASE_ADDR,
++			C_QUEUE_SIZE);
++	}
++
++	pnm_ctrl->d_q.addr = ioremap_cache(D_QUEUE_BASE_ADDR, D_QUEUE_SIZE);
++	if (pnm_ctrl->d_q.addr != NULL) {
++		pnm_ctrl->d_q.size =
++			inst_queue_depth * sizeof(struct instruction);
++		pnm_ctrl->d_q.head = 0;
++		pnm_ctrl->d_q.tail = 0;
++		pr_info("[pnm_sim] decompress_queue: 0x%p-0x%p %7d bytes\n",
++			(void *)D_QUEUE_BASE_ADDR,
++			(void *)D_QUEUE_BASE_ADDR + D_QUEUE_SIZE, D_QUEUE_SIZE);
++	}
++
++	pnm_ctrl->f_q.addr = ioremap_cache(F_QUEUE_BASE_ADDR, F_QUEUE_SIZE);
++	if (pnm_ctrl->f_q.addr != NULL) {
++		pnm_ctrl->f_q.size =
++			completion_queue_depth * sizeof(struct commit);
++		pnm_ctrl->f_q.head = 0;
++		pnm_ctrl->f_q.tail = 0;
++		pr_info("[pnm_sim] completion_queue: 0x%p-0x%p %7d bytes\n",
++			(void *)F_QUEUE_BASE_ADDR,
++			(void *)F_QUEUE_BASE_ADDR + F_QUEUE_SIZE, F_QUEUE_SIZE);
++	}
++}
++
++/* initialization for registers in PNM */
++static void pnm_register_init(void)
++{
++	pnm_ctrl->registers.enable = true;
++	pnm_ctrl->registers.execute = true;
++	pnm_ctrl->registers.c_q_occupancy = 0;
++	pnm_ctrl->registers.d_q_occupancy = 0;
++	pnm_ctrl->registers.f_q_occupancy = 0;
++}
++
++static void pnm_thread_create(void)
++{
++	int i;
++
++	/* initialization for compress unit */
++	for (i = 0; i < pnm_ctrl->num_compress; i++) {
++		pnm_ctrl->compress[i].core_id = pnm_core + i;
++		pnm_ctrl->compress[i].unit_id = i;
++		pnm_ctrl->compress[i].num_used = 0;
++		pnm_ctrl->compress[i].num_succ = 0;
++		pnm_ctrl->compress[i].num_failed = 0;
++		pnm_ctrl->compress[i].state = IDLE;
++		pnm_ctrl->compress[i].done = false;
++		pnm_ctrl->compress[i].is_idle = true;
++		pnm_ctrl->compress[i].consumed_cycles = 0;
++		pnm_ctrl->compress[i].delay_cycles = 0;
++		pnm_ctrl->compress[i].task_unit = kthread_create(
++			pnm_compress_unit, &pnm_ctrl->compress[i],
++			"pnm_compress_unit[%d]", i);
++		if (!IS_ERR(pnm_ctrl->compress[i].task_unit)) {
++			kthread_bind(pnm_ctrl->compress[i].task_unit,
++				     pnm_ctrl->compress[i].core_id);
++			wake_up_process(pnm_ctrl->compress[i].task_unit);
++			pr_info("[pnm_sim] compress unit[%d] generation succeeded\n",
++				i);
++		} else {
++			pr_info("[pnm_sim] compress unit[%d] generation failed\n",
++				i);
++		}
++	}
++
++	/* initialization for decompress unit */
++	for (i = 0; i < pnm_ctrl->num_decompress; i++) {
++		pnm_ctrl->decompress[i].core_id =
++			pnm_core + pnm_ctrl->num_decompress + i;
++		pnm_ctrl->decompress[i].unit_id = i;
++		pnm_ctrl->decompress[i].num_used = 0;
++		pnm_ctrl->decompress[i].num_succ = 0;
++		pnm_ctrl->decompress[i].num_failed = 0;
++		pnm_ctrl->decompress[i].state = IDLE;
++		pnm_ctrl->decompress[i].done = false;
++		pnm_ctrl->decompress[i].is_idle = true;
++		pnm_ctrl->decompress[i].consumed_cycles = 0;
++		pnm_ctrl->decompress[i].delay_cycles = 0;
++		pnm_ctrl->decompress[i].task_unit = kthread_create(
++			pnm_decompress_unit, &pnm_ctrl->decompress[i],
++			"pnm_decompress_unit[%d]", i);
++		if (!IS_ERR(pnm_ctrl->decompress[i].task_unit)) {
++			kthread_bind(pnm_ctrl->decompress[i].task_unit,
++				     pnm_ctrl->decompress[i].core_id);
++			wake_up_process(pnm_ctrl->decompress[i].task_unit);
++			pr_info("[pnm_sim] decompress unit[%d] generation succeeded\n",
++				i);
++		} else {
++			pr_info("[pnm_sim] decompress unit[%d] generation failed\n",
++				i);
++		}
++	}
++}
++
++static void pnm_unit_gen(void)
++{
++	pnm_queue_gen();
++
++	pnm_register_init();
++
++	/* generate kthreads for PNM simulator */
++	pnm_thread_create();
++
++	/* TODO: Print simulator information */
++	pnm_ctrl->is_active = true;
++}
++
++static void pnm_sim_init(void)
++{
++	/* Descriptor for info of PNM device */
++	pnm_ctrl = ioremap_cache(PNM_INFO_BASE_ADDR, PNM_INFO_SIZE);
++
++	/* TODO: limit num_comp_unit to MAX_UNIT, error check */
++	pnm_ctrl->num_compress = num_comp_unit;
++	pnm_ctrl->num_decompress = num_dcomp_unit;
++
++	atomic_set(&pnm_ctrl->num_idle_comp_unit, num_comp_unit);
++	atomic_set(&pnm_ctrl->num_idle_decomp_unit, num_dcomp_unit);
++
++	spin_lock_init(&pnm_ctrl->compress_lock);
++	spin_lock_init(&pnm_ctrl->decompress_lock);
++
++	/* TODO: change from cache to wc/uc */
++	pnm_ctrl->hidden_pool =
++		ioremap_cache(HIDDEN_POOL_BASE_ADDR, HIDDEN_POOL_SIZE);
++	pr_info("[pnm_sim] hidden_pool: 0x%p-0x%p %7ld bytes\n",
++		(void *)HIDDEN_POOL_BASE_ADDR,
++		(void *)HIDDEN_POOL_BASE_ADDR + HIDDEN_POOL_SIZE,
++		HIDDEN_POOL_SIZE);
++}
++
++static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
++{
++	pr_info("[pnm_sim] pnm simulator engine loaded!\n");
++
++	pnm_sim_init();
++
++	pnm_unit_gen();
++
++	return param_set_bool(val, kp);
++}
++
++module_init(cxl_pnm_sim_init);
++module_exit(cxl_pnm_sim_exit);
++
++MODULE_AUTHOR("Samsung");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("PNM zswap simulator");
+-- 
+2.34.1
+

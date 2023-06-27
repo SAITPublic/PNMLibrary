@@ -1,0 +1,46 @@
+From a4c42472727e04a8910948cba78aa43c4a619dcb Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Mon, 12 Sep 2022 15:50:24 +0300
+Subject: [PATCH 039/161] [axdimm] Add extra field to axd_memory_alloc
+
+Add `num_objects` field to `axd_memory_alloc`. This allows to easely
+serialize `axd_memory_alloc` in single ioctl call.
+
+Related to: AXDIMM-377
+---
+ drivers/dax/axdimm_allocator.c | 6 ++++++
+ include/uapi/linux/libaxdimm.h | 1 +
+ 2 files changed, 7 insertions(+)
+
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index accadfab3..9ae299f1e 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -446,6 +446,12 @@ static int get_allocation(struct axdimm_allocator *alloc,
+ 	list_for_each(ptr, &alloc->alloc_list) {
+ 		allocation = list_entry(ptr, struct axdimm_allocation, list);
+ 		if (allocation->descriptor == request->descriptor) {
++			if (request->num_objects < allocation->num_obj) {
++				AXDIMM_ERR(
++					"The output memory size is too small to store the %llu allocation objects.",
++					allocation->num_obj);
++				goto unlock;
++			}
+ 			AXDIMM_COPY_TO_USER(
+ 				err_code, request->objects, allocation->objects,
+ 				allocation->num_obj *
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 8067c3f72..a38e69215 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -114,6 +114,7 @@ struct axd_memory_alloc_request {
+ /* Get memory objects by descriptor */
+ struct axd_memory_alloc {
+ 	uint64_t descriptor;
++	uint64_t num_objects;
+ 	struct axd_memory_object *objects;
+ };
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,202 @@
+From a56453f6401094ddffb3eb064fb6f249980fbf94 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 24 Jan 2023 12:02:22 +0000
+Subject: [PATCH 099/128] [caffe2] Delete CPU SLS secure operators
+
+This was used for testing before axdimm operators were fully
+implemented.
+
+But now we don't need this at all.
+
+Note also that we need to make dummy versions of CPU operators, because
+otherwise caffe2 doesn't recognize the AXDIMM ones.
+
+Related to: AXDIMM-409
+---
+ .../lengths_reducer_ops_sec_axdimm.cc         | 32 +++------
+ .../lengths_reducer_ops_sec_axdimm.h          | 69 ++++++++-----------
+ 2 files changed, 37 insertions(+), 64 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 76d11ef4..b695622a 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -1,47 +1,35 @@
+ #undef USE_FBGEMM
+ 
++#include "caffe2/operators/no_default_engine_op.h"
++
+ #include "lengths_reducer_ops_sec_axdimm.h"
+ 
+ #include "secure/plain/axdimm_secure.h"
+ 
+ namespace caffe2 {
+-//-------------------FLOAT OPERATORS---------------------------------
++//-------------------FLOAT OPERATOR---------------------------------
+ REGISTER_AXDIMM_OPERATOR(
+     SecureSparseLengthsSumVec,
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         float,
+         TensorTypes<float, at::Half>,
+         axdimm::secure::ProdConsAXDIMMRunner<
+-    typename ::at::native::axdimm::SecureTypeTraits<float>::secure_engine_value_t>,
+-        AXDIMMContext>);
++    typename ::at::native::axdimm::SecureTypeTraits<float>::secure_engine_value_t>>);
+ 
+-REGISTER_CPU_OPERATOR(
+-    SecureSparseLengthsSumVec,
+-    AXDIMMSecureSparseLengthsReductionOpVec<
+-        float,
+-        TensorTypes<float, at::Half>,
+-        axdimm::secure::ProdConsCPURunner<
+-            typename ::at::native::axdimm::SecureTypeTraits<float>::secure_engine_value_t>,
+-        CPUContext>);
++// Dummy
++REGISTER_CPU_OPERATOR(SecureSparseLengthsSumVec, NoDefaultEngineOp<CPUContext>);
+ 
+-//-------------------UINT32_T OPERATORS---------------------------------
++//-------------------UINT32_T OPERATOR---------------------------------
+ REGISTER_AXDIMM_OPERATOR(
+     SecureSparseLengthsSumIntVec,
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         int32_t,
+         TensorTypes<int32_t>,
+         axdimm::secure::ProdConsAXDIMMRunner<
+-            typename ::at::native::axdimm::SecureTypeTraits<int32_t>::secure_engine_value_t>,
+-        AXDIMMContext>);
++            typename ::at::native::axdimm::SecureTypeTraits<int32_t>::secure_engine_value_t>>);
+ 
+-REGISTER_CPU_OPERATOR(
+-    SecureSparseLengthsSumIntVec,
+-    AXDIMMSecureSparseLengthsReductionOpVec<
+-        int32_t,
+-        TensorTypes<int32_t>,
+-        axdimm::secure::ProdConsCPURunner<
+-            typename ::at::native::axdimm::SecureTypeTraits<int32_t>::secure_engine_value_t>,
+-        CPUContext>);
++// Dummy
++REGISTER_CPU_OPERATOR(SecureSparseLengthsSumIntVec, NoDefaultEngineOp<CPUContext>);
+ 
+ //-------------------OPERATORS SCHEMA---------------------------------
+ #define REGISTER_OPERATOR_SCHEMA(operator_name)                                  \
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 2156acd8..a589d7c8 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -9,7 +9,6 @@
+ 
+ #include "ai/api/axdimm.h"
+ 
+-#include "secure/plain/devices/trivial_cpu.h"
+ #include "secure/plain/devices/untrusted_axdimm_device.h"
+ 
+ #include <ATen/native/axdimm/AxdimmTypeHelpers.h>
+@@ -24,14 +23,13 @@ namespace caffe2 {
+ template <
+     typename T, // output type
+     typename InputTypes, // supported input types, such as TensorTypes<float>
+-    typename SecureRunner,
+-    typename Context>
+-class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
++    typename SecureRunner>
++class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+  public:
+-  USE_OPERATOR_FUNCTIONS(Context);
++  USE_OPERATOR_FUNCTIONS(AXDIMMContext);
+   template <class... Args>
+   explicit AXDIMMSecureSparseLengthsReductionOpVec(Args&&... args)
+-      : Operator<Context>(std::forward<Args>(args)...) {
++      : Operator<AXDIMMContext>(std::forward<Args>(args)...) {
+     if constexpr (::at::native::axdimm::SecureTypeTraits<T>::APPLY_SCALE) {
+       LOG(WARNING) << "Secure operator works only with integer types. "
+                       "The floating values will be converted to integer "
+@@ -164,35 +162,26 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       uint64_t sparse_feature_size,
+       axdimm::common_view<const uint32_t> rows,
+       axdimm::common_view<const secure_core_value_type> data) {
+-    if constexpr (std::is_same_v<Context, AXDIMMContext>) {
+-      size_t tables_size_bytes = tables_size_ * sizeof(T);
+-      if (with_tag_) {
+-        tables_size_bytes +=
+-            (tables_size_ / sparse_feature_size_) * sizeof(axdimm::uint128_t);
+-      }
+-      LOG(INFO) << "Operator AXDIMMSecureSparseLengthsReductionOpVec: "
+-                << " Tables size in bytes: " << tables_size_bytes;
+-
+-      const auto memory_preference = this->template GetSingleArgument<int>(
+-          "mem_preference", AXDIMM_ALLOC_AUTO);
+-
+-      axdimm::secure::DeviceArguments args(
+-          axdimm::secure::UntrustedAxdimmDeviceParams{
+-              .rows = rows,
+-              .sparse_feature_size = sparse_feature_size,
+-              .with_tag = with_tag_,
+-              .preference =
+-                  static_cast<axd_user_preferences>(memory_preference)});
+-      runner_.init(&args);
+-    } else if constexpr (std::is_same_v<Context, CPUContext>) {
+-      axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
+-          .rows = rows,
+-          .sparse_feature_size = sparse_feature_size,
+-          .with_tag = with_tag_});
+-      runner_.init(&args);
+-    } else {
+-      static_assert(always_false<Context> && "Wrong context type");
++    size_t tables_size_bytes = tables_size_ * sizeof(T);
++    if (with_tag_) {
++      tables_size_bytes +=
++          (tables_size_ / sparse_feature_size_) * sizeof(axdimm::uint128_t);
+     }
++    LOG(INFO) << "Operator AXDIMMSecureSparseLengthsReductionOpVec: "
++              << " Tables size in bytes: " << tables_size_bytes;
++
++    const auto memory_preference = this->template GetSingleArgument<int>(
++        "mem_preference", AXDIMM_ALLOC_AUTO);
++
++    axdimm::secure::DeviceArguments args(
++        axdimm::secure::UntrustedAxdimmDeviceParams{
++            .rows = rows,
++            .sparse_feature_size = sparse_feature_size,
++            .with_tag = with_tag_,
++            .preference =
++                static_cast<axd_user_preferences>(memory_preference)});
++    runner_.init(&args);
++
+     runner_.load_tables(data.begin(), rows, sparse_feature_size, with_tag_);
+   }
+ 
+@@ -223,13 +212,11 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+ template <
+     typename T,
+     typename InputTypes,
+-    typename SecureRunner,
+-    typename Context>
++    typename SecureRunner>
+ void AXDIMMSecureSparseLengthsReductionOpVec<
+     T,
+     InputTypes,
+-    SecureRunner,
+-    Context>::init_from_file() {
++    SecureRunner>::init_from_file() {
+   block_size_ = this->template GetSingleArgument<int>("num_tables", 0);
+   CAFFE_ENFORCE_NE(
+       block_size_, 0, "The number of tables should be greater than 0");
+@@ -289,13 +276,11 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+ template <
+     typename T,
+     typename InputTypes,
+-    typename SecureRunner,
+-    typename Context>
++    typename SecureRunner>
+ void AXDIMMSecureSparseLengthsReductionOpVec<
+     T,
+     InputTypes,
+-    SecureRunner,
+-    Context>::init_from_input() {
++    SecureRunner>::init_from_input() {
+   // Setup input pointers for tables/indices/lengths. The input comes in
+   // following format:
+   //    N := block_size_
+-- 
+2.34.1
+

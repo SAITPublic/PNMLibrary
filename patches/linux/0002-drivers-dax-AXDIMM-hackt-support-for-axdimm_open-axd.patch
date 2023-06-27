@@ -1,0 +1,308 @@
+From f1cfc9f80ed40d4221824f077ce4ec095812a10d Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 17 Nov 2021 09:58:21 +0900
+Subject: [PATCH 002/161] [drivers/dax] AXDIMM: hackt support for
+ axdimm_open/axdimm_mmap
+
+Just copied from AXDIMM DD with removed unused stuff.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/device.c | 251 +++++++++++++++++++++++++++++++------------
+ 1 file changed, 182 insertions(+), 69 deletions(-)
+
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 3893c4a13..810dec561 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -15,6 +15,77 @@
+ #include "dax-private.h"
+ #include "bus.h"
+ 
++/*
++   AXDIMM System Memory Specification
++*/
++/* Total Memory size for AXDIMM */
++#define AXDIMM_MEMORY_SIZE            0x1000000000
++
++/* Start address of AXDIMM */
++#define AXDIMM_BASE_ADDR              0x100000000
++
++/* Base offset for each CS */
++#define EMBT_BASE_CS0_OFFSET          0x0
++#define EMBT_BASE_CS1_OFFSET          0x800000000
++
++/* number of CS(# of rank connected to one CH) */
++#define NUM_OF_CS                   2
++
++/* channel ID used by axdimm */
++#define AXDIMM_CH_ID                0
++
++/* Number of mapped blocks */
++#define NUM_BLOCKS 4
++
++/*
++ * Ioctl definitions
++ */
++/* Use 'k' as magic number */
++#define AXDIMM_IOC_MAGIC 'T'
++/* Please use a different 8-bit number in your code */
++
++#define DEVICE_IOCRESET _IO(AXDIMM_IOC_MAGIC, 0)
++#define SET_FIRST_BUFFER _IO(AXDIMM_IOC_MAGIC, 1)
++#define SET_SECOND_BUFFER _IO(AXDIMM_IOC_MAGIC, 2)
++#define WHICH_BUFFER _IOR(AXDIMM_IOC_MAGIC, 3, int)
++#define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
++#define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
++#define GET_RANK _IOR(AXDIMM_IOC_MAGIC, 6, int)
++
++#define AXDIMM_IOC_MAXNR (6)
++
++/* The enumeration of axdimm memory addresses */
++typedef enum _axd_mem_regions_e {
++	AXDIMM_BASE_CS0 = 0,
++	AXDIMM_PSUM_CS0 = 1,
++	AXDIMM_BASE_CS1 = 2,
++	AXDIMM_PSUM_CS1 = 3,
++	BASELINE_BASE = 4,
++	NUM_OF_MEM_REGION = 5 /* Number of index for memory mapping region */
++} axd_mem_regions_e;
++
++struct axdmem_t {
++	uint64_t base;
++	uint64_t inst;
++	uint64_t cfgr;
++	uint64_t psum;
++};
++
++struct axdmem_info {
++	struct axdmem_t mem_offset[NUM_OF_CS];
++	struct axdmem_t mem_size[NUM_OF_CS];
++};
++
++struct axdimm_device_data {
++	int rank;
++	int region;
++	int channel;
++};
++
++struct axdimm_dev {
++	struct semaphore sem_axdimm; /* semaphore */
++} axdimm_device;
++
+ static int check_vma(struct dev_dax *dev_dax, struct vm_area_struct *vma,
+ 		const char *func)
+ {
+@@ -291,8 +362,33 @@ static const struct vm_operations_struct dax_vm_ops = {
+ 	.pagesize = dev_dax_pagesize,
+ };
+ 
++/*
++    mmap for AXDIMM allocation
++  */
++static int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
++{
++	size_t page_addr, page_offset;
++	off_t gpio_addr = AXDIMM_BASE_ADDR;
++
++	page_offset = gpio_addr >> PAGE_SHIFT;
++	page_addr = page_offset + vma->vm_pgoff;
++
++	printk(KERN_INFO "[AXDIMM_DD] Device mmap Offset 0x%lx, Size 0x%lx\n",
++	       vma->vm_pgoff, (vma->vm_end - vma->vm_start));
++
++	if (remap_pfn_range(vma, vma->vm_start, page_addr,
++			    vma->vm_end - vma->vm_start, vma->vm_page_prot)) {
++		printk(KERN_INFO "[AXDIMM_DD] Device mmap failed\n");
++		return -EAGAIN;
++	}
++	printk(KERN_INFO "[AXDIMM_DD] Device mmap okay\n");
++
++	return 0;
++}
++
+ static int dax_mmap(struct file *filp, struct vm_area_struct *vma)
+ {
++	return axdimm_mmap(filp, vma);
+ 	struct dev_dax *dev_dax = filp->private_data;
+ 	int rc, id;
+ 
+@@ -377,75 +473,6 @@ static int dax_release(struct inode *inode, struct file *filp)
+ 	return 0;
+ }
+ 
+-static const struct file_operations dax_fops = {
+-	.llseek = noop_llseek,
+-	.owner = THIS_MODULE,
+-	.open = dax_open,
+-	.release = dax_release,
+-	.get_unmapped_area = dax_get_unmapped_area,
+-	.mmap = dax_mmap,
+-	.mmap_supported_flags = MAP_SYNC,
+-};
+-
+-static void dev_dax_cdev_del(void *cdev)
+-{
+-	cdev_del(cdev);
+-}
+-
+-static void dev_dax_kill(void *dev_dax)
+-{
+-	kill_dev_dax(dev_dax);
+-}
+-
+-static int is_axdimm_range(u64 start, u64 end)
+-{
+-	return 1;
+-}
+-
+-/*
+-   AXDIMM System Memory Specification
+-*/
+-/* Total Memory size for AXDIMM */
+-#define AXDIMM_MEMORY_SIZE            0x1000000000
+-
+-/* Start address of AXDIMM */
+-#define AXDIMM_BASE_ADDR              0x100000000
+-
+-/* Base offset for each CS */
+-#define EMBT_BASE_CS0_OFFSET          0x0
+-#define EMBT_BASE_CS1_OFFSET          0x800000000
+-
+-/* number of CS(# of rank connected to one CH) */
+-#define NUM_OF_CS                   2
+-
+-/* channel ID used by axdimm */
+-#define AXDIMM_CH_ID                0
+-
+-/* Number of mapped blocks */
+-#define NUM_BLOCKS 4
+-
+-/* The enumeration of axdimm memory addresses */
+-typedef enum _axd_mem_regions_e {
+-	AXDIMM_BASE_CS0 = 0,
+-	AXDIMM_PSUM_CS0 = 1,
+-	AXDIMM_BASE_CS1 = 2,
+-	AXDIMM_PSUM_CS1 = 3,
+-	BASELINE_BASE = 4,
+-	NUM_OF_MEM_REGION = 5 /* Number of index for memory mapping region */
+-} axd_mem_regions_e;
+-
+-struct axdmem_t {
+-	uint64_t base;
+-	uint64_t inst;
+-	uint64_t cfgr;
+-	uint64_t psum;
+-};
+-
+-struct axdmem_info {
+-	struct axdmem_t mem_offset[NUM_OF_CS];
+-	struct axdmem_t mem_size[NUM_OF_CS];
+-};
+-
+ static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+ 				     int bank, int row, int column)
+ {
+@@ -573,6 +600,90 @@ static void remap_axdimm_range(struct device *dev)
+ 
+ }
+ 
++/*
++ The ioctl() implementation
++ */
++long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
++{
++	int err = 0;
++	int retval = 0;
++
++	/*
++          * extract the type and number bitfields, and don't decode
++          * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
++          */
++	if (_IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC) {
++		printk(KERN_INFO " _IOC_TYPE(cmd) :      %u\n", _IOC_TYPE(cmd));
++		printk(KERN_INFO " AXDIMM_IOC_MAGIC:   %u\n", AXDIMM_IOC_MAGIC);
++		printk(KERN_WARNING
++		       "[SAIT] axdimm: _IOC_TYPE(cmd) != AXDIMM_IOC_MAGIC => false. Aborting ioctl\n");
++		return -ENOTTY;
++	}
++	if (_IOC_NR(cmd) > AXDIMM_IOC_MAXNR) {
++		printk(KERN_WARNING
++		       "[SAIT] axdimm: _IOC_NR(cmd) > AXDIMM_IOC_MAXNR => false. Aborting ioctl\n");
++		return -ENOTTY;
++	}
++
++	/*
++          * the direction is a bitmask, and VERIFY_WRITE catches R/W
++          * transfers. `Type' is user-oriented, while
++          * access_ok is kernel-oriented, so the concept of "read" and
++          * "write" is reversed
++          */
++	if (_IOC_DIR(cmd) & _IOC_READ) {
++		err = !access_ok((void __user *)arg, _IOC_SIZE(cmd));
++	} else if (_IOC_DIR(cmd) & _IOC_WRITE) {
++		err = !access_ok((void __user *)arg, _IOC_SIZE(cmd));
++	}
++	if (err)
++		return -EFAULT;
++
++	switch (cmd) {
++	case SET_SC_LOCK:
++		if (down_interruptible(&axdimm_device.sem_axdimm)) {
++			printk(KERN_WARNING
++			       "[SAIT] axdimm: Device was busy. Operation aborted\n");
++			return -ERESTARTSYS;
++		}
++		break;
++	case SET_SC_UNLOCK:
++		up(&axdimm_device.sem_axdimm);
++		break;
++	default:
++		return -ENOTTY;
++	}
++
++	return retval;
++}
++
++
++static const struct file_operations dax_fops = {
++	.llseek = noop_llseek,
++	.owner = THIS_MODULE,
++	.unlocked_ioctl = axdimm_ioctl,
++	.open = dax_open,
++	.release = dax_release,
++	.get_unmapped_area = dax_get_unmapped_area,
++	.mmap = dax_mmap,
++	.mmap_supported_flags = MAP_SYNC,
++};
++
++static void dev_dax_cdev_del(void *cdev)
++{
++	cdev_del(cdev);
++}
++
++static void dev_dax_kill(void *dev_dax)
++{
++	kill_dev_dax(dev_dax);
++}
++
++static int is_axdimm_range(u64 start, u64 end)
++{
++	return 1;
++}
++
+ int dev_dax_probe(struct dev_dax *dev_dax)
+ {
+ 	struct dax_device *dax_dev = dev_dax->dax_dev;
+@@ -620,6 +731,8 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 		is_axdimm_dev = is_axdimm_range(range->start, range->end);
+ 		if (is_axdimm_dev) {
+ 			remap_axdimm_range(dev);
++			sema_init(&(axdimm_device.sem_axdimm),
++				  1); /* semaphore initialization */
+ 			break;
+ 		}
+ 
+-- 
+2.34.1
+

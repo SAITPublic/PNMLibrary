@@ -1,0 +1,75 @@
+From 2d99a9c1892154057f3030f19b34e902e5be3dbb Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Fri, 23 Jun 2023 14:52:20 +0300
+Subject: [PATCH 30/33] [debug] Adjust GDB scripts to new PNM library layout.
+
+SAIT/PNMLibrary#554 changed the names of exported PNM libraries.
+This commit updates the GDB scripts to use new library names.
+Additionally, it replaces a default search path that used to point to
+PNM build directory (it became obsolete after splitting off DeepRecSys
+into a separate repo) to a list of system search paths.
+
+References: MCS23-907
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ debug/pnm-gdb.py | 27 +++++++++++++++------------
+ 1 file changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/debug/pnm-gdb.py b/debug/pnm-gdb.py
+index 7a70a91..1ff34a2 100644
+--- a/debug/pnm-gdb.py
++++ b/debug/pnm-gdb.py
+@@ -37,26 +37,29 @@ def continue_inferior(inferior):
+   gdb.execute('continue &')
+ 
+ def find_library(library_name):
+-  """Find full library path given its filename (e.g. libPnmAI.so).
+-  We assume that the libraries are found in the directory with a
+-  hard-coded relative path (based on the project layout), which can be
+-  overridden by an environment variable.
++  """Find full library path given its filename (e.g. libpnm.so).
++  Search libraries in the path provided by an environment variable,
++  falling back to system locations (`/usr/local/lib`, `/usr/lib` and `/lib`).
+   """
+-  search_path = Path(os.getenv('PNM_LIBS_PATH', '../../build'))
++  search_paths = [Path('/usr/local/lib'), Path('/usr/lib'), Path('/lib')]
++  search_paths_override = os.getenv('PNM_LIBS_PATH')
++  if search_paths_override is not None:
++    search_paths = [Path(search_paths_override)] + search_paths
+ 
+   # In the build directory, the libraries are likely to be in different
+-  # subdirectories (e.g. `build/ai/libPnmAI.so`, `build/secure/libPnmAISecure.so`).
++  # subdirectories (e.g. `build/core/libpnm.so`, `build/secure/libsls_secure.so`).
+   # This might not be the case in general, because `make install` or `ninja install`
+   # install them flat into one directory.
+   #
+   # The empty string means no subdirectory and is correctly handled by
+   # `Path.__truediv__`.
+-  allowed_subdirs = ['', 'ai', 'secure']
++  allowed_subdirs = ['', 'core', 'secure']
+ 
+-  for subdir in allowed_subdirs:
+-    library_path = search_path / subdir / library_name
+-    if library_path.exists():
+-      return os.path.normpath(library_path)
++  for path in search_paths:
++    for subdir in allowed_subdirs:
++      library_path = path / subdir / library_name
++      if library_path.exists():
++        return os.path.normpath(library_path)
+ 
+   raise ValueError('Library not found')
+ 
+@@ -77,7 +80,7 @@ gdb.events.new_inferior.connect(inferior_handler.new_inferior_handler)
+ gdb.events.exited.connect(inferior_handler.exited_handler)
+ 
+ # Preload symbols from AXDIMM libraries.
+-libraries_to_load = ['libPnmAI.so', 'libPnmAISecure.so']
++libraries_to_load = ['libpnm.so', 'libsls_secure.so']
+ for lib in libraries_to_load:
+   load_symbols_by_library_name(lib)
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,91 @@
+From df1678fadc6ce9f0dd7070bda4af680432666019 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 17 Nov 2021 12:55:34 +0900
+Subject: [PATCH 003/161] [drivers/dax] Detect DAX device as AXDIMM
+
+Add 'is_axdimm_device' field to 'struct dax_mapping' and set it up in 'probe'
+method basing on range start (fixed for AXDIMM).
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/bus.c         | 3 +++
+ drivers/dax/dax-private.h | 2 ++
+ drivers/dax/device.c      | 9 +++++++--
+ 3 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/dax/bus.c b/drivers/dax/bus.c
+index 1dad813ee..d07ff92b1 100644
+--- a/drivers/dax/bus.c
++++ b/drivers/dax/bus.c
+@@ -1374,6 +1374,9 @@ struct dev_dax *devm_create_dev_dax(struct dev_dax_data *data)
+ 	ida_init(&dev_dax->ida);
+ 	kref_get(&dax_region->kref);
+ 
++	/* Default initialize is_axdimm_device to false */
++	dev_dax->is_axdimm_device = 0;
++
+ 	inode = dax_inode(dax_dev);
+ 	dev->devt = inode->i_rdev;
+ 	dev->bus = &dax_bus_type;
+diff --git a/drivers/dax/dax-private.h b/drivers/dax/dax-private.h
+index 1c974b7ca..dfc2b1b3b 100644
+--- a/drivers/dax/dax-private.h
++++ b/drivers/dax/dax-private.h
+@@ -58,6 +58,7 @@ struct dax_mapping {
+  * @pgmap - pgmap for memmap setup / lifetime (driver owned)
+  * @nr_range: size of @ranges
+  * @ranges: resource-span + pgoff tuples for the instance
++ * @is_axdimm_device: indicates whether underlying device is AXDIMM
+  */
+ struct dev_dax {
+ 	struct dax_region *region;
+@@ -74,6 +75,7 @@ struct dev_dax {
+ 		struct range range;
+ 		struct dax_mapping *mapping;
+ 	} *ranges;
++	int is_axdimm_device;
+ };
+ 
+ static inline struct dev_dax *to_dev_dax(struct device *dev)
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 810dec561..63d2ac71c 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -364,7 +364,7 @@ static const struct vm_operations_struct dax_vm_ops = {
+ 
+ /*
+     mmap for AXDIMM allocation
+-  */
++ */
+ static int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+ {
+ 	size_t page_addr, page_offset;
+@@ -388,12 +388,15 @@ static int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+ 
+ static int dax_mmap(struct file *filp, struct vm_area_struct *vma)
+ {
+-	return axdimm_mmap(filp, vma);
+ 	struct dev_dax *dev_dax = filp->private_data;
+ 	int rc, id;
+ 
+ 	dev_dbg(&dev_dax->dev, "trace\n");
+ 
++	/* If DAX device is AXDIMM, do not support lazy mapping. */
++	if (dev_dax->is_axdimm_device)
++		return axdimm_mmap(filp, vma);
++
+ 	/*
+ 	 * We lock to check dax_dev liveness and will re-check at
+ 	 * fault time.
+@@ -730,6 +733,8 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 
+ 		is_axdimm_dev = is_axdimm_range(range->start, range->end);
+ 		if (is_axdimm_dev) {
++			/* Mark DAX device as AXDIMM, this is used in mmap implementation */
++			dev_dax->is_axdimm_device = 1;
+ 			remap_axdimm_range(dev);
+ 			sema_init(&(axdimm_device.sem_axdimm),
+ 				  1); /* semaphore initialization */
+-- 
+2.34.1
+

@@ -1,0 +1,57 @@
+@startuml
+title axdimm::secure::ProdConsCPURunner
+box "Untrusted environment" #LightYellow
+    participant ":DLRM" as in <<E, #990000>>
+    participant "::SecureRunner" as SR <<C, #00AA00>>
+
+    participant "::OperationExecutor" as OE <<C, #00AA00>>
+    participant "Encryption/Decryption Core" as EDC <<I, #00AAFF>>
+
+    participant "::ProdConsRunner" as PCR <<C, #00AA00>>
+    participant "::TrivialCPU" as TC <<C, #00AA00>>
+    participant "Tables Storage" as TS <<I, #00AAFF>>
+end box
+
+skinparam backgroundColor transparent
+group "Init stage"
+in -> SR **: Create
+SR -> PCR **: Create
+PCR -> PCR: Open action queue
+SR -> OE **: Create
+OE -> TC **
+end group
+
+group "Load stage"
+in -> SR ++: load_tables(...)
+    SR -> OE ++: load_tables(...)
+        OE -> EDC ++: encrypt(...)
+        return encrypted data
+        OE -> TC ++: load(encrypted data)
+            TC ->o TS: store data
+        return
+    return
+return
+end group
+
+group "SLS run stage"
+in -> SR ++: run(indices)
+    SR -> OE ++: run(indices)
+        OE -> PCR ++: push_run(indices)
+            loop "for i = 0 ... num_tables"
+            OE -> PCR : push_sls_on_otps(indices[i])
+            end
+            PCR -[#red]> TC ++: run(indices) //SLS on NDP device
+                TC -> TS : load
+                TS -> TC
+                PCR -> EDC ++: offset_transform_reduce(indices)
+                return EPSum
+                return CPsum
+            OE -> PCR: Wait for CPsum
+            OE -> PCR: Wait for EPsum
+            return
+
+    return CPsum + EPsum
+return psum
+end group
+
+@enduml

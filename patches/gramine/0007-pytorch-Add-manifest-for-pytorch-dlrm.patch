@@ -1,0 +1,385 @@
+From f0d17756a5a929a7bc4a6f520ff060c00b953701 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Wed, 14 Sep 2022 15:14:17 +0300
+Subject: [PATCH 07/27] [pytorch] Add manifest for pytorch dlrm
+
+---
+ .../secndp.manifest.template                  |  10 +-
+ application/pytorch/Makefile                  |  48 ++++++++
+ .../pytorch/conf.pytorch.manifest.template    |  55 +++++++++
+ application/pytorch/config_pillow.py          |  25 ++++
+ application/pytorch/run_test.sh               |  16 +++
+ pal/src/host/linux-sgx/pal_axdimm.c           | 108 ++++++++----------
+ 6 files changed, 193 insertions(+), 69 deletions(-)
+ create mode 100644 application/pytorch/Makefile
+ create mode 100644 application/pytorch/conf.pytorch.manifest.template
+ create mode 100644 application/pytorch/config_pillow.py
+ create mode 100755 application/pytorch/run_test.sh
+
+diff --git a/application/axdimm_secndp_test/secndp.manifest.template b/application/axdimm_secndp_test/secndp.manifest.template
+index 043e5cbc..8ffbe605 100644
+--- a/application/axdimm_secndp_test/secndp.manifest.template
++++ b/application/axdimm_secndp_test/secndp.manifest.template
+@@ -41,12 +41,4 @@ sgx.trusted_files = [
+   "file:/usr/{{ arch_libdir }}/",
+   "file:{{ axdimm_driver }}/build/ai/",
+   "file:{{ axdimm_driver }}/build/secure/",
+-]
+-
+-#sgx.allowed_files = [
+-#]
+-
+-
+-# sgx.enable_stats = true
+-# sgx.profile.enable = "all"
+-# sgx.profile.mode = "ocall_outer"
++]
+\ No newline at end of file
+diff --git a/application/pytorch/Makefile b/application/pytorch/Makefile
+new file mode 100644
+index 00000000..07569443
+--- /dev/null
++++ b/application/pytorch/Makefile
+@@ -0,0 +1,48 @@
++ARCH_LIBDIR ?= /lib/$(shell $(CC) -dumpmachine)
++
++ifeq ($(DEBUG),1)
++GRAMINE_LOG_LEVEL = debug
++else
++GRAMINE_LOG_LEVEL = error
++endif
++
++.PHONY: all
++all: pytorch.manifest
++ifeq ($(SGX),1)
++all: pytorch.manifest.sgx pytorch.sig pytorch.token
++endif
++
++pytorch.manifest: conf.pytorch.manifest.template config_pillow.py
++	python3 ./config_pillow.py ./conf.pytorch.manifest.template
++	gramine-manifest \
++		-Dlog_level=$(GRAMINE_LOG_LEVEL) \
++		-Darch_libdir=$(ARCH_LIBDIR) \
++		-Dentrypoint=$(realpath $(shell sh -c "command -v python3")) \
++		-Daxdimm_driver=${AXDIMM_DRIVER_PATH} \
++		-Ddlrm_path=${DLRM_PATH} \
++		-Dpython_path=${PYTHONPATH} \
++		pytorch.manifest.template \
++		> $@
++
++# Make on Ubuntu <= 20.04 doesn't support "Rules with Grouped Targets" (`&:`),
++# for details on this workaround see
++# https://github.com/gramineproject/gramine/blob/e8735ea06c/CI-Examples/helloworld/Makefile
++pytorch.manifest.sgx pytorch.sig: sgx_sign
++	@:
++
++.INTERMEDIATE: sgx_sign
++sgx_sign: pytorch.manifest
++	gramine-sgx-sign \
++		--manifest $< \
++		--output $<.sgx
++
++pytorch.token: pytorch.sig
++	gramine-sgx-get-token --output $@ --sig $<
++
++.PHONY: clean
++clean:
++	$(RM) *.token *.sig *.manifest.sgx *.manifest pytorch.manifest.template
++
++.PHONY: distclean
++distclean: clean
++	$(RM) *.pt result.txt
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+new file mode 100644
+index 00000000..2a1b4158
+--- /dev/null
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -0,0 +1,55 @@
++# PyTorch manifest template
++
++loader.entrypoint = "file:{{ gramine.libos }}"
++libos.entrypoint = "{{ entrypoint }}"
++
++loader.log_level = "{{ log_level }}"
++
++loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:{{ arch_libdir }}:/usr/{{ arch_libdir }}"
++loader.env.PYTHONPATH = "{{ python_path }}"
++
++loader.insecure__use_cmdline_argv = true
++loader.insecure__use_host_env = true
++
++loader.pal_internal_mem_size = "256M"
++
++fs.mounts = [
++  { uri = "file:{{ dlrm_path }}", path = "{{ dlrm_path }}" },
++  { uri = "file:{{ gramine.runtimedir() }}", path = "/lib" },
++  { uri = "file:{{ arch_libdir }}", path = "{{ arch_libdir }}" },
++  { uri = "file:/usr", path = "/usr" },
++  { uri = "file:/etc", path = "/etc" },
++  #  *** PILLOW MOUNT PLACEHOLDER *** #Will be replaced by config_pillow.py during the make process
++  { uri = "file:{{ axdimm_driver }}/build/ai", path = "{{ axdimm_driver }}/build/ai"},
++  { uri = "file:{{ axdimm_driver }}/build/secure", path = "{{ axdimm_driver }}/build/secure"},
++  { type = "tmpfs", path = "/tmp" },
++  { uri = "dev:/dev/axdimm_device0", path = "/dev/axdimm_device0" },
++  { uri = "dev:/dev/axdimm_meminfo", path = "/dev/axdimm_meminfo" }
++]
++
++sgx.nonpie_binary = true
++sgx.enclave_size = "8G"
++sgx.thread_num = 512
++sgx.debug = true
++
++sgx.trusted_files = [
++  "file:/dev/",
++  "file:/{{ dlrm_path }}/",
++  "file:{{ gramine.libos }}",
++  "file:{{ entrypoint }}",
++  "file:{{ gramine.runtimedir() }}/",
++  "file:{{ arch_libdir }}/",
++  "file:/usr/{{ arch_libdir }}/",
++  "file:{{ python.stdlib }}/",
++  "file:{{ python.distlib }}/",
++  "file:{{ python.get_path('stdlib', vars={'installed_base': '/usr/local'}) }}/",
++  "file:{{ axdimm_driver }}/build/ai/",
++  "file:{{ axdimm_driver }}/build/secure/"
++]
++
++sgx.allowed_files = [
++  "file:./run_kaggle_pt/",
++  # In production we should place pillow path into sgx.trusted_files
++  # but to reduce the preparation time we place it here. Will be changed in production
++  #  *** PILLOW SGX PLACEHOLDER *** #Will be replaced by config_pillow.py during the make process
++]
+\ No newline at end of file
+diff --git a/application/pytorch/config_pillow.py b/application/pytorch/config_pillow.py
+new file mode 100644
+index 00000000..f351786d
+--- /dev/null
++++ b/application/pytorch/config_pillow.py
+@@ -0,0 +1,25 @@
++import sys
++import os
++
++if len(sys.argv) < 2:
++    print("No input file")
++    os.exit(1)
++
++unique_path = []
++for path in sys.path:
++    matches = [p for p in unique_path if p in path]
++    if not matches and ".zip" not in path:
++        unique_path.append(path)
++
++with open("pytorch.manifest.template", "w") as manifest:
++    with open(sys.argv[1], "r") as template:
++        for line in template:
++            if "#  *** PILLOW MOUNT PLACEHOLDER ***" in line:
++                for path in unique_path:
++                    if path:
++                        manifest.write('  {{ uri = "file:{0}", path = "{0}" }},\n'.format(path))
++            if "#  *** PILLOW SGX PLACEHOLDER ***" in line:
++                for path in unique_path:
++                    if path:
++                        manifest.write('  "file:{}/",\n'.format(path))
++            manifest.write(line)
+\ No newline at end of file
+diff --git a/application/pytorch/run_test.sh b/application/pytorch/run_test.sh
+new file mode 100755
+index 00000000..c7cfcfbf
+--- /dev/null
++++ b/application/pytorch/run_test.sh
+@@ -0,0 +1,16 @@
++#!/bin/sh
++
++set -e
++
++embedding_size="500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000"
++arch_mlp_bot="128-128-16"
++arch_mlp_top="256-64-1"
++sparse_feature_size=16
++mini_batch_size=256
++num_indices_per_lookup=40
++interaction_op="cat"
++num_batches=100
++
++$1 pytorch ${DLRM_PATH}/dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
++                            --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed=1 \
++                            --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" --inference-only
+diff --git a/pal/src/host/linux-sgx/pal_axdimm.c b/pal/src/host/linux-sgx/pal_axdimm.c
+index 061742c0..6549ad65 100644
+--- a/pal/src/host/linux-sgx/pal_axdimm.c
++++ b/pal/src/host/linux-sgx/pal_axdimm.c
+@@ -13,7 +13,6 @@
+ #include "pal_axdimm.h"
+ 
+ #include "enclave_ocalls.h"
+-#include "pal_internal.h"
+ #include "pal_linux_error.h"
+ 
+ #define REQ_AS(S, A)           ((S*)(A))
+@@ -21,37 +20,14 @@
+ #define AXD_GET_MEM_NUM_REQ(A) REQ_AS(struct axd_num_objects_request, A)
+ #define AXD_GET_MEM_ALLOC(A)   REQ_AS(struct axd_memory_alloc, A)
+ 
+-static uint32_t axdimm_commands[] = {
+-    DEVICE_IOCRESET,        SET_FIRST_BUFFER,     SET_SECOND_BUFFER,
+-    WHICH_BUFFER,           SET_SC_LOCK,          SET_SC_UNLOCK,
+-    DEALLOCATE_MEMORY,      GET_RANK_FOR_WRITE,   GET_RANK_FOR_READ,
+-    RELEASE_WRITE_RANK,     RELEASE_READ_RANK,    ALLOCATE_MEMORY,
+-    GET_MEMORY_OBJECTS_NUM, GET_MEMORY_ALLOCATION};
+-
+ bool _IsAxdimmIoControl(uint32_t cmd) {
+-    unsigned long i;
+-    for (i = 0; i < ARRAY_SIZE(axdimm_commands); ++i)
+-        if (cmd == axdimm_commands[i])
+-            return true;
+-    return false;
+-}
+-
+-static uint64_t axdimm_request_size(uint32_t cmd, uint64_t args) {
+-    switch (cmd) {
+-        case ALLOCATE_MEMORY:
+-            return sizeof(struct axd_memory_alloc_request) +
+-                   AXD_ALLOC_MEM_REQ(args)->num_user_objects *
+-                       sizeof(AXD_ALLOC_MEM_REQ(args)->user_objects_sizes[0]);
+-        case GET_MEMORY_OBJECTS_NUM:
+-            return sizeof(struct axd_num_objects_request);
+-        case GET_MEMORY_ALLOCATION:
+-            return sizeof(struct axd_memory_alloc) +
+-                   AXD_GET_MEM_ALLOC(args)->num_objects *
+-                       sizeof(AXD_GET_MEM_ALLOC(args)->objects[0]);
+-        default:
+-            pal_log(LOG_LEVEL_ERROR, "Fail to get size of request. Unknown command cmd = %d", cmd);
+-            return 0;
+-    }
++    /* Assume that if we receive command with correct magic number and NR then we have AXDIMM
++     * IOCTL. Extra checks can be included in process function. This code refer to same checks in
++     * axdimm.c:
++     *      long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
++     */
++    return _IOC_TYPE(cmd) == AXDIMM_IOC_MAGIC &&
++           (0 <= _IOC_NR(cmd) && _IOC_NR(cmd) <= AXDIMM_IOC_MAXNR);
+ }
+ 
+ static void* deep_axd_memory_alloc_copy(struct axd_memory_alloc_request* req, void* dst) {
+@@ -84,6 +60,26 @@ static void* deep_axd_get_memory_alloc_copy(struct axd_memory_alloc* req, void*
+     return dst;
+ }
+ 
++/* Get the request size */
++static uint64_t axdimm_request_size(uint32_t cmd, uint64_t args) {
++    switch (cmd) {
++        case ALLOCATE_MEMORY:
++            return sizeof(struct axd_memory_alloc_request) +
++                   AXD_ALLOC_MEM_REQ(args)->num_user_objects *
++                       sizeof(AXD_ALLOC_MEM_REQ(args)->user_objects_sizes[0]);
++        case GET_MEMORY_OBJECTS_NUM:
++            return sizeof(struct axd_num_objects_request);
++        case GET_MEMORY_ALLOCATION:
++            return sizeof(struct axd_memory_alloc) +
++                   AXD_GET_MEM_ALLOC(args)->num_objects *
++                       sizeof(AXD_GET_MEM_ALLOC(args)->objects[0]);
++        default:
++            pal_log(LOG_LEVEL_ERROR, "Fail to get size of request. Unknown command cmd = %d", cmd);
++            return 0;
++    }
++}
++
++/* Make deep-copy of ioctl request: trusted->untrusted*/
+ static void* copy_to_untrusted(uint32_t cmd, uint64_t trusted_ptr, void* untrusted_ptr) {
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+@@ -98,6 +94,7 @@ static void* copy_to_untrusted(uint32_t cmd, uint64_t trusted_ptr, void* untrust
+     }
+ }
+ 
++/* Make deep-copy of ioctl request: untrusted->trusted*/
+ static void copy_to_trusted(uint32_t cmd, void* untrusted_ptr, uint64_t trusted_ptr) {
+     switch (cmd) {
+         case ALLOCATE_MEMORY:
+@@ -118,42 +115,30 @@ static void copy_to_trusted(uint32_t cmd, void* untrusted_ptr, uint64_t trusted_
+     }
+ }
+ 
+-static int axdimm_ioctl(int fd, uint32_t cmd, uint64_t arg) {
++static int axdimm_ioctl(int fd, uint32_t cmd, uint64_t arg, int* out_ret) {
+     int ret = ocall_ioctl(fd, cmd, arg);
+     if (ret < 0) {
+         pal_log(LOG_LEVEL_ERROR, "Fail to make ioctl (%x) to device [%d]. PAL error code: %d (%s)",
+                 cmd, fd, unix_to_pal_error(ret), pal_strerror(unix_to_pal_error(ret)));
+     }
++    *out_ret = ret;
++
++    // For *_RANK requests the result was returned as a result of `rank = ioctl(...)` call.
++    // Gramine expects that ioctl returns only 0 or error code, so here we should nullify
++    // `ret` variable (in case of successful call) to satisfy Gramine restriction
++    if (ret >= 0)
++        ret = 0;
+     return ret;
+ }
+ 
+ int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret) {
+-    pal_log(LOG_LEVEL_TRACE, "AXDIMM ioctl. cmd = %x, arg = %p.", cmd, (void*)arg);
++    pal_log(LOG_LEVEL_DEBUG, "AXDIMM ioctl. cmd = %x, arg = %p.", cmd, (void*)arg);
++
++    assert(_IsAxdimmIoControl(cmd));
+ 
+     int ret = 0;
+ 
+     switch (cmd) {
+-        case DEVICE_IOCRESET:
+-        case SET_FIRST_BUFFER:
+-        case SET_SECOND_BUFFER:
+-        case WHICH_BUFFER:
+-        case SET_SC_LOCK:
+-        case SET_SC_UNLOCK:
+-        case DEALLOCATE_MEMORY:
+-        case GET_RANK_FOR_WRITE:
+-        case GET_RANK_FOR_READ:
+-        case RELEASE_WRITE_RANK:
+-        case RELEASE_READ_RANK:
+-            ret = axdimm_ioctl((int)handle->dev.fd, cmd, arg);
+-
+-            *out_ret = ret;
+-            // For *_RANK requests the result was returned as a result of `rank = ioctl(...)` call.
+-            // Gramine expects that ioctl returns only 0 or error code, so here we should nullify
+-            // `ret` variable (in case of successful call) to satisfy Gramine restriction
+-            if (ret >= 0)
+-                ret = 0;
+-            break;
+-
+         case ALLOCATE_MEMORY:
+         case GET_MEMORY_OBJECTS_NUM:
+         case GET_MEMORY_ALLOCATION: {
+@@ -173,19 +158,22 @@ int _PalAxdimmIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_
+ 
+             untrusted_addr = copy_to_untrusted(cmd, arg, untrusted_addr);
+ 
+-            ret = axdimm_ioctl((int)handle->dev.fd, cmd, (uint64_t)untrusted_addr);
++            ret = axdimm_ioctl((int)handle->dev.fd, cmd, (uint64_t)untrusted_addr, out_ret);
+ 
+-            if (ret >= 0)
++            if (ret == 0)
+                 copy_to_trusted(cmd, untrusted_addr, arg);
+ 
+             ocall_munmap_untrusted(untrusted_addr, ALLOC_ALIGN_UP(req_size));
+-            *out_ret = ret;
+ 
+             break;
+         }
+-        default:
+-            pal_log(LOG_LEVEL_ERROR, "Unknown ioctl command: %x", cmd);
+-            return -PAL_ERROR_INVAL;
++        default:  // Here we have simple ioctl request
++            /* Here we have simple axdimm requests that can be performed without
++             * serialization/deserialization processes. We also can perform non-AXDIMM request if
++             * they don't return any values or return integer value.*/
++            assert(_IOC_SIZE(cmd) == _IOC_TYPECHECK(int) ||
++                   _IOC_SIZE(cmd) == _IOC_TYPECHECK(uint64_t) || _IOC_SIZE(cmd) == 0);
++            ret = axdimm_ioctl((int)handle->dev.fd, cmd, arg, out_ret);
+     }
+ 
+     return unix_to_pal_error(ret);
+-- 
+2.34.1
+

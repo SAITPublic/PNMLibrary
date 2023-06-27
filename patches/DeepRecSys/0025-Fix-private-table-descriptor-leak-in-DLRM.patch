@@ -1,0 +1,89 @@
+From b394b3008276dbf985612cd1b851a0c5795b2517 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 12 Dec 2022 17:44:58 +0300
+Subject: [PATCH 25/33] Fix private table descriptor leak in DLRM.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This commit fixes the leak of the table descriptor in DeepRecSys when
+private tables are used. The leak happenned because inference engined
+running in forked child processes made process-local changes to the Caffe2
+workspace by creating a net and did not run corresponding cleanup methods.
+The following is what happenned before this fix:
+
+1. The main process creates an empty workspace.
+2. A child process (inference engine) is forked.
+3. The child process runs a net, which creates this net in the workspace.
+  - The net constructor allocates AXDIMM memory.
+4. The IE is run normally until completion.
+5. The child process calls `exit(0)`.
+  - Destructors of the net or the workspace are not run.
+6. The main process does not see the changes the child process made to the
+   workspace. It sees the workspace as being empty.
+7. The main process calls the workspace destructor.
+  - The workspace is empty, so nothing is done.
+8. The main process exits.
+9. AXDIMM memory was allocated but not freed — a leak!
+
+This commit adds an additional step between steps 4 and 5:
+
+- The child process resets the workspace.
+  - This calls the destructors of the net and frees AXDIMM memory.
+    - The net is created per-IE, so no double free or use-after-free occurs.
+
+Thus, the AXDIMM memory is freed after being allocated, and the leaks no
+longer takes place.
+
+Resolves: AXDIMM-475
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ DeepRecSys.py | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index 69290e9..ef51ead 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -49,6 +49,23 @@ class ExecutionResults:
+   final_response_latencies: List[float]
+   responses_list: List[Dict[str, Any]]
+ 
++# Create a wrapper that runs a function and then resets the Caffe2 workspace.
++# This is needed because inference engines run in forked processes and create
++# nets in the workspace, but when they finish running, they do not call
++# the destructor of the workspace and thus the net. The workspace assumes
++# that the RAII mechanism will be functional, but changes to the workspace
++# are local to the process (IE), and when the destructor is actually run in
++# the main process, it has no nets to destroy. By explicitly resetting the
++# workspace at the end of the inference engines' lifespans, we fix this
++# problem and actually have the net's destructor invoked.
++def make_workspace_cleanup_wrapper(func):
++  def workspace_cleanup_wrapper(*args, **kwargs):
++    try:
++      return func(*args, **kwargs)
++    finally:
++      workspace.ResetWorkspace()
++  return workspace_cleanup_wrapper
++
+ # Function that runs in a separate thread and handles the results from the
+ # response queue as they arrive, saving information and statistics about
+ # them into `results`.
+@@ -171,11 +188,11 @@ def DeepRecSys():
+     DeepRecEngines = []
+     for i in range(args.inference_engines):
+       if (args.model_accel) and (i == (args.inference_engines - 1)):
+-        p = Process( target = accelInferenceEngine,
++        p = Process( target = make_workspace_cleanup_wrapper(accelInferenceEngine),
+                      args   = (args, accelRequestQueue, i, responseQueue, inferenceEngineReadyQueue),
+                    )
+       else:
+-        p = Process( target = inferenceEngine,
++        p = Process( target = make_workspace_cleanup_wrapper(inferenceEngine),
+                      args   = (args, requestQueue, i, responseQueue, inferenceEngineReadyQueue, tables_descriptor),
+                    )
+       p.daemon = True
+-- 
+2.34.1
+

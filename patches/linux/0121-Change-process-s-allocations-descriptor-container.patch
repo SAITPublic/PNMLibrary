@@ -1,0 +1,212 @@
+From 5aec09a4cf79ae00c3e4b877b88b43831cbce7e5 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Thu, 1 Jun 2023 15:27:43 +0300
+Subject: [PATCH 121/161] Change process's allocations descriptor container
+
+Resolves: MCS23-908
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ .../pnm/sls_resource/sls_process_manager.c    | 92 +++++++++++++------
+ .../pnm/sls_resource/sls_process_manager.h    |  9 +-
+ 2 files changed, 69 insertions(+), 32 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/sls_process_manager.c
+index d979fbdd1..0fa819c41 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/sls_process_manager.c
+@@ -12,6 +12,51 @@
+ 
+ enum rank_access_type { RANK_ACCESS_RD, RANK_ACCESS_WR, RANK_ACCESS_INVAL };
+ 
++bool desc_delete(struct rb_root *root, int desc)
++{
++	struct rb_node *node = root->rb_node;
++
++	while (node) {
++		struct sls_proc_desc *desc_node =
++			container_of(node, struct sls_proc_desc, node);
++
++		if (desc < desc_node->alloc_desc) {
++			node = node->rb_left;
++		} else if (desc > desc_node->alloc_desc) {
++			node = node->rb_right;
++		} else {
++			rb_erase(&desc_node->node, root);
++			kfree(desc_node);
++			return true;
++		}
++	}
++	return false;
++}
++
++bool desc_insert(struct rb_root *root, struct sls_proc_desc *proc_desc)
++{
++	struct rb_node **new = &(root->rb_node);
++	struct rb_node *parent = NULL;
++
++	while (*new) {
++		struct sls_proc_desc *this =
++			container_of(*new, struct sls_proc_desc, node);
++
++		parent = *new;
++		if (proc_desc->alloc_desc < this->alloc_desc)
++			new = &((*new)->rb_left);
++		else if (proc_desc->alloc_desc > this->alloc_desc)
++			new = &((*new)->rb_right);
++		else
++			return false;
++	}
++
++	rb_link_node(&proc_desc->node, parent, new);
++	rb_insert_color(&proc_desc->node, root);
++
++	return true;
++}
++
+ static inline enum rank_access_type get_rank_access_type(unsigned int cmd)
+ {
+ 	if (cmd == GET_RANK_FOR_WRITE || cmd == RELEASE_WRITE_RANK)
+@@ -54,13 +99,13 @@ find_current_proc_res(struct sls_process_manager *mgr)
+ static bool has_resources_leaked(struct sls_proc_resources *proc_res)
+ {
+ 	return proc_res->rank_write_mask || proc_res->rank_read_mask ||
+-	       !list_empty(&proc_res->alloc_desc_list);
++	       !RB_EMPTY_ROOT(&proc_res->alloc_desc_tree);
+ }
+ 
+ static void track_leaked_resources(struct sls_process_manager *mgr,
+ 				   struct sls_proc_resources *proc_res)
+ {
+-	struct sls_proc_desc *proc_desc;
++	struct rb_node *node;
+ 
+ 	atomic64_inc(&mgr->leaked);
+ 	list_move(&proc_res->list, &mgr->leaked_process_list);
+@@ -69,10 +114,10 @@ static void track_leaked_resources(struct sls_process_manager *mgr,
+ 		   get_current_process_id(), current->pid,
+ 		   proc_res->rank_write_mask, proc_res->rank_read_mask);
+ 
+-	list_for_each_entry(proc_desc, &proc_res->alloc_desc_list, list) {
++	for (node = rb_first(&proc_res->alloc_desc_tree); node;
++	     node = rb_next(node))
+ 		SLS_DBG("Leaked memory under desc[%lld]\n",
+-			   proc_desc->alloc_desc);
+-	}
++			rb_entry(node, struct sls_proc_desc, node)->alloc_desc);
+ }
+ 
+ static int release_process_resources(struct sls_proc_resources *proc_res,
+@@ -84,8 +129,7 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 	 * 'killed process' path
+ 	 */
+ 	int i;
+-	struct sls_proc_desc *proc_desc;
+-	struct sls_proc_desc *proc_desc_tmp;
++	struct rb_node *next;
+ 	bool failed = false;
+ 
+ 	/* handle unreleased ranks */
+@@ -108,15 +152,17 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 	}
+ 
+ 	/* handle unreleased allocation descriptors */
+-	list_for_each_entry_safe(proc_desc, proc_desc_tmp,
+-				 &proc_res->alloc_desc_list, list) {
++	while ((next = rb_first(&proc_res->alloc_desc_tree))) {
++		struct sls_proc_desc *desc_node =
++			rb_entry_safe(next, struct sls_proc_desc, node);
++
+ 		failed |=
+-			(deallocate_memory(alloc, proc_desc->alloc_desc) != 0);
++			(deallocate_memory(alloc, desc_node->alloc_desc) != 0);
+ 		SLS_INF("Abnormal release desc[%lld], pid: %d, tid: %d\n",
+-			   proc_desc->alloc_desc, get_current_process_id(),
+-			   current->pid);
+-		list_del(&proc_desc->list);
+-		kfree(proc_desc);
++			   desc_node->alloc_desc, get_current_process_id(), current->pid);
++		next = rb_first(&proc_res->alloc_desc_tree);
++		rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
++		kfree(desc_node);
+ 	}
+ 
+ 	return failed ? -1 : 0;
+@@ -256,7 +302,6 @@ int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+ static int update_descriptor_status(struct sls_process_manager *mgr,
+ 				    uint64_t desc, bool is_registration)
+ {
+-	struct sls_proc_desc *proc_desc_tmp;
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+ 	struct sls_proc_desc *proc_desc = NULL;
+@@ -275,7 +320,7 @@ static int update_descriptor_status(struct sls_process_manager *mgr,
+ 
+ 		if (is_registration) { /* allocate and add descritor to descriptors list */
+ 			proc_desc = kzalloc(sizeof(struct sls_proc_desc),
+-					    GFP_KERNEL);
++						GFP_KERNEL);
+ 
+ 			if (proc_desc == NULL) {
+ 				err_code = -1;
+@@ -283,16 +328,11 @@ static int update_descriptor_status(struct sls_process_manager *mgr,
+ 			}
+ 
+ 			proc_desc->alloc_desc = desc;
+-			list_add(&proc_desc->list, &proc_res->alloc_desc_list);
++			if (!desc_insert(&proc_res->alloc_desc_tree, proc_desc))
++				err_code = -1;
+ 		} else { /* remove requested descriptor from descriptors list */
+-			list_for_each_entry_safe(proc_desc, proc_desc_tmp,
+-						 &proc_res->alloc_desc_list,
+-						 list) {
+-				if (proc_desc->alloc_desc == desc) {
+-					list_del(&proc_desc->list);
+-					kfree(proc_desc);
+-				}
+-			}
++			if (!desc_delete(&proc_res->alloc_desc_tree, desc))
++				err_code = -1;
+ 		}
+ 	}
+ out:
+@@ -365,7 +405,7 @@ int register_sls_process(struct sls_process_manager *mgr)
+ 		}
+ 
+ 		proc_res->pid = pid;
+-		INIT_LIST_HEAD(&proc_res->alloc_desc_list);
++		proc_res->alloc_desc_tree = RB_ROOT;
+ 		list_add(&proc_res->list, &mgr->active_process_list);
+ 		SLS_DBG("Registered process, pid: %d, tid: %d\n", pid,
+ 			   current->pid);
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.h b/drivers/pnm/sls_resource/sls_process_manager.h
+index acac2940f..cccf70ca1 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.h
++++ b/drivers/pnm/sls_resource/sls_process_manager.h
+@@ -9,20 +9,17 @@
+ 
+ #include <linux/mutex.h>
+ #include <linux/list.h>
++#include <linux/rbtree.h>
+ 
+-/* list of descriptors held by process */
+ struct sls_proc_desc {
+ 	uint64_t alloc_desc;
+-	struct list_head list;
++	struct rb_node node;
+ };
+ 
+ /* resources allocated for particular process */
+ struct sls_proc_resources {
+ 	int pid;
+-	/* [TODO:] need to checkout performance impact of using just list,
+-	 * maybe some more advanced data structure is required (rb_tree)
+-	 */
+-	struct list_head alloc_desc_list;
++	struct rb_root alloc_desc_tree;
+ 	int rank_write_mask;
+ 	int rank_read_mask;
+ 	/* this counter needed because release f_op is called on each close
+-- 
+2.34.1
+

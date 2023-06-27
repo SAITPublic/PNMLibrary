@@ -1,0 +1,40 @@
+From 5bf09dceb77390375f621847c4f0fc0eb51d8f5b Mon Sep 17 00:00:00 2001
+From: "p.bred" <p.bred@samsung.com>
+Date: Tue, 31 May 2022 03:26:50 +0300
+Subject: [PATCH 024/161] [drivers/dax/axdimm] fix
+ include/uapi/linux/libaxdimm.h header (#3)
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ include/uapi/linux/libaxdimm.h | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index d2eb95acd..6a34b9142 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -10,6 +10,12 @@
+ #ifndef __LIBAXDIMM_H__
+ #define __LIBAXDIMM_H__
+ 
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stdint.h> // for uint64_t
++#endif
++
+ /* Interleaving Stride length : 128Bytes (0x80) */
+ #define AXDIMM_STRIDE_LENGTH 0x80
+ 
+@@ -44,7 +50,7 @@
+ #define NUM_OF_PSUM_BUF 2
+ 
+ /* Instruction Size (Bytes) */
+-#define INSTRUCTON_SIZE 8
++#define INSTRUCTION_SIZE 8
+ 
+ /* Data Size (Bytes) */
+ #define DATA_SIZE 4
+-- 
+2.34.1
+

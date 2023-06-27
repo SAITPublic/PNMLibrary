@@ -1,0 +1,192 @@
+@startuml
+partition "SecNDPSlsSequential"{
+    start
+
+    :Load test data
+    (Embedded tables, indices);
+
+    :Create SecureRunner (runner);
+
+    :Init NDP device
+    **runner.init(...)**;
+
+    :Encrypt and offload tables to device
+    **runner.load_tables(...)**;
+
+    :Prepare data for SLS
+    (create SLSOperation);
+
+    while (**N** iteration)
+        :Run SLS and decrypt result
+        **runner.run(...)**;
+    endwhile
+
+    :Validate result
+    (Compare with golden, check MACs);
+
+    end
+}
+
+partition "SecNDPSlsMultiThreads"{
+    start
+
+    split
+
+    :Load test data
+    (Embedded tables, indices);
+
+    :Create SecureRunner (runner);
+
+    :Init NDP device
+    **runner.init(...)**;
+
+    :Encrypt and offload tables to device
+    **runner.load_tables(...)**;
+
+    :Prepare data for SLS
+    (create SLSOperation);
+
+    while (**N** iteration)
+        :Run SLS and decrypt result
+        **runner.run(...)**;
+    endwhile
+
+    :Validate result
+    (Compare with golden, check MACs);
+
+    split again
+    :Load test data
+        (Embedded tables, indices);
+
+        :Create SecureRunner (runner);
+
+        :Init NDP device
+        **runner.init(...)**;
+
+        :Encrypt and offload tables to device
+        **runner.load_tables(...)**;
+
+        :Prepare data for SLS
+        (create SLSOperation);
+
+        while (**N** iteration)
+            :Run SLS and decrypt result
+            **runner.run(...)**;
+        endwhile
+
+        :Validate result
+        (Compare with golden, check MACs);
+
+    split again
+        :Load test data
+        (Embedded tables, indices);
+
+        :Create SecureRunner (runner);
+
+        :Init NDP device
+        **runner.init(...)**;
+
+        :Encrypt and offload tables to device
+        **runner.load_tables(...)**;
+
+        :Prepare data for SLS
+        (create SLSOperation);
+
+        while (**N** iteration)
+            :Run SLS and decrypt result
+            **runner.run(...)**;
+        endwhile
+
+        :Validate result
+        (Compare with golden, check MACs);
+
+    endsplit
+    end
+}
+
+partition "SecNDPSlsMultiProcesses"{
+   start
+
+   fork
+
+   if (parent) then (yes)
+    end
+   else (no)
+
+   :Wait for parent
+   (Semaphore sync);
+
+   :Load test data
+   (Embedded tables, indices);
+
+   :Create SecureRunner (runner);
+
+   :Init NDP device
+   **runner.init(...)**;
+
+   :Encrypt and offload tables to device
+   **runner.load_tables(...)**;
+
+   :Prepare data for SLS
+   (create SLSOperation);
+
+   while (**N** iteration)
+       :Run SLS and decrypt result
+       **runner.run(...)**;
+   endwhile
+
+   :Validate result
+   (Compare with golden, check MACs);
+   end
+   endif
+
+   fork again
+    if (parent) then (yes)
+        end
+       else (no)
+
+       :Wait for parent
+       (Semaphore sync);
+
+       :Load test data
+       (Embedded tables, indices);
+
+       :Create SecureRunner (runner);
+
+       :Init NDP device
+       **runner.init(...)**;
+
+       :Encrypt and offload tables to device
+       **runner.load_tables(...)**;
+
+       :Prepare data for SLS
+       (create SLSOperation);
+
+       while (**N** iteration)
+           :Run SLS and decrypt result
+           **runner.run(...)**;
+       endwhile
+
+       :Validate result
+       (Compare with golden, check MACs);
+       end
+       endif
+
+   fork again
+
+   if (parent) then (yes)
+    :Imitate some job;
+
+    :Notify children;
+
+   else (no)
+    end
+   endif
+
+   endfork
+
+   :Wait for children;
+
+   end
+}
+@enduml

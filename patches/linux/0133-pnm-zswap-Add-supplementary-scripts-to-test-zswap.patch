@@ -1,0 +1,644 @@
+From eb1407ca8f3e1afe8199aaa1cfc32a86cd475121 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Tue, 11 Jul 2023 00:44:03 -0400
+Subject: [PATCH 133/161] [pnm][zswap] Add supplementary scripts to test zswap
+
+Scripts to configure the execution environment for cxl-zswap simulator
+were added.
+
+Here we add script for:
+ - creating qemu image with Ubuntu 22.04 (create_rootfs.sh)
+ - start qemu with compiled kernel (qemu/run_sim.sh)
+ - setting the proper swap size for testing (swap_settings.sh)
+ - start zswap simulator (pnm_sim_mode.sh)
+
+Related to: MCS23-1322
+
+Signed-off-by: y.lavrinenko <y.lavrinenko@samsung.com>
+---
+ scripts/pnm/zswap/create_rootfs.sh       |  47 +++++++++++
+ scripts/pnm/zswap/lat_bw_emulation.sh    |  18 ++++
+ scripts/pnm/zswap/qemu/cpp/mmadvice.cpp  |  69 ++++++++++++++++
+ scripts/pnm/zswap/qemu/cpu_mode.sh       |  37 +++++++++
+ scripts/pnm/zswap/qemu/kgdb.sh           |   8 ++
+ scripts/pnm/zswap/qemu/pnm_sim_mode.sh   |  72 ++++++++++++++++
+ scripts/pnm/zswap/qemu/run_sim.sh        |  91 ++++++++++++++++++++
+ scripts/pnm/zswap/qemu/swap_setting.sh   |  10 +++
+ scripts/pnm/zswap/server/cpu_mode.sh     |  70 ++++++++++++++++
+ scripts/pnm/zswap/server/pnm_sim_mode.sh | 101 +++++++++++++++++++++++
+ scripts/pnm/zswap/server/swap_setting.sh |  10 +++
+ 11 files changed, 533 insertions(+)
+ create mode 100755 scripts/pnm/zswap/create_rootfs.sh
+ create mode 100755 scripts/pnm/zswap/lat_bw_emulation.sh
+ create mode 100644 scripts/pnm/zswap/qemu/cpp/mmadvice.cpp
+ create mode 100755 scripts/pnm/zswap/qemu/cpu_mode.sh
+ create mode 100755 scripts/pnm/zswap/qemu/kgdb.sh
+ create mode 100755 scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+ create mode 100755 scripts/pnm/zswap/qemu/run_sim.sh
+ create mode 100755 scripts/pnm/zswap/qemu/swap_setting.sh
+ create mode 100755 scripts/pnm/zswap/server/cpu_mode.sh
+ create mode 100755 scripts/pnm/zswap/server/pnm_sim_mode.sh
+ create mode 100755 scripts/pnm/zswap/server/swap_setting.sh
+
+diff --git a/scripts/pnm/zswap/create_rootfs.sh b/scripts/pnm/zswap/create_rootfs.sh
+new file mode 100755
+index 000000000..438c54c01
+--- /dev/null
++++ b/scripts/pnm/zswap/create_rootfs.sh
+@@ -0,0 +1,47 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++ROOT_PATH=$1
++IMAGE_NAME=qemu-image.img
++
++IMAGE_PATH=${ROOT_PATH}/${IMAGE_NAME}
++
++/usr/bin/qemu-img create ${IMAGE_PATH} 20g
++mkfs.ext4 ${IMAGE_PATH}
++mkdir -p ${ROOT_PATH}/mount-point.dir
++sudo mount -o loop ${IMAGE_NAME} ${ROOT_PATH}/mount-point.dir/
++sudo apt install debootstrap debian-keyring debian-archive-keyring
++
++# When debootstrap install if wget error occurs,
++# add proxy configuration to /etc/wgetrc (http_proxy, https_proxy, ftp_proxy)
++
++## for Ubuntu 22.04
++sudo debootstrap --include=openssh-server,linux-firmware \
++      --arch amd64 jammy /home/ylavrinenko/vm/mount-point.dir/
++
++## for Ubuntu 16.04
++# sudo debootstrap --include=openssh-server,linux-firmware --arch amd64 xenial ../mount-point.dir/
++
++sudo cp -rf ./ ${ROOT_PATH}/mount-point.dir/root/
++
++cd ${ROOT_PATH}/mount-point.dir
++sudo chroot .
++
++# After creating rootfs,
++# 1) Change root password
++# $ passwd
++
++# 2) Package update
++# $ apt update
++# $ apt upgrade
++# $ apt install vim pciutils debian-keyring debian-archive-keyring \
++#               openssh-server numactl build-essential cmake gcc g++
++
++# 3) Modify sshd config
++# $ vim /etc/ssh/sshd_config
++# ...
++# PermitRootLogin yes
++# ...
++
++# 4) Quit
++# $ exit
+diff --git a/scripts/pnm/zswap/lat_bw_emulation.sh b/scripts/pnm/zswap/lat_bw_emulation.sh
+new file mode 100755
+index 000000000..5e5fca45b
+--- /dev/null
++++ b/scripts/pnm/zswap/lat_bw_emulation.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++modprobe msr
++
++## Output format
++#   818 (hex code) => min[0x08=800MHz]:max[0x18=2400MHz]
++rdmsr -a 0x620
++
++## To reduce uncore frequency of remote memory node (800MHz)
++#   0808 (hex code) => min[0x08=800MHz]:max[0x08=800MHz]
++for i in {32..63}
++do
++  wrmsr -p $i 0x620 0x0808
++done
++
++rdmsr -a 0x620
++
+diff --git a/scripts/pnm/zswap/qemu/cpp/mmadvice.cpp b/scripts/pnm/zswap/qemu/cpp/mmadvice.cpp
+new file mode 100644
+index 000000000..ee4f1d2e1
+--- /dev/null
++++ b/scripts/pnm/zswap/qemu/cpp/mmadvice.cpp
+@@ -0,0 +1,69 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/mman.h>
++#include <linux/mman.h>
++
++#ifndef MADV_PAGEOUT
++#define MADV_PAGEOUT 21 /* force pages out immediately */
++#endif
++
++#define PG_SZ 4096
++
++int main(int argc, char **argv)
++{
++	int i, nr_pages = 1;
++	int64_t *dump_ptr;
++	char *addr, *a;
++	int loop = 1;
++
++	if (argc > 1)
++		nr_pages = atoi(argv[1]);
++
++	printf("Allocating %d pages to swap in/out\n", nr_pages);
++
++	/* allocate pages */
++	addr = mmap(NULL, nr_pages * PG_SZ, PROT_READ | PROT_WRITE,
++		    MAP_SHARED | MAP_ANONYMOUS, 0, 0);
++	*addr = 1;
++
++	/* initialize data in page to all '*' chars */
++	memset(addr, '*', nr_pages * PG_SZ);
++
++	printf("Swapping out %d pages\n", nr_pages);
++
++	/* Tell kernel to swap it out */
++	madvise(addr, nr_pages * PG_SZ, MADV_PAGEOUT);
++
++	while (loop > 0) {
++		/* Wait for swap out to finish */
++		sleep(5);
++
++		a = addr;
++
++		printf("Swapping in %d pages\n", nr_pages);
++
++		/* Access the page ... this will swap it back in again */
++		for (i = 0; i < nr_pages; i++) {
++			if (a[0] != '*') {
++				printf("Bad data from decompress!!!!!\n");
++
++				dump_ptr = (int64_t *)a;
++				for (int j = 0; j < 100; j++) {
++					printf("  page %d data: %#llx\n", i,
++					       *dump_ptr);
++					dump_ptr++;
++				}
++			}
++
++			a += PG_SZ;
++		}
++
++		loop--;
++	}
++
++	printf("Swapped out and in %d pages\n", nr_pages);
++
++	return 0;
++}
+diff --git a/scripts/pnm/zswap/qemu/cpu_mode.sh b/scripts/pnm/zswap/qemu/cpu_mode.sh
+new file mode 100755
+index 000000000..90aa5af70
+--- /dev/null
++++ b/scripts/pnm/zswap/qemu/cpu_mode.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++function set_zswap() {
++  echo deflate > /sys/module/zswap/parameters/compressor
++  echo N > /sys/module/zswap/parameters/same_filled_pages_enabled
++  echo 20 > /sys/module/zswap/parameters/max_pool_percent
++  echo zbud > /sys/module/zswap/parameters/zpool
++  echo 90 > /sys/module/zswap/parameters/accept_threshold_percent
++  echo Y > /sys/module/zswap/parameters/enabled
++
++  echo 100 > /proc/sys/vm/swappiness
++
++  grep -R . /sys/kernel/debug/zswap
++}
++
++function set_profile() {
++  echo 0 > /proc/sys/kernel/kptr_restrict
++  echo -1 > /proc/sys/kernel/perf_event_paranoid
++}
++
++function disable_thp() {
++  echo never > /sys/kernel/mm/transparent_hugepage/enabled
++  echo never > /sys/kernel/mm/transparent_hugepage/defrag
++  cat /sys/kernel/mm/transparent_hugepage/enabled
++  cat /sys/kernel/mm/transparent_hugepage/defrag
++}
++
++
++## Main
++
++disable_thp
++
++set_profile
++
++set_zswap
++
+diff --git a/scripts/pnm/zswap/qemu/kgdb.sh b/scripts/pnm/zswap/qemu/kgdb.sh
+new file mode 100755
+index 000000000..5d59f8ea1
+--- /dev/null
++++ b/scripts/pnm/zswap/qemu/kgdb.sh
+@@ -0,0 +1,8 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++# note : prerequisite - cgdb, gdb also works though
++KERNEL_PATH=$1
++
++cgdb -q $KERNEL_PATH/vmlinux -ex 'target remote localhost:1234'
++#gdb -q $KERNEL_PATH/vmlinux -ex 'target remote localhost:1234'
+diff --git a/scripts/pnm/zswap/qemu/pnm_sim_mode.sh b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+new file mode 100755
+index 000000000..fc960420c
+--- /dev/null
++++ b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+@@ -0,0 +1,72 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++# Set pnm simulator
++function set_pnm_sim() {
++  echo Y > /sys/module/cxl_pnm_drv/parameters/pnm_drv_enabled
++
++  # the number of pnm units
++  echo 4 > /sys/module/pnm_sim/parameters/num_comp_unit
++  echo 4 > /sys/module/pnm_sim/parameters/num_dcomp_unit
++
++  # set core affinity of kthreads for pnm units
++  echo 8 > /sys/module/pnm_sim/parameters/pnm_core
++
++  # for logging
++  echo Y > /sys/module/pnm_sim/parameters/log_enabled
++  #echo Y > /sys/module/compress_unit/parameters/log_enabled
++
++  echo Y > /sys/module/pnm_sim/parameters/enabled
++
++  echo 300 > /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
++  echo 1 > /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress
++  cat /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress
++}
++
++# Set cxl_zswap
++function set_cxl_zswap() {
++  echo 1 > /sys/module/cxl_zswap/parameters/cxl_mem_node
++  echo pnm > /sys/module/cxl_zswap/parameters/pnm_accel
++  echo 20 > /sys/module/cxl_zswap/parameters/max_pool_percent
++  echo zbud > /sys/module/cxl_zswap/parameters/zpool
++  echo 90 > /sys/module/cxl_zswap/parameters/accept_threshold_percent
++
++  echo Y > /sys/module/cxl_zswap/parameters/pnm_enabled
++  echo Y > /sys/module/cxl_zswap/parameters/enabled
++
++  echo 100 > /proc/sys/vm/swappiness
++
++  grep -R . /sys/kernel/debug/cxl_zswap
++}
++
++# Set environment for profiling
++function set_profile() {
++  echo 0 > /proc/sys/kernel/kptr_restrict
++  echo -1 > /proc/sys/kernel/perf_event_paranoid
++}
++
++# Disable THP
++function disable_thp() {
++  echo never > /sys/kernel/mm/transparent_hugepage/enabled
++  echo never > /sys/kernel/mm/transparent_hugepage/defrag
++  cat /sys/kernel/mm/transparent_hugepage/enabled
++  cat /sys/kernel/mm/transparent_hugepage/defrag
++}
++
++# Disable watchdogs for NUMA node1
++function disable_watchdogs(){
++  cpu=`cat /sys/devices/system/node/node0/cpulist`
++  echo "$cpu" > /proc/sys/kernel/watchdog_cpumask
++}
++
++# Main
++disable_watchdogs
++
++disable_thp
++
++set_profile
++
++set_pnm_sim
++
++set_cxl_zswap
++
+diff --git a/scripts/pnm/zswap/qemu/run_sim.sh b/scripts/pnm/zswap/qemu/run_sim.sh
+new file mode 100755
+index 000000000..c56492094
+--- /dev/null
++++ b/scripts/pnm/zswap/qemu/run_sim.sh
+@@ -0,0 +1,91 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++KERNEL_PATH=$1
++ROOTFS_PATH=$2
++MONITOR_PORT=45454
++
++QEMU_SYSTEM_BINARY=/usr/bin/qemu-system-x86_64
++BZIMAGE_PATH="${KERNEL_PATH}/arch/x86_64/boot/bzImage"
++IMAGE_PATH="${ROOTFS_PATH}/qemu-image.img"
++
++
++function print_usage(){
++	echo ""
++	echo "Usage:"
++	echo " $0 [-x vm_index(0-9)]"
++	echo ""
++}
++
++while getopts "x:" opt; do
++	case "$opt" in
++		x)
++			if [ $OPTARG -lt 0 ] || [ $OPTARG -gt 9 ]; then
++				echo "Error: VM count should be 0-9"
++				exit 1
++			fi
++			VMIDX=$OPTARG
++			;;
++		*)
++			print_usage
++			exit 1
++			;;
++	esac
++done
++
++if [ -z ${VMIDX} ]; then
++	NET_OPTION="-net user,hostfwd=tcp::22242-:22 -net nic"
++else
++	echo "Info: Running VM #${VMIDX}..."
++	MONITOR_PORT="4545${VMIDX}"
++	IMAGE_PATH=$(echo ${IMAGE_PATH} | sed 's/.img/-'"${VMIDX}"'.img/')
++	MACADDR="52:54:00:12:34:${VMIDX}${VMIDX}"
++	TAPNAME="tap${VMIDX}"
++	NET_OPTION="-net nic,macaddr=${MACADDR} -net tap,ifname=${TAPNAME},script=no"
++
++	IFCONFIG_TAPINFO=`ifconfig | grep ${TAPNAME}`
++	if [ -z "${IFCONFIG_TAPINFO}" ]; then
++		echo "${TAPNAME} SHOULD be up for using network in VM. Run ./setup_bridge.sh first"
++		exit 1
++	fi
++fi
++
++if [ ! -f "${QEMU_SYSTEM_BINARY}" ]; then
++	echo "qemu-system-x86_64 is necessary. Install qemu-system-x86-64 first."
++	exit 1
++fi
++
++if [ ! -f "${BZIMAGE_PATH}" ]; then
++	echo "kernel image is necessary. Build kernel first."
++	exit 1
++fi
++
++if [ ! -f "${IMAGE_PATH}" ]; then
++	echo "QEMU rootfs ${IMAGE_PATH} is necessary. Run create_rootfs.sh or download it first."
++	exit 1
++fi
++
++KERNEL_OPTIONS="root=/dev/sda rw console=ttyS0 nokaslr memblock=debug loglevel=7  \
++                fsck.repair=yes rootwait isolcpus=nohz,domain,10-15 nohz_full=10-15  \
++                memmap=3G\$0x140000000 memmap=9G\$0x200000000"
++
++##########################################################################################
++# node 0: compute node
++# node 1: cxl-pnm node
++##########################################################################################
++sudo numactl -N 0 -m 0 ${QEMU_SYSTEM_BINARY} -s \
++    -smp sockets=2,cores=8,threads=1 \
++    -numa node,cpus=0-7,memdev=mem0,nodeid=0 \
++    -object memory-backend-ram,id=mem0,size=4G \
++    -numa node,cpus=8-15,memdev=mem1,nodeid=1 \
++    -object memory-backend-ram,id=mem1,size=32G \
++    -kernel ${BZIMAGE_PATH} \
++    -drive file=${IMAGE_PATH},index=0,media=disk,format=raw \
++    -enable-kvm \
++    -serial mon:stdio \
++    -append "${KERNEL_OPTIONS}" \
++    -m 36G,slots=4,maxmem=64G \
++    -nographic \
++    ${NET_OPTION}
++
++
+diff --git a/scripts/pnm/zswap/qemu/swap_setting.sh b/scripts/pnm/zswap/qemu/swap_setting.sh
+new file mode 100755
+index 000000000..2f3f5f82a
+--- /dev/null
++++ b/scripts/pnm/zswap/qemu/swap_setting.sh
+@@ -0,0 +1,10 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++swapoff -a
++touch /swapfile
++fallocate -v -l 8589934592 /swapfile
++mkswap /swapfile
++swapon /swapfile
++swapon --show
++grep SwapTotal /proc/meminfo
+diff --git a/scripts/pnm/zswap/server/cpu_mode.sh b/scripts/pnm/zswap/server/cpu_mode.sh
+new file mode 100755
+index 000000000..700452308
+--- /dev/null
++++ b/scripts/pnm/zswap/server/cpu_mode.sh
+@@ -0,0 +1,70 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++function set_cpufreq() {
++  for i in {0..63}
++  do
++    sudo cpufreq-set --cpu $i --governor performance
++  done
++
++  cpufreq-info --cpu 0
++
++  echo "Scaling Governor"
++  sudo cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
++
++  echo "Turbo Boost ON(0)/OFF(1)"
++  cat /sys/devices/system/cpu/intel_pstate/no_turbo
++  sudo sh -c "echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo"
++  cat /sys/devices/system/cpu/intel_pstate/no_turbo
++}
++
++function set_memory_offline() {
++  ## NUMA 1 core list: 32~63 core
++  for i in {32..63}
++  do
++    sudo sh -c "echo 0 > /sys/devices/system/cpu/cpu$i/online"
++  done
++
++  numactl -H
++}
++
++function set_zswap() {
++  echo deflate > /sys/module/zswap/parameters/compressor
++  echo N > /sys/module/zswap/parameters/same_filled_pages_enabled
++  echo 20 > /sys/module/zswap/parameters/max_pool_percent
++  echo zbud > /sys/module/zswap/parameters/zpool
++  echo 90 > /sys/module/zswap/parameters/accept_threshold_percent
++  echo Y > /sys/module/zswap/parameters/enabled
++
++  echo 100 > /proc/sys/vm/swappiness
++
++  grep -R . /sys/kernel/debug/zswap
++}
++
++function set_profile() {
++  echo 0 > /proc/sys/kernel/kptr_restrict
++  echo -1 > /proc/sys/kernel/perf_event_paranoid
++  echo 0 > /proc/sys/kernel/nmi_watchdog
++}
++
++function disable_thp() {
++  echo never > /sys/kernel/mm/transparent_hugepage/enabled
++  echo never > /sys/kernel/mm/transparent_hugepage/defrag
++  cat /sys/kernel/mm/transparent_hugepage/enabled
++  cat /sys/kernel/mm/transparent_hugepage/defrag
++}
++
++
++## Main
++set_cpufreq
++
++set_memory_offline
++
++check_cpu
++
++disable_thp
++
++set_profile
++
++set_zswap
++
+diff --git a/scripts/pnm/zswap/server/pnm_sim_mode.sh b/scripts/pnm/zswap/server/pnm_sim_mode.sh
+new file mode 100755
+index 000000000..f90130ebd
+--- /dev/null
++++ b/scripts/pnm/zswap/server/pnm_sim_mode.sh
+@@ -0,0 +1,101 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++## Fix CPU frequency
++function set_cpufreq() {
++  for i in {0..63}
++  do
++    sudo cpufreq-set --cpu $i --governor performance
++  done
++
++  cpufreq-info --cpu 0
++
++  echo "Scaling Governor"
++  sudo cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
++
++  echo "Turbo Boost ON(0)/OFF(1)"
++  cat /sys/devices/system/cpu/intel_pstate/no_turbo
++  sudo sh -c "echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo"
++  cat /sys/devices/system/cpu/intel_pstate/no_turbo
++}
++
++# Disable CPUs on NUMA 1
++function set_cpu_offline() {
++  # NUMA 1 core list: 32~63 core
++  for i in {40..63}
++  do
++    sudo sh -c "echo 0 > /sys/devices/system/cpu/cpu$i/online"
++  done
++
++  numactl -H
++}
++
++# Set pnm simulator
++function set_pnm_sim() {
++  echo Y > /sys/module/cxl_pnm_drv/parameters/pnm_drv_enabled
++
++  # the number of pnm units
++  echo 4 > /sys/module/pnm_sim/parameters/num_comp_unit
++  echo 4 > /sys/module/pnm_sim/parameters/num_dcomp_unit
++
++  # set core affinity of kthreads for pnm units
++  echo 32 > /sys/module/pnm_sim/parameters/pnm_core
++
++  # for logging
++  # echo Y > /sys/module/pnm_sim/parameters/log_enabled
++  # echo Y > /sys/module/compress_unit/parameters/log_enabled
++
++  echo Y > /sys/module/pnm_sim/parameters/enabled
++
++  echo 300 > /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
++  echo 1 > /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress
++  cat /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress
++}
++
++# Set cxl_zswap
++function set_cxl_zswap() {
++  echo 1 > /sys/module/cxl_zswap/parameters/cxl_mem_node
++  echo pnm > /sys/module/cxl_zswap/parameters/pnm_accel
++  echo 20 > /sys/module/cxl_zswap/parameters/max_pool_percent
++  echo zbud > /sys/module/cxl_zswap/parameters/zpool
++  echo 90 > /sys/module/cxl_zswap/parameters/accept_threshold_percent
++
++  echo Y > /sys/module/cxl_zswap/parameters/pnm_enabled
++  echo Y > /sys/module/cxl_zswap/parameters/enabled
++
++  echo 100 > /proc/sys/vm/swappiness
++
++  grep -R . /sys/kernel/debug/cxl_zswap
++}
++
++# Set environment for profiling
++function set_profile() {
++  echo 0 > /proc/sys/kernel/kptr_restrict
++  echo -1 > /proc/sys/kernel/perf_event_paranoid
++  echo 0 > /proc/sys/kernel/nmi_watchdog
++}
++
++# Disable THP
++function disable_thp() {
++  echo never > /sys/kernel/mm/transparent_hugepage/enabled
++  echo never > /sys/kernel/mm/transparent_hugepage/defrag
++  cat /sys/kernel/mm/transparent_hugepage/enabled
++  cat /sys/kernel/mm/transparent_hugepage/defrag
++}
++
++
++# Main
++set_cpufreq
++
++set_cpu_offline
++
++check_cpu
++
++disable_thp
++
++set_profile
++
++set_pnm_sim
++
++set_cxl_zswap
++
+diff --git a/scripts/pnm/zswap/server/swap_setting.sh b/scripts/pnm/zswap/server/swap_setting.sh
+new file mode 100755
+index 000000000..1c6b8de93
+--- /dev/null
++++ b/scripts/pnm/zswap/server/swap_setting.sh
+@@ -0,0 +1,10 @@
++#!/bin/bash
++# SPDX-License-Identifier: GPL-2.0
++
++swapoff -a
++touch /swapfile
++fallocate -v -l 53687091200 /swapfile
++mkswap /swapfile
++swapon /swapfile
++swapon --show
++grep SwapTotal /proc/meminfo
+-- 
+2.34.1
+

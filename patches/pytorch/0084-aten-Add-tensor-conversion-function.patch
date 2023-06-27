@@ -1,0 +1,56 @@
+From 581475afe0eb643a72df16d42bebdec6a6c998bd Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 01:38:45 +0300
+Subject: [PATCH 084/128] [aten] Add tensor conversion function
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ .../ATen/native/axdimm/AxdimmTensorConvert.h  | 34 +++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+ create mode 100644 aten/src/ATen/native/axdimm/AxdimmTensorConvert.h
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensorConvert.h b/aten/src/ATen/native/axdimm/AxdimmTensorConvert.h
+new file mode 100644
+index 00000000..c98430fe
+--- /dev/null
++++ b/aten/src/ATen/native/axdimm/AxdimmTensorConvert.h
+@@ -0,0 +1,34 @@
++#ifndef __AXDIMM_TENSOR_CONVERT__
++#define __AXDIMM_TENSOR_CONVERT__
++
++#include <ATen/native/axdimm/AxdimmSecureTensor.h>
++#include <ATen/native/axdimm/AxdimmTensor.h>
++
++namespace at {
++namespace native {
++namespace axdimm {
++
++template <typename T>
++const T& convert(const at::Tensor& tensor) {
++  TORCH_INTERNAL_ASSERT(tensor.is_axdimm());
++  AxdimmTensorImpl* impl =
++      static_cast<AxdimmTensorImpl*>(tensor.unsafeGetTensorImpl());
++  const AxdimmBaseTensor* tensor_ptr = impl->unsafe_opaque_handle().get();
++  const auto tensor_type = tensor_ptr->get_tensor_type();
++  TORCH_INTERNAL_ASSERT(
++      tensor_type == AxdimmTensorType::AXDIMM_SIMPLE ||
++          tensor_type == AxdimmTensorType::AXDIMM_SECURE ||
++          tensor_type == AxdimmTensorType::AXDIMM_SECURE_SGX,
++      "Unsuported tensor type");
++
++  const T* res = dynamic_cast<const T*>(tensor_ptr);
++  TORCH_INTERNAL_ASSERT(res, "Failed to convert tensor");
++
++  return *res;
++}
++
++} // namespace axdimm
++} // namespace native
++} // namespace at
++
++#endif
+-- 
+2.34.1
+

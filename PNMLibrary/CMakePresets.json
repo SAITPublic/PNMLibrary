@@ -1,0 +1,79 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 19,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default Config",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PNM_ENABLE_TESTS": "ON",
+        "PNM_ENABLE_BENCHMARKS": "ON",
+        "PNM_USE_CCACHE": "ON",
+        "TEST_TABLES_ROOT": "$env{HOME}/input",
+        "PNM_EXECUTION_PLATFORM": "FUNCSIM"
+      },
+      "environment": {
+        "CC": "clang",
+        "CXX": "clang++"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release build",
+      "inherits": "default",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "gcc",
+      "displayName": "Build with GCC",
+      "inherits": "default",
+      "environment": {
+        "CC": "gcc",
+        "CXX": "g++"
+      }
+    },
+    {
+      "name": "pre-pr",
+      "displayName": "Prepare for PR",
+      "inherits": "release",
+      "cacheVariables": {
+        "PNM_ENABLE_COMMON_CHECKS": "ON"
+      }
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "Build with Address Sanitizer and UB Sanitizer",
+      "inherits": "default",
+      "cacheVariables": {
+        "PNM_USE_ASAN": "ON",
+        "PNM_USE_UBSAN": "ON"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Build with Thread Sanitizer",
+      "inherits": "default",
+      "cacheVariables": {
+        "PNM_USE_TSAN": "ON"
+      }
+    },
+    {
+      "name": "msan",
+      "displayName": "Build with Memory Sanitizer",
+      "inherits": "default",
+      "cacheVariables": {
+        "PNM_USE_MSAN": "ON"
+      }
+    }
+  ]
+}

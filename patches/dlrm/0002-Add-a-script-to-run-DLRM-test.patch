@@ -1,0 +1,40 @@
+From 4646425d07d1b67b7aeadebf1eb61929336765ec Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 31 Aug 2022 14:25:05 +0900
+Subject: [PATCH 02/23] Add a script to run DLRM test
+
+The configuration is similar to what we use for Caffe2 version.
+
+Resolves: AXDIMM-370.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ run_test.sh | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+ create mode 100755 run_test.sh
+
+diff --git a/run_test.sh b/run_test.sh
+new file mode 100755
+index 0000000..268a473
+--- /dev/null
++++ b/run_test.sh
+@@ -0,0 +1,16 @@
++#!/bin/sh
++
++set -e
++
++embedding_size="500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000-500000"
++arch_mlp_bot="128-128-16"
++arch_mlp_top="256-64-1"
++sparse_feature_size=16
++mini_batch_size=256
++num_indices_per_lookup=40
++interaction_op="cat"
++num_batches=100
++
++python3 ./dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
++                            --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed=1 \
++                            --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" --inference-only
+-- 
+2.34.1
+

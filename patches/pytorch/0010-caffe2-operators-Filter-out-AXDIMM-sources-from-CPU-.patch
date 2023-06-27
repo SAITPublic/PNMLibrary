@@ -1,0 +1,39 @@
+From ed14375b84c69471becd2e920b410be35af0781a Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 17:40:13 +0900
+Subject: [PATCH 010/128] [caffe2/operators] Filter out AXDIMM sources from CPU
+ sources
+
+Similarly to GPU on need to out AXDIMM sources from CPU ones to avoid
+AXDIMM code to be linked into libtorch_cpu.so.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/CMakeLists.txt | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/caffe2/operators/CMakeLists.txt b/caffe2/operators/CMakeLists.txt
+index fb8fcc2c..ac13ad46 100644
+--- a/caffe2/operators/CMakeLists.txt
++++ b/caffe2/operators/CMakeLists.txt
+@@ -47,13 +47,14 @@ exclude(tmp "${tmp}" ${tmp_cudnn})
+ set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS} ${tmp})
+ 
+ # ---[ AXDIMM files.
+-file(GLOB tmp *_axdimm.cc)
+-set(Caffe2_AXDIMM_SRCS ${Caffe2_AXDIMM_SRCS} ${tmp})
++file(GLOB axdimm_tmp *_axdimm.cc)
++set(Caffe2_AXDIMM_SRCS ${Caffe2_AXDIMM_SRCS} ${axdimm_tmp})
+ 
+ set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS} ${tmp})
+-# exclude test files and gpu files
++# exclude test files, axdimm files and gpu files
+ file(GLOB tmp *_test.cc)
+ exclude(Caffe2_CPU_SRCS "${Caffe2_CPU_SRCS}" ${tmp})
++exclude(Caffe2_CPU_SRCS "${Caffe2_CPU_SRCS}" ${axdimm_tmp})
+ exclude(Caffe2_CPU_SRCS "${Caffe2_CPU_SRCS}" ${Caffe2_GPU_SRCS} ${Caffe2_HIP_SRCS})
+ 
+ # ---[ GPU test files
+-- 
+2.34.1
+

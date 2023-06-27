@@ -1,0 +1,112 @@
+From dcc4d6c49bec1be66b18cb01e6901727f12ce411 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 26 Apr 2022 15:54:31 +0900
+Subject: [PATCH 022/161] [drivers/dax/axdimm] Define AXDIMM_BASE_ADDR in
+ Kconfig
+
+Move AXDIMM_BASE_ADDR into Kconfig to allow user specify it during build time.
+This is needed to support 2 BIOS configurations:
+
+* old (AXDIMM_BASE_ADDR == 4GB), also used in emulation mode.
+* new (AXDIMM_BASE_ADDR == 66GB), used for FPGA.
+
+Default value is 4GB because emulation workflow is more common now.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ DAX_HOW_TO_BUILD.md            | 13 ++++++++++++-
+ drivers/dax/Kconfig            | 18 ++++++++++++++++++
+ drivers/dax/axdimm-private.h   |  6 ++++++
+ include/uapi/linux/libaxdimm.h |  6 ------
+ 4 files changed, 36 insertions(+), 7 deletions(-)
+
+diff --git a/DAX_HOW_TO_BUILD.md b/DAX_HOW_TO_BUILD.md
+index c09850987..7a4740e42 100644
+--- a/DAX_HOW_TO_BUILD.md
++++ b/DAX_HOW_TO_BUILD.md
+@@ -1,9 +1,20 @@
+ # Deb packages
+ 
+ ```bash
+-$ cp -v config-axdimm .config
++$ rm -f .config; cp -v config-axdimm .config
+ $ rm -fr debian/ vmlinux-gdb.py # cleanup from previous build
+ $ make -j `getconf _NPROCESSORS_ONLN` deb-pkg # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
++...
++
++* DAX: direct access to differentiated memory
++*
++DAX: direct access to differentiated memory (DAX) [Y/?] y
++  Device DAX: direct access mapping device (DEV_DAX) [M/n/y/?] m
++    PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
++  HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
++  KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
++  PMEM DAX: support the deprecated /sys/class/dax interface (DEV_DAX_PMEM_COMPAT) [N/m/?] n
++  A base physical address of AXDIMM range in gigabytes (AXDIMM_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
+ ```
+ 
+ # DAX driver only
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 5fdf269a8..f549ead89 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -66,4 +66,22 @@ config DEV_DAX_KMEM
+ 
+ 	  Say N if unsure.
+ 
++config DEV_DAX_PMEM_COMPAT
++	tristate "PMEM DAX: support the deprecated /sys/class/dax interface"
++	depends on m && DEV_DAX_PMEM=m
++	default DEV_DAX_PMEM
++	help
++	  Older versions of the libdaxctl library expect to find all
++	  device-dax instances under /sys/class/dax. If libdaxctl in
++	  your distribution is older than v58 say M, otherwise say N.
++
++config AXDIMM_BASE_ADDR
++	int "A base physical address of AXDIMM range in gigabytes"
++	depends on DEV_DAX
++	range 4 66
++	default 4
++	help
++	  This value is used to detect AXDIMM range in DAX driver and
++	  mao respectively.
++
+ endif
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index a8effb744..52a9f18a4 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -5,6 +5,12 @@
+ #include <linux/libaxdimm.h>
+ #include "dax-private.h"
+ 
++/* Total Memory size for AXDIMM */
++#define AXDIMM_MEMORY_SIZE 0x1000000000
++
++/* Start address of AXDIMM */
++#define AXDIMM_BASE_ADDR ((unsigned long long)CONFIG_AXDIMM_BASE_ADDR << 30)
++
+ /* The enumeration of axdimm memory addresses */
+ typedef enum _axd_mem_regions_e {
+ 	AXDIMM_BASE_CS0 = 0,
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 57ddee4d1..d2eb95acd 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -10,12 +10,6 @@
+ #ifndef __LIBAXDIMM_H__
+ #define __LIBAXDIMM_H__
+ 
+-/* Total Memory size for AXDIMM */
+-#define AXDIMM_MEMORY_SIZE 0x1000000000
+-
+-/* Start address of AXDIMM */
+-#define AXDIMM_BASE_ADDR 0x1080000000
+-
+ /* Interleaving Stride length : 128Bytes (0x80) */
+ #define AXDIMM_STRIDE_LENGTH 0x80
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,34 @@
+From e3fb39eb8385e1d41129828063faa45b19cc91a3 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 29 Nov 2021 16:18:15 +0900
+Subject: [PATCH 009/161] [drivers/dax] NFC: fix some formatting
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index a8df6992d..b36d89ad4 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -246,11 +246,11 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	}
+ 
+ 	/*
+-          * the direction is a bitmask, and VERIFY_WRITE catches R/W
+-          * transfers. `Type' is user-oriented, while
+-          * access_ok is kernel-oriented, so the concept of "read" and
+-          * "write" is reversed
+-          */
++	 * the direction is a bitmask, and VERIFY_WRITE catches R/W
++	 * transfers. `Type' is user-oriented, while
++	 * access_ok is kernel-oriented, so the concept of "read" and
++	 * "write" is reversed
++	 */
+ 	if (_IOC_DIR(cmd) & _IOC_READ) {
+ 		err = !access_ok((void __user *)arg, _IOC_SIZE(cmd));
+ 	} else if (_IOC_DIR(cmd) & _IOC_WRITE) {
+-- 
+2.34.1
+

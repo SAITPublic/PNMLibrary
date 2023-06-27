@@ -1,0 +1,72 @@
+From 263a5f602e6d528da32cbcc59441aac2c99350d0 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 2 Nov 2021 10:14:26 +0900
+Subject: [PATCH 014/128] [CMake] Fix build with setup.py
+
+* rename AXDIMM_ROOT_PATH -> CMAKE_AXDIMM_ROOT_PATH
+* add CPU ATen includes to AXDIMM, just like for GPU/HIP
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ CMakeLists.txt               | 2 +-
+ aten/src/ATen/CMakeLists.txt | 3 ++-
+ caffe2/CMakeLists.txt        | 8 ++++----
+ 3 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3dff6efd..c442ec11 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -192,7 +192,7 @@ option(USE_COLORIZE_OUTPUT "Colorize output during compilation" ON)
+ option(USE_ASAN "Use Address+Undefined Sanitizers" OFF)
+ option(USE_TSAN "Use Thread Sanitizer" OFF)
+ option(USE_AXDIMM "Use AXDIMM" ON)
+-option(AXDIMM_ROOT_PATH "A path to AXDIMM library root directory" "")
++option(CMAKE_AXDIMM_ROOT_PATH "A path to AXDIMM library root directory" "")
+ option(USE_CUDA "Use CUDA" ON)
+ cmake_dependent_option(
+      BUILD_LAZY_CUDA_LINALG "Build cuda linalg ops as separate library" ON "USE_CUDA AND LINUX AND BUILD_PYTHON" OFF)
+diff --git a/aten/src/ATen/CMakeLists.txt b/aten/src/ATen/CMakeLists.txt
+index 0ec60a6f..bc7bf74c 100644
+--- a/aten/src/ATen/CMakeLists.txt
++++ b/aten/src/ATen/CMakeLists.txt
+@@ -498,7 +498,8 @@ endif()
+ # dependency is nontrivial.  So better not to copy-paste.
+ # Look for Note [rocblas cmake bug]
+ 
+-# Include CPU paths for CUDA/HIP as well
++# Include CPU paths for CUDA/HIP/AXDIMM as well
++list(APPEND ATen_AXDIMM_INCLUDE ${ATen_CPU_INCLUDE})
+ list(APPEND ATen_CUDA_INCLUDE ${ATen_CPU_INCLUDE})
+ list(APPEND ATen_HIP_INCLUDE ${ATen_CPU_INCLUDE})
+ list(APPEND ATen_VULKAN_INCLUDE ${ATen_CPU_INCLUDE})
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index aed10cba..2e4c7e30 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -106,10 +106,10 @@ if(INTERN_BUILD_ATEN_OPS)
+ endif()
+ 
+ if(USE_AXDIMM)
+-  if(NOT AXDIMM_ROOT_PATH)
+-    message(FATAL_ERROR "AXDIMM_ROOT_PATH is not specified, can't find AXDIMM artifacts!")
++  if(NOT CMAKE_AXDIMM_ROOT_PATH)
++    message(FATAL_ERROR "CMAKE_AXDIMM_ROOT_PATH is not specified, can't find AXDIMM artifacts!")
+   endif()
+-  list(APPEND Caffe2_AXDIMM_INCLUDE "${AXDIMM_ROOT_PATH}")
++  list(APPEND Caffe2_AXDIMM_INCLUDE "${CMAKE_AXDIMM_ROOT_PATH}")
+ endif()
+ 
+ # ---[ Caffe2 build
+@@ -1364,7 +1364,7 @@ target_include_directories(torch_cpu PRIVATE ${Caffe2_CPU_INCLUDE})
+ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE}")
+ 
+ if(USE_AXDIMM)
+-  target_link_libraries(torch_axdimm PUBLIC "${AXDIMM_ROOT_PATH}/build/drivers/libAxdimm.so")
++  target_link_libraries(torch_axdimm PUBLIC "${CMAKE_AXDIMM_ROOT_PATH}/build/drivers/libAxdimm.so")
+   target_include_directories(torch_axdimm PRIVATE ${Caffe2_AXDIMM_INCLUDE})
+ endif()
+ 
+-- 
+2.34.1
+

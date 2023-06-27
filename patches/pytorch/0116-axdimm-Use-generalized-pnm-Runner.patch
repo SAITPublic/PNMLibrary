@@ -1,0 +1,115 @@
+From b8e51c8ced12ed7252bdf34bc1305a205f2a8020 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Tue, 18 Apr 2023 11:21:32 +0300
+Subject: [PATCH 116/128] [axdimm] Use generalized pnm::Runner
+
+AXDIMM's operators use pnm::Runner instead of SLSRunner to run the SLS
+operation.
+
+Resolve: MCS23-705
+---
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp     | 1 +
+ aten/src/ATen/native/axdimm/AxdimmTensor.h       | 7 +++++++
+ aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp | 3 +--
+ caffe2/operators/lengths_reducer_ops_axdimm.cc   | 5 +++--
+ 4 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index 7a00865d..6d50fe6b 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -73,6 +73,7 @@ AxdimmTensor::AxdimmTensor(
+ 
+ void AxdimmTensor::load(const void* weights_data) {
+   sls_type_ = ::get_sls_type(scalar_type_);
++  runner_ = pnm::Runner(get_pnm_context());
+ 
+   auto tables_size =
+       std::accumulate(tables_rows_num_.begin(), tables_rows_num_.end(), 0ULL);
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index c37720ca..c9d46dff 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -4,7 +4,9 @@
+ #include <pnmlib/ai/axdimm.h>
+ #include <pnmlib/ai/embedded_tables.h>
+ #include <pnmlib/ai/sls_type.h>
++
+ #include <pnmlib/core/axdimm_device.h>
++#include <pnmlib/core/runner.h>
+ 
+ #include <ATen/ATen.h>
+ #include <ATen/native/axdimm/AxdimmBaseTensor.h>
+@@ -51,11 +53,16 @@ class AxdimmTensor : public AxdimmBaseTensor {
+     return sls_type_;
+   }
+ 
++  const pnm::Runner& get_runner() const {
++    return runner_;
++  }
++
+  private:
+   void load(const void* weights_data);
+ 
+   pnm::memory::EmbeddedTablesHandler tables_;
+   SLSType sls_type_{};
++  pnm::Runner runner_;
+ };
+ 
+ } // namespace axdimm
+diff --git a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+index f9c262df..8b4ee23b 100644
+--- a/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/axdimm/ops/EmbeddingBag.cpp
+@@ -1,6 +1,5 @@
+ #include <pnmlib/ai/axdimm.h>
+ #include <pnmlib/ai/sls_operation.h>
+-#include <pnmlib/ai/sls_runner.h>
+ 
+ #include <ATen/native/axdimm/AxdimmTensorConvert.h>
+ 
+@@ -52,7 +51,7 @@ at::Tensor embedding_bag_forward_simple_impl(
+       minibatch_size, lengths_view, indices_view, output_view);
+ 
+   // might throw
+-  SLSRunner::run(ten.get_device(), sls_op);
++  ten.get_runner().run(sls_op);
+ 
+   return torch::from_blob(
+       output_view.begin(),
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 17680ac6..762564fc 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -8,10 +8,10 @@
+ #include <pnmlib/ai/axdimm.h>
+ #include <pnmlib/ai/embedded_tables.h>
+ #include <pnmlib/ai/sls_operation.h>
+-#include <pnmlib/ai/sls_runner.h>
+ #include <pnmlib/common/error.h>
+ #include <pnmlib/common/views.h>
+ #include <pnmlib/core/axdimm_device.h>
++#include <pnmlib/core/runner.h>
+ 
+ #include <algorithm>
+ #include <vector>
+@@ -309,7 +309,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     // 7) And finally run it.
+ 
+     try {
+-      SLSRunner::run(device_, sls_op);
++      runner_.run(sls_op);
+ 
+       return true;
+     } catch (pnm::error::Base& e) {
+@@ -393,6 +393,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       AxdimmDevice::make(); // AXDIMM device. TODO: move into AXDIMMContext
+ 
+   pnm::ContextHandler pnm_ctx_ = pnm::make_context(pnm::ContextType::AXDIMM);
++  pnm::Runner runner_{pnm_ctx_};
+ 
+   pnm::memory::EmbeddedTablesHandler tables_ = nullptr;
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,722 @@
+From 73460ccf9c5b0b84f550581b8a58207e7189bc99 Mon Sep 17 00:00:00 2001
+From: "s.koval" <s.koval@samsung.com>
+Date: Mon, 18 Jul 2022 10:21:58 +0300
+Subject: [PATCH 026/161] [drivers/dax/axdimm] add allocation ioctl functions
+
+* Add allocation, deallocation and getter calls
+* Add public structures to share in userspace
+* Support AUTO policy as REPLICATE_ALL
+
+Resolves: AXDIMM-256
+
+Signed-off-by: s.koval <s.koval@samsung.com>
+---
+ drivers/dax/Makefile           |   4 +-
+ drivers/dax/axdimm-private.h   |  10 +
+ drivers/dax/axdimm.c           |  34 ++-
+ drivers/dax/axdimm_allocator.c | 422 +++++++++++++++++++++++++++++++++
+ drivers/dax/axdimm_allocator.h |  41 ++++
+ include/uapi/linux/libaxdimm.h |  50 +++-
+ 6 files changed, 551 insertions(+), 10 deletions(-)
+ create mode 100644 drivers/dax/axdimm_allocator.c
+ create mode 100644 drivers/dax/axdimm_allocator.h
+
+diff --git a/drivers/dax/Makefile b/drivers/dax/Makefile
+index 0ee1baf6e..f15a4775b 100644
+--- a/drivers/dax/Makefile
++++ b/drivers/dax/Makefile
+@@ -7,6 +7,8 @@ obj-$(CONFIG_DEV_DAX_PMEM) += dax_pmem.o
+ dax-y := super.o
+ dax-y += bus.o
+ device_dax-y := device.o
+-dax_pmem-y := pmem.o axdimm.o
++device_dax-y += axdimm.o
++device_dax-y += axdimm_allocator.o
++dax_pmem-y := pmem.o
+ 
+ obj-y += hmem/
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index 98b86bf27..df704cc1d 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -1,6 +1,12 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+ 
++#ifndef __AXDIMM_PRIVATE_H__
++#define __AXDIMM_PRIVATE_H__
++
++/* For normal inclusion dax-private.h requires this header */
++/* Put the header here not to change origin dax-private.h */
++#include <linux/pgtable.h>
+ #include "dax-private.h"
+ 
+ #include <linux/fs.h>
+@@ -48,3 +54,7 @@ void cleanup_axdimm_device(void);
+ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma);
+ 
+ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
++
++#endif
++
++/* __AXDIMM_PRIVATE_H__ */
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 21c835f1f..3c4c1a8e6 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -1,6 +1,9 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+ 
++#include "axdimm_allocator.h"
++#include "axdimm-private.h"
++
+ #include <linux/memremap.h>
+ #include <linux/pagemap.h>
+ #include <linux/module.h>
+@@ -13,11 +16,13 @@
+ #include <linux/mm.h>
+ #include <linux/mman.h>
+ #include <linux/io.h>
+-#include "axdimm-private.h"
+ 
+-#define AXDIMM_SEM_VALUE	1
++#define AXDIMM_SEM_VALUE 1
++
+ typedef struct axdmem_info axdmem_info;
+ 
++struct axdimm_allocator axdimm_allocator;
++
+ /* Helper structure containing auxiliary info for AXDIMM device */
+ static struct axdimm_dev {
+ 	struct semaphore sem_axdimm; /* semaphore */
+@@ -36,24 +41,24 @@ ssize_t axdimm_meminfo_read(struct file *filp, char __user *buf, size_t count,
+ 
+ 	if (*f_pos != 0) {
+ 		printk(KERN_WARNING
+-		       "[DAX_AXDIMM_DD]: Wrong file offset. Operation aborted\n");
++		       "[DAX_AXDIMM_DD] Wrong file offset. Operation aborted\n");
+ 		return -EINVAL;
+ 	}
+ 
+ 	if (count != sizeof(axdmem_info)) {
+ 		printk(KERN_WARNING
+-		       "[DAX_AXDIMM_DD]: Truncating axdimm read meminfo parameters: "
+-		       "requested: %lu, read: %lu.\n",
++		       "[DAX_AXDIMM_DD] Truncating axdimm read meminfo parameters: "
++		       "requested: %zu, read: %zu.\n",
+ 		       count, sizeof(axdmem_info));
+ 	}
+ 
+ 	if (copy_to_user(buf, (void *)(&axdimm_device.mem_info),
+ 			 sizeof(axdmem_info))) {
+ 		printk(KERN_WARNING
+-		       "[DAX_AXDIMM_DD]: can't use copy_to_user.\n");
++		       "[DAX_AXDIMM_DD] can't use copy_to_user.\n");
+ 		retval = -EPERM;
+ 	} else {
+-		printk(KERN_WARNING "[DAX_AXDIMM_DD]: Read axdimm mem_info.\n");
++		printk(KERN_WARNING "[DAX_AXDIMM_DD] Read axdimm mem_info.\n");
+ 		retval = sizeof(axdmem_info);
+ 	}
+ 	return retval;
+@@ -317,7 +322,7 @@ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+ 	return 0;
+ }
+ 
+-long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
++long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ {
+ 	int err = 0;
+ 	int retval = 0;
+@@ -361,6 +366,7 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 		while (unlikely(axdimm_device.sem_axdimm.count < AXDIMM_SEM_VALUE)) {
+ 			up(&axdimm_device.sem_axdimm);
+ 		}
++		reset_axdimm_allocator(&axdimm_allocator);
+ 		break;
+ 	case SET_SC_LOCK:
+ 		if (down_interruptible(&axdimm_device.sem_axdimm)) {
+@@ -372,6 +378,12 @@ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 	case SET_SC_UNLOCK:
+ 		up(&axdimm_device.sem_axdimm);
+ 		break;
++	case ALLOCATE_MEMORY:
++	case GET_MEMORY_OBJECTS_NUM:
++	case GET_MEMORY_ALLOCATION:
++	case DEALLOCATE_MEMORY:
++		retval = do_allocation_logic(&axdimm_allocator, cmd, arg);
++		break;
+ 	default:
+ 		return retval;
+ 	}
+@@ -397,10 +409,16 @@ void init_axdimm_device(struct dev_dax *dev_dax)
+ 	 * devdax <-> system-ram transitions (devdax <-> kmem).
+ 	 */
+ 	setup_axdimm_ranges(dev_dax);
++
++	/* Initialize memory allocator */
++	init_axdimm_allocator(&axdimm_allocator, &axdimm_device.mem_info);
+ }
+ 
+ void cleanup_axdimm_device()
+ {
++	/* Free allocated memory */
++	cleanup_axdimm_allocator(&axdimm_allocator);
++
+ 	/* Destroy meminfo cdev */
+ 	device_destroy(axdimm_meminfo_class,
+ 		       axdimm_device.axdimm_meminfo_dev_no);
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+new file mode 100644
+index 000000000..8ba162129
+--- /dev/null
++++ b/drivers/dax/axdimm_allocator.c
+@@ -0,0 +1,422 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#include "axdimm_allocator.h"
++
++#include <linux/slab.h>
++#include <linux/uaccess.h>
++
++void init_axdimm_allocator(struct axdimm_allocator *alloc,
++			   struct axdmem_info *mem_info)
++{
++	int cs;
++
++	/* Offset in allocation decisions storage */
++	alloc->available_allocation_idx = 0;
++
++	alloc->allocation_counter = 0;
++
++	/* Ranks sizes and offsets */
++	for (cs = 0; cs < NUM_OF_CS; ++cs) {
++		alloc->ranks_mem_tracker[cs].length =
++			mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] /
++			NUM_RANKS_PER_CS;
++		alloc->ranks_mem_tracker[cs + 2].length =
++			mem_info->mem_size[cs][AXDIMM_BLOCK_BASE] /
++			NUM_RANKS_PER_CS;
++		alloc->ranks_mem_tracker[cs].offset =
++			alloc->ranks_mem_tracker[cs + 2].offset = 0;
++	}
++
++	/* Protect memory allocation operations */
++	mutex_init(&alloc->memory_mutex);
++}
++
++void reset_axdimm_allocator(struct axdimm_allocator *alloc)
++{
++	uint8_t allocation;
++	uint8_t rank;
++
++	if (mutex_is_locked(&alloc->memory_mutex)) {
++		printk(KERN_WARNING "[DAX_AXDIMM_DD] Mutex unlock forced.\n");
++		mutex_unlock(&alloc->memory_mutex);
++	}
++
++	/* Cleanup allocation storage */
++	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation)
++		kfree(alloc->allocations[allocation].objects);
++
++	memset(alloc->allocations, 0, sizeof(alloc->allocations));
++
++	alloc->available_allocation_idx = 0;
++
++	alloc->allocation_counter = 0;
++
++	/* Reset memory tracker's offset */
++	for (rank = 0; rank < NUM_OF_RANK; ++rank)
++		alloc->ranks_mem_tracker[rank].offset = 0;
++}
++
++void cleanup_axdimm_allocator(struct axdimm_allocator *alloc)
++{
++	reset_axdimm_allocator(alloc);
++
++	mutex_destroy(&alloc->memory_mutex);
++}
++
++static void save_new_allocation(struct axdimm_allocator *alloc,
++			 struct axd_memory_object *objects,
++			 uint64_t num_objects)
++{
++	/* Save new allocation to allocation storage */
++	alloc->allocations[alloc->available_allocation_idx].objects = objects;
++	/* Set descriptor for this allocation */
++	alloc->allocations[alloc->available_allocation_idx].descriptor =
++		++alloc->allocation_counter;
++	/* Set objects count for this allocation */
++	alloc->allocations[alloc->available_allocation_idx].num_objects =
++		num_objects;
++}
++
++static int replicate_all(struct axdimm_allocator *alloc,
++		  struct axd_memory_alloc_request *request,
++		  uint64_t *descriptor)
++{
++	int err_code;
++	uint8_t rank;
++	size_t allocation;
++	uint64_t new_ranks_offsets[NUM_OF_RANK];
++	uint64_t num_objects;
++	struct axd_memory_object *objects = NULL;
++
++	err_code = 0;
++	num_objects = request->num_user_objects * NUM_OF_RANK;
++	/* [TODO: s-koval] check for num_objects param sanity */
++	objects = kmalloc_array(num_objects,
++				sizeof(struct axd_memory_object), GFP_KERNEL);
++	if (!objects) {
++		err_code = -ENOMEM;
++		goto out;
++	}
++
++	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++		uint64_t size = alloc->ranks_mem_tracker[rank].length;
++		uint64_t offset = alloc->ranks_mem_tracker[rank].offset;
++		uint64_t free_size = size - offset;
++		size_t user_object;
++		size_t object_idx;
++
++		for (user_object = 0; user_object < request->num_user_objects; ++user_object) {
++			uint64_t user_object_length =
++				request->user_objects_sizes[user_object];
++			if (user_object_length > free_size) {
++				kfree(objects);
++				err_code = -ENOSPC;
++				goto out;
++			}
++
++			object_idx = request->num_user_objects * rank + user_object;
++			objects[object_idx].rank = rank,
++			objects[object_idx].user_object_id = user_object,
++			objects[object_idx].offset = offset,
++			objects[object_idx].length = user_object_length,
++
++			offset += user_object_length;
++			free_size -= user_object_length;
++		}
++
++		new_ranks_offsets[rank] = offset;
++	}
++
++	/* Set new offset values after successful allocation */
++	for (rank = 0; rank < NUM_OF_RANK; ++rank)
++		alloc->ranks_mem_tracker[rank].offset = new_ranks_offsets[rank];
++
++	save_new_allocation(alloc, objects, num_objects);
++
++	/* Return new descriptor to user space */
++	*descriptor = alloc->allocation_counter;
++
++	/* Acquire a free cell for the next allocation */
++	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
++		if (alloc->allocations[allocation].descriptor == 0) {
++			alloc->available_allocation_idx = allocation;
++			goto out;
++		}
++	}
++
++	/*
++	 * [TODO: @s.koval] Change storage for allocations
++	 * to more appropriate one, e.g. hash table
++	 */
++	printk(KERN_ERR
++	       "[DAX_AXDIMM_DD] Next allocation won't be performed because of allocation storage capacity. Need to reset device.\n");
++	err_code = -EBUSY;
++
++out:
++	return err_code;
++}
++
++static int allocate_memory(struct axdimm_allocator *alloc,
++		    struct axd_memory_alloc_request *request,
++		    uint64_t *descriptor)
++{
++	int err_code;
++
++	err_code = 0;
++	mutex_lock(&alloc->memory_mutex);
++	if (request->preference == AXDIMM_ALLOC_AUTO ||
++		request->preference == AXDIMM_ALLOC_REPLICATE_ALL) {
++		err_code = replicate_all(alloc, request, descriptor);
++	} else {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Allocation preference [%u] is not supported yet.\n",
++		       request->preference);
++		err_code = -EPERM;
++	}
++	mutex_unlock(&alloc->memory_mutex);
++
++	return err_code;
++}
++
++static int do_allocate_memory(struct axdimm_allocator *alloc, unsigned long __user arg)
++{
++	int err_code = 0;
++	uint32_t array_size;
++	uint64_t descriptor;
++	struct axd_memory_alloc_request *usr_req = NULL;
++	struct axd_memory_alloc_request kernel_req;
++	uint64_t *sizes_ptr = NULL;
++
++	usr_req = (struct axd_memory_alloc_request __user *)arg;
++	if (copy_from_user(&kernel_req, usr_req,
++			   sizeof(struct axd_memory_alloc_request))) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't copy allocation request from user.\n");
++		err_code = -EPERM;
++		goto out;
++	}
++
++	array_size = sizeof(uint64_t) * kernel_req.num_user_objects;
++	sizes_ptr = kernel_req.user_objects_sizes;
++	kernel_req.user_objects_sizes = kmalloc(array_size, GFP_KERNEL);
++	if (!kernel_req.user_objects_sizes) {
++		err_code = -ENOMEM;
++		goto out;
++	}
++
++	if (copy_from_user(kernel_req.user_objects_sizes,
++			   sizes_ptr,
++			   array_size)) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't copy user objects sizes from user.\n");
++		err_code = -EPERM;
++		goto free_user_objects_sizes;
++	}
++	err_code = allocate_memory(alloc, &kernel_req, &descriptor);
++	if (err_code) {
++		printk(KERN_ERR "[DAX_AXDIMM_DD] Failed to allocate memory.\n");
++		goto free_user_objects_sizes;
++	}
++
++	err_code = put_user(descriptor, &usr_req->descriptor);
++	if (err_code) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't copy allocation descriptor to user.\n");
++		goto free_user_objects_sizes;
++	}
++
++free_user_objects_sizes:
++	kfree(kernel_req.user_objects_sizes);
++out:
++	return err_code;
++}
++
++static int get_objects_num(struct axdimm_allocator *alloc,
++						uint64_t descriptor, uint64_t *objects_num)
++{
++	uint8_t allocation;
++	int err_code;
++
++	err_code = -EINVAL;
++	if (descriptor == 0)
++		goto out;
++
++	mutex_lock(&alloc->memory_mutex);
++	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
++		if (alloc->allocations[allocation].descriptor == descriptor) {
++			*objects_num = alloc->allocations[allocation].num_objects;
++			err_code = 0;
++			goto unlock;
++		}
++	}
++
++unlock:
++	mutex_unlock(&alloc->memory_mutex);
++out:
++	return err_code;
++}
++
++static int do_get_objects_num(struct axdimm_allocator *alloc, unsigned long __user arg)
++{
++	int err_code = 0;
++	struct axd_num_objects_request *usr_get_obj_num_req = NULL;
++	struct axd_num_objects_request *kernel_get_obj_num_req = NULL;
++	uint64_t num_objects;
++
++	kernel_get_obj_num_req = kmalloc(sizeof(struct axd_num_objects_request), GFP_KERNEL);
++	usr_get_obj_num_req = (struct axd_num_objects_request __user *)arg;
++
++	if (copy_from_user(kernel_get_obj_num_req, usr_get_obj_num_req,
++						sizeof(struct axd_num_objects_request))) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't copy get objects num request from user.\n");
++		err_code = -EPERM;
++		goto free_num_objects_request;
++	}
++	err_code = get_objects_num(alloc, kernel_get_obj_num_req->descriptor, &num_objects);
++	if (err_code) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't get objects number by allocation descriptor [%llu]\n",
++		       kernel_get_obj_num_req->descriptor);
++		goto free_num_objects_request;
++	}
++
++	kernel_get_obj_num_req->num_objects = num_objects;
++	if (copy_to_user(usr_get_obj_num_req, kernel_get_obj_num_req,
++					 sizeof(struct axd_num_objects_request))) {
++		printk(KERN_ERR
++			   "[DAX_AXDIMM_DD] can't copy objects number request to user.\n");
++		err_code = -EPERM;
++		goto free_num_objects_request;
++	}
++free_num_objects_request:
++	kfree(kernel_get_obj_num_req);
++
++	return err_code;
++}
++
++static int get_memory_allocation(struct axdimm_allocator *alloc, struct axd_memory_alloc *request)
++{
++	uint8_t allocation;
++	int err_code;
++
++	err_code = -EINVAL;
++	if (request->descriptor == 0)
++		goto out;
++
++	mutex_lock(&alloc->memory_mutex);
++	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
++		if (alloc->allocations[allocation].descriptor == request->descriptor) {
++			if (copy_to_user(
++				    request->objects,
++				    alloc->allocations[allocation].objects,
++				    alloc->allocations[allocation].num_objects *
++					    sizeof(struct axd_memory_object)
++						)) {
++				printk(KERN_WARNING
++				       "[DAX_AXDIMM_DD] can't copy allocation choice to user.\n");
++				err_code = -EPERM;
++				goto unlock;
++			}
++			err_code = 0;
++			goto unlock;
++		}
++	}
++
++unlock:
++	mutex_unlock(&alloc->memory_mutex);
++out:
++	return err_code;
++}
++
++static int do_get_allocation(struct axdimm_allocator *alloc, unsigned long __user arg)
++{
++	int err_code = 0;
++	struct axd_memory_alloc *usr_get_alloc_req = NULL;
++	struct axd_memory_alloc *kernel_get_alloc_req = NULL;
++
++	usr_get_alloc_req = (struct axd_memory_alloc __user *)arg;
++	kernel_get_alloc_req = kmalloc(sizeof(struct axd_memory_alloc), GFP_KERNEL);
++	if (copy_from_user(kernel_get_alloc_req, usr_get_alloc_req,
++						sizeof(struct axd_memory_alloc))) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't copy get allocation request from user.\n");
++		err_code = -EPERM;
++		goto free_memory_alloc_request;
++	}
++	err_code = get_memory_allocation(alloc, kernel_get_alloc_req);
++	if (err_code) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't get allocation by allocation descriptor [%llu]\n",
++		       kernel_get_alloc_req->descriptor);
++		goto free_memory_alloc_request;
++	}
++
++free_memory_alloc_request:
++	kfree(kernel_get_alloc_req);
++
++	return err_code;
++}
++
++static int deallocate_memory(struct axdimm_allocator *alloc, uint64_t descriptor)
++{
++	uint8_t allocation;
++	int err_code;
++
++	err_code = -EINVAL;
++	if (descriptor == 0)
++		goto out;
++
++	mutex_lock(&alloc->memory_mutex);
++	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
++		if (alloc->allocations[allocation].descriptor != descriptor)
++			continue;
++
++		alloc->allocations[allocation].descriptor = 0;
++		alloc->allocations[allocation].num_objects = 0;
++		kfree(alloc->allocations[allocation].objects);
++		alloc->allocations[allocation].objects = NULL;
++		err_code = 0;
++		goto unlock;
++	}
++
++unlock:
++	mutex_unlock(&alloc->memory_mutex);
++out:
++	return err_code;
++}
++
++static int do_deallocate_memory(struct axdimm_allocator *alloc, unsigned long __user arg)
++{
++	int err_code = 0;
++	uint64_t in_descriptor = (uint64_t)arg;
++
++	err_code = deallocate_memory(alloc, in_descriptor);
++	if (err_code) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] Can't deallocate memory by allocation descriptor [%llu]\n",
++		       in_descriptor);
++		goto out;
++	}
++out:
++	return err_code;
++}
++
++int do_allocation_logic(struct axdimm_allocator *alloc, unsigned int cmd,
++			unsigned long __user arg)
++{
++	switch (cmd) {
++	case ALLOCATE_MEMORY:
++		return do_allocate_memory(alloc, arg);
++	case GET_MEMORY_OBJECTS_NUM:
++		return do_get_objects_num(alloc, arg);
++	case GET_MEMORY_ALLOCATION:
++		return do_get_allocation(alloc, arg);
++	case DEALLOCATE_MEMORY:
++		return do_deallocate_memory(alloc, arg);
++	default:
++		printk(KERN_ERR "[DAX_AXDIMM_DD] Unknown allocation command [%u]\n", cmd);
++		return -EINVAL;
++	}
++}
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+new file mode 100644
+index 000000000..2753a158e
+--- /dev/null
++++ b/drivers/dax/axdimm_allocator.h
+@@ -0,0 +1,41 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM_ALLOCATOR_H__
++#define __AXDIMM_ALLOCATOR_H__
++
++#include <linux/mutex.h>
++#include <linux/libaxdimm.h>
++#include <linux/types.h>
++
++#define AXDIMM_ALLOCATION_MAX 50
++
++/* Helper structure for memory allocation */
++struct axdimm_allocator {
++	/* [TODO: s-koval AXDIMM-314] Add memory reusage logic */
++	/* Simple storage for rank's free size and offset */
++	struct axd_memory_object ranks_mem_tracker[NUM_OF_RANK];
++	/* Simple storage for memory allocations */
++	struct {
++		uint64_t descriptor;
++		uint64_t num_objects;
++		struct axd_memory_object *objects;
++	} allocations[AXDIMM_ALLOCATION_MAX];
++	/* Index shows where to store allocation info in "allocations" array */
++	uint8_t available_allocation_idx;
++	/* Allocation descriptor counter */
++	uint64_t allocation_counter;
++	struct mutex memory_mutex;
++};
++
++void init_axdimm_allocator(struct axdimm_allocator *alloc,
++			   struct axdmem_info *mem_info);
++/* Not proccess(thread)-safe */
++void reset_axdimm_allocator(struct axdimm_allocator *alloc);
++void cleanup_axdimm_allocator(struct axdimm_allocator *alloc);
++int do_allocation_logic(struct axdimm_allocator *alloc, unsigned int cmd,
++			unsigned long arg);
++
++#endif
++
++/* __AXDIMM_ALLOCATOR_H__ */
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 29781c580..fd04e996e 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -41,6 +41,9 @@
+ /* total number of ranks for axdimm */
+ #define NUM_OF_RANK 4
+ 
++/* number of ranks on one chip select */
++#define NUM_RANKS_PER_CS (NUM_OF_RANK / NUM_OF_CS)
++
+ /* number of Instruction & Psum buffers */
+ #define NUM_OF_INST_BUF 1
+ #define NUM_OF_PSUM_BUF 2
+@@ -75,6 +78,42 @@ struct axdmem_info {
+ 	uint64_t mem_size[NUM_OF_CS][AXDIMM_BLOCK_MAX];
+ };
+ 
++/* The enumeration of table allocation preferences */
++typedef enum _axd_user_preferences {
++	AXDIMM_ALLOC_AUTO = 0,
++	AXDIMM_ALLOC_REPLICATE_ALL,
++	AXDIMM_ALLOC_DISTRIBUTE_ALL,
++} axd_user_preferences;
++
++struct axd_memory_object {
++	uint8_t rank;
++	/* Sometimes it's useful to know memory */
++	/* object mapping to its origin in user space */
++	uint64_t user_object_id;
++	uint64_t offset;
++	uint64_t length;
++};
++
++/* Tables allocation parameters */
++struct axd_memory_alloc_request {
++	uint64_t descriptor;
++	uint64_t *user_objects_sizes;
++	uint64_t num_user_objects;
++	axd_user_preferences preference;
++};
++
++/* Get memory objects by descriptor */
++struct axd_memory_alloc {
++	uint64_t descriptor;
++	struct axd_memory_object *objects;
++};
++
++/* Get memory objects number by descriptor */
++struct axd_num_objects_request {
++	uint64_t descriptor;
++	uint64_t num_objects;
++};
++
+ /* Use 'k' as magic number */
+ #define AXDIMM_IOC_MAGIC 'T'
+ 
+@@ -85,7 +124,16 @@ struct axdmem_info {
+ #define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
+ #define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
+ #define GET_RANK _IOR(AXDIMM_IOC_MAGIC, 6, int)
++#define ALLOCATE_MEMORY                                                        \
++	_IOWR(AXDIMM_IOC_MAGIC, 7, struct axd_memory_alloc_request *)
++#define GET_MEMORY_OBJECTS_NUM                                                 \
++	_IOWR(AXDIMM_IOC_MAGIC, 8, struct axd_num_objects_request *)
++#define GET_MEMORY_ALLOCATION                                                  \
++	_IOWR(AXDIMM_IOC_MAGIC, 9, struct axd_memory_alloc *)
++#define DEALLOCATE_MEMORY _IOW(AXDIMM_IOC_MAGIC, 10, uint64_t)
+ 
+-#define AXDIMM_IOC_MAXNR (6)
++#define AXDIMM_IOC_MAXNR (10)
+ 
+ #endif
++
++/* __LIBAXDIMM_H__ */
+-- 
+2.34.1
+

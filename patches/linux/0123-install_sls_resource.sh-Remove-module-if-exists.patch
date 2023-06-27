@@ -1,0 +1,32 @@
+From 4ef9228928fe4507a4b7da2974991c8abde335bc Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Wed, 28 Jun 2023 15:46:13 +0000
+Subject: [PATCH 123/161] [install_sls_resource.sh] Remove module if exists
+
+* Just like in `install_dba_resource.sh`, we should remove the module if
+  it is already present
+
+Related to: MCS23-1260
+
+Signed-off-by: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+---
+ install_sls_resource.sh | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/install_sls_resource.sh b/install_sls_resource.sh
+index 71c5b3131..f0cf0db43 100755
+--- a/install_sls_resource.sh
++++ b/install_sls_resource.sh
+@@ -8,6 +8,8 @@ script_dir="`dirname "$0"`"
+ 
+ sudo cp -v drivers/pnm/sls_resource/*.ko \
+  /lib/modules/`uname -r`/kernel/drivers/pnm/sls_resource/
+-sudo modprobe sls_resource "$@"
++
++lsmod | grep sls_resource > /dev/null && sudo rmmod sls_resource
++sudo modprobe -v sls_resource "$@"
+ 
+ sh "$script_dir/install_sls_headers.sh"
+-- 
+2.34.1
+

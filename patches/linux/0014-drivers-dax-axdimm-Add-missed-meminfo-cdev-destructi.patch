@@ -1,0 +1,63 @@
+From 27440b420d0ea1a18c9219527364851fbedb9863 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 16 Dec 2021 10:10:46 +0900
+Subject: [PATCH 014/161] [drivers/dax/axdimm] Add missed meminfo cdev
+ destruction
+
+Add .remove handler for devdax (dev_dax_remove) which performs
+additional cleanup for meminfo cdev.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm.c | 5 +++++
+ drivers/dax/device.c | 9 +++++++--
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index f9ac0828e..bb03a6984 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -390,6 +390,11 @@ void init_axdimm_device(struct dev_dax *dev_dax)
+ 
+ void cleanup_axdimm_device()
+ {
++	/* Destroy meminfo cdev */
++	device_destroy(axdimm_meminfo_class,
++		       axdimm_device.axdimm_meminfo_dev_no);
++	cdev_del(&axdimm_device.axdimm_meminfo_cdev);
++
+ 	/* Destroy device class for meminfo cdev */
+ 	class_destroy(axdimm_meminfo_class);
+ }
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 47824802e..609875ffe 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -497,9 +497,15 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ }
+ EXPORT_SYMBOL_GPL(dev_dax_probe);
+ 
++void dev_dax_remove(struct dev_dax *dev_dax)
++{
++	cleanup_axdimm_device();
++}
++EXPORT_SYMBOL_GPL(dev_dax_remove);
++
+ static struct dax_device_driver device_dax_driver = {
+ 	.probe = dev_dax_probe,
+-	/* all probe actions are unwound by devm, so .remove isn't necessary */
++	.remove = dev_dax_remove,
+ 	.match_always = 1,
+ };
+ 
+@@ -510,7 +516,6 @@ static int __init dax_init(void)
+ 
+ static void __exit dax_exit(void)
+ {
+-	cleanup_axdimm_device();
+ 	dax_driver_unregister(&device_dax_driver);
+ }
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,34 @@
+From 7c66a207d5b6c65ddb42721ffab94dbd86706c77 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Tue, 4 Apr 2023 18:54:57 +0300
+Subject: [PATCH 090/161] [dax/Kconfig] Set default axdimm scale to 1
+
+There's no reason for it to be equal to 2 - that just confuses everyone
+and adds an annoying step to when you're reinstalling the kernel on the
+default VM - since we use scale = 1 for our main tests.
+---
+ drivers/dax/Kconfig | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 78b1b6fb2..6ddce31da 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -97,11 +97,11 @@ config AXDIMM_MEMORY_SCALE
+ 	int "A scale of AXDIMM memory range"
+ 	depends on AXDIMM
+ 	range 0 4
+-	default 2
++	default 1
+ 	help
+ 	  This value is used to scale AXDIMM memory range in DAX driver.
+-	  For default memory range = 64 gigabytes and scale = 2,
+-	  total range = 64/(2^scale) = 16 gigabytes.
++	  For default memory range = 64 gigabytes and scale = 1,
++	  total range = 64/(2^scale) = 32 gigabytes.
+ 
+ endif
+ 
+-- 
+2.34.1
+

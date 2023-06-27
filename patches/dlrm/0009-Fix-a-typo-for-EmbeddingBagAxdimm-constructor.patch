@@ -1,0 +1,32 @@
+From 7dcbf263d537c5d8088389ab7b6bea2b96bb3335 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 26 Oct 2022 17:39:16 +0900
+Subject: [PATCH 09/23] Fix a typo for EmbeddingBagAxdimm constructor
+
+'precompile' is EmbeddingBagAxdimm operator parameter, not torch.tensor.
+
+Relates to: AXDIMM-452
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ dlrm_s_pytorch.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index 4ea0738..f30ef17 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -252,8 +252,8 @@ class DLRM_Net(nn.Module):
+             ).astype(np.float32)
+             axdimm_weights.append(W)
+         torch_ten = torch.from_numpy(np.asarray(axdimm_weights))
+-        return EmbeddingBagAxdimm(torch.tensor(torch_ten, dtype=torch.float32, device="axdimm",
+-                                               precompile=True)), v_W_l
++        return EmbeddingBagAxdimm(torch.tensor(torch_ten, dtype=torch.float32, device="axdimm"),
++                                               precompile=True), v_W_l
+ 
+     def create_emb(self, m, ln, weighted_pooling=None):
+         if self.use_axdimm:
+-- 
+2.34.1
+

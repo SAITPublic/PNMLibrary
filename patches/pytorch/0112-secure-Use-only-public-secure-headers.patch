@@ -1,0 +1,182 @@
+From 02629a70aa853fb0330980fa1e3e0ff84ce6b8a5 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Thu, 23 Mar 2023 14:47:59 +0300
+Subject: [PATCH 112/128] [secure] Use only public secure headers
+
+Before this we already used a very tiny subset of the available API.
+Here we just do the full switch and update to new header paths.
+
+Related to: AXDIMM-638
+---
+ .../ATen/native/axdimm/AxdimmSecureTensor.cpp |  4 +-
+ .../ATen/native/axdimm/AxdimmSecureTensor.h   |  2 +-
+ .../lengths_reducer_ops_sec_axdimm.cc         | 12 +++---
+ .../lengths_reducer_ops_sec_axdimm.h          | 38 +++++++++----------
+ 4 files changed, 28 insertions(+), 28 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+index 91745bc6..623d8dbc 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.cpp
+@@ -1,4 +1,6 @@
+-#include "secure/plain/devices/untrusted_axdimm_params.h"
++#include <pnmlib/secure/base_device.h>
++#include <pnmlib/secure/runner_factory.h>
++#include <pnmlib/secure/untrusted_axdimm_params.h>
+ 
+ #include <ATen/native/axdimm/AxdimmSecureTensor.h>
+ 
+diff --git a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+index e4e503fc..8674c904 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmSecureTensor.h
+@@ -2,7 +2,7 @@
+ #define __AXDIMM_SECURE_TENSOR__
+ 
+ #include <pnmlib/ai/axdimm.h>
+-#include "secure/common/axdimm_secure_runners_factory.h"
++#include <pnmlib/secure/base_runner.h>
+ 
+ #include <ATen/ATen.h>
+ #include <ATen/native/axdimm/AxdimmBaseTensor.h>
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index b695622a..6176d96f 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "lengths_reducer_ops_sec_axdimm.h"
+ 
+-#include "secure/plain/axdimm_secure.h"
+-
+ namespace caffe2 {
+ //-------------------FLOAT OPERATOR---------------------------------
+ REGISTER_AXDIMM_OPERATOR(
+@@ -13,8 +11,7 @@ REGISTER_AXDIMM_OPERATOR(
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         float,
+         TensorTypes<float, at::Half>,
+-        axdimm::secure::ProdConsAXDIMMRunner<
+-    typename ::at::native::axdimm::SecureTypeTraits<float>::secure_engine_value_t>>);
++        ::axdimm::secure::SecureRunnerType::FLOAT>);
+ 
+ // Dummy
+ REGISTER_CPU_OPERATOR(SecureSparseLengthsSumVec, NoDefaultEngineOp<CPUContext>);
+@@ -25,11 +22,12 @@ REGISTER_AXDIMM_OPERATOR(
+     AXDIMMSecureSparseLengthsReductionOpVec<
+         int32_t,
+         TensorTypes<int32_t>,
+-        axdimm::secure::ProdConsAXDIMMRunner<
+-            typename ::at::native::axdimm::SecureTypeTraits<int32_t>::secure_engine_value_t>>);
++        ::axdimm::secure::SecureRunnerType::INT>);
+ 
+ // Dummy
+-REGISTER_CPU_OPERATOR(SecureSparseLengthsSumIntVec, NoDefaultEngineOp<CPUContext>);
++REGISTER_CPU_OPERATOR(
++    SecureSparseLengthsSumIntVec,
++    NoDefaultEngineOp<CPUContext>);
+ 
+ //-------------------OPERATORS SCHEMA---------------------------------
+ #define REGISTER_OPERATOR_SCHEMA(operator_name)                                  \
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 2a4f47e8..1147ef07 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -7,9 +7,14 @@
+ #include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ 
++#include <pnmlib/secure/base_device.h>
++#include <pnmlib/secure/base_runner.h>
++#include <pnmlib/secure/runner_factory.h>
++#include <pnmlib/secure/untrusted_axdimm_params.h>
++
+ #include <pnmlib/ai/axdimm.h>
+ 
+-#include "secure/plain/devices/untrusted_axdimm_device.h"
++#include <pnmlib/common/pnm_128bit_math.h>
+ 
+ #include <ATen/native/axdimm/AxdimmTypeHelpers.h>
+ 
+@@ -23,7 +28,7 @@ namespace caffe2 {
+ template <
+     typename T, // output type
+     typename InputTypes, // supported input types, such as TensorTypes<float>
+-    typename SecureRunner>
++    axdimm::secure::SecureRunnerType runner_type>
+ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+  public:
+   USE_OPERATOR_FUNCTIONS(AXDIMMContext);
+@@ -121,7 +126,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       checks = pnm::make_view(tag_checks_);
+     }
+ 
+-    auto status = runner_.run(
++    auto status = runner_->run(
+         minibatch_size,
+         pnm::make_view(std::cref(lengths_blocked_).get()),
+         pnm::make_view(std::cref(indices_blocked_).get()),
+@@ -180,9 +185,9 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+             .with_tag = with_tag_,
+             .preference =
+                 static_cast<axd_user_preferences>(memory_preference)});
+-    runner_.init(&args);
++    runner_->init(&args);
+ 
+-    runner_.load_tables(data.begin(), rows, sparse_feature_size, with_tag_);
++    runner_->load_tables(data.begin(), rows, sparse_feature_size, with_tag_);
+   }
+ 
+   void init_from_file();
+@@ -206,17 +211,16 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   std::vector<uint8_t> tag_checks_;
+   std::vector<secure_core_value_type> psum_buffer_;
+ 
+-  SecureRunner runner_;
++  std::unique_ptr<axdimm::secure::ISecureRunner> runner_ =
++      axdimm::secure::make_runner(runner_type);
+ };
+ 
+ template <
+     typename T,
+     typename InputTypes,
+-    typename SecureRunner>
+-void AXDIMMSecureSparseLengthsReductionOpVec<
+-    T,
+-    InputTypes,
+-    SecureRunner>::init_from_file() {
++    axdimm::secure::SecureRunnerType runner_type>
++void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
++    init_from_file() {
+   block_size_ = this->template GetSingleArgument<int>("num_tables", 0);
+   CAFFE_ENFORCE_NE(
+       block_size_, 0, "The number of tables should be greater than 0");
+@@ -263,9 +267,7 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+         pnm::make_view(std::cref(qdata).get()));
+   } else {
+     init_secure_runner(
+-        sparse_feature_size_,
+-        pnm::make_view(std::cref(rows_).get()),
+-        data_v);
++        sparse_feature_size_, pnm::make_view(std::cref(rows_).get()), data_v);
+   }
+ 
+   CAFFE_ENFORCE_EQ(
+@@ -276,11 +278,9 @@ void AXDIMMSecureSparseLengthsReductionOpVec<
+ template <
+     typename T,
+     typename InputTypes,
+-    typename SecureRunner>
+-void AXDIMMSecureSparseLengthsReductionOpVec<
+-    T,
+-    InputTypes,
+-    SecureRunner>::init_from_input() {
++    axdimm::secure::SecureRunnerType runner_type>
++void AXDIMMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
++    init_from_input() {
+   // Setup input pointers for tables/indices/lengths. The input comes in
+   // following format:
+   //    N := block_size_
+-- 
+2.34.1
+

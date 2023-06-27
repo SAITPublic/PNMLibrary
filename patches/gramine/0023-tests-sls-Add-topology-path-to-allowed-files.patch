@@ -1,0 +1,41 @@
+From f5544c08200d8bbe627d78857da4902f91be20d3 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Tue, 20 Jun 2023 11:38:19 +0300
+Subject: [PATCH 23/27] [tests][sls] Add topology path to allowed files
+
+Add topology path into manifests to allow the access to sysfs
+topology constants.
+
+Related to: MCS23-1165
+---
+ application/pytorch/conf.pytorch.manifest.template   | 1 +
+ application/sls_secndp_test/secndp.manifest.template | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index e79217fd..2f354141 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -51,6 +51,7 @@ sgx.allowed_files = [
+   "file:/dev/shm/", # We need to allow sls device to enable write access to it
+   "file:./run_kaggle_pt/",
+   "file:/sys/class/sls_resource/pnm!sls_resource/ranks/",
++  "file:/sys/class/sls_resource/pnm!sls_resource/topology/",
+   "file:/dev/pnm/sls_resource",
+   "file:{{ dlrm_data_path }}",
+   # In production we should place pillow path into sgx.trusted_files
+diff --git a/application/sls_secndp_test/secndp.manifest.template b/application/sls_secndp_test/secndp.manifest.template
+index 9300423c..d5386703 100644
+--- a/application/sls_secndp_test/secndp.manifest.template
++++ b/application/sls_secndp_test/secndp.manifest.template
+@@ -35,6 +35,7 @@ sgx.debug = true
+ 
+ sgx.allowed_files = [
+   "file:/sys/class/sls_resource/pnm!sls_resource/ranks/",
++  "file:/sys/class/sls_resource/pnm!sls_resource/topology/",
+   "file:/dev/pnm/sls_resource"
+ ]
+ 
+-- 
+2.34.1
+

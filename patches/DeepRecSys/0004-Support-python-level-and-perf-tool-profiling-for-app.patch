@@ -1,0 +1,126 @@
+From 85d4d22621653e3a3ba2137f88c55b1380a222ad Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 15 Feb 2022 16:07:52 +0900
+Subject: [PATCH 04/33] Support python level and perf tool profiling for app
+
+* use '--enable_profiling' switch to enable python level profiling.
+* uncomment respective lines to attach with perf tool:
+   wait_time = 10
+   print("run sudo perf record -g -p {} -t {}\nSleeping {} seconds.".format(os.getpid(), getThreadId(), wait_time))
+   time.sleep(wait_time)
+
+NOTE: due to HW limitation, it looks like that with #IEs > 1 attaching with
+perf causes AXDIMM hang.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ inferenceEngine.py       | 44 ++++++++++++++++++++++++++++++++++++++++
+ run_DeepRecSys_axdimm.sh |  5 ++++-
+ utils/utils.py           |  6 ++++++
+ 3 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/inferenceEngine.py b/inferenceEngine.py
+index ac4928a..c91c54d 100644
+--- a/inferenceEngine.py
++++ b/inferenceEngine.py
+@@ -23,8 +23,46 @@ import sys
+ 
+ import caffe2.python._import_c_extension as C
+ 
++# ========== Profiling with perf start ==========
++import os
++import ctypes
++
++libc = ctypes.cdll.LoadLibrary('libc.so.6')
++
++# System dependent, see e.g. /usr/include/x86_64-linux-gnu/asm/unistd_64.h
++SYS_gettid = 186
++
++def getThreadId():
++   """Returns OS thread id - Specific to Linux"""
++   return libc.syscall(SYS_gettid)
++
++# ========== Profiling with perf end ==========
++
++# ========== Python profiling start ==========
++import yappi
++
++def python_profiling_start():
++    yappi.start()
++
++
++def python_profiling_stop():
++    yappi.stop()
++    threads = yappi.get_thread_stats()
++    for thread in threads:
++        print(
++         "Function stats for (%s) (%d)" % (thread.name, thread.id)
++        )  # it is the Thread.__class__.__name__
++        yappi.get_func_stats(ctx_id=thread.id).print_all()
++
++# ========== Python profiling end ==========
++
+ def run_model(model, args, internal_logging, responseQueue):
+ 
++    # Uncomment for profiling with perf tool.
++    # wait_time = 10
++    # print("run sudo perf record -g -p {} -t {}\nSleeping {} seconds.".format(os.getpid(), getThreadId(), wait_time))
++    # time.sleep(wait_time)
++
+     top_fc_layers = args.arch_mlp_top.split("-")
+     fc_tag = "top:::fc" + str(len(top_fc_layers)-1) + "_z"
+     while True:
+@@ -82,6 +120,10 @@ def inferenceEngine(args,
+ 
+     (nbatches, lX, lS_l, lS_i) = datagen.generate_input_data()
+     (nbatches, lT)             = datagen.generate_output_data()
++
++    if args.enable_profiling:
++        python_profiling_start()
++
+     # construct the neural network specified by command line arguments ###
+ 
+     model = DLRM_Wrapper( args )
+@@ -192,6 +234,8 @@ def inferenceEngine(args,
+       request = requestQueue.get()
+ 
+       if request is None:
++        if args.enable_profiling:
++            python_profiling_stop()
+         time.sleep(4)
+         q_inference_logging.put(None)
+         responseQueue.put(None)
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index 9e421fe..ee766a6 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -79,5 +79,8 @@ axdimm_args="--use_axdimm_caffe2_backend --table_weight_path /home/maxim.o/axdim
+ avg_arrival_rate=1
+ avg_arrival_args="--avg_arrival_rate $avg_arrival_rate"
+ 
++# profiling_args="--enable_profiling"
++profiling_args=""
++
+ # python DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/wide_and_deep.json" --tune_batch_qps --tune_accel_qps
+-python3.8 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_axdimm.json" $axdimm_args $avg_arrival_args
++python3.8 DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args $accel_args --queue --config_file "models/configs/dlrm_axdimm.json" $axdimm_args $avg_arrival_args $profiling_args
+diff --git a/utils/utils.py b/utils/utils.py
+index ffb2efa..d7a2e63 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -127,6 +127,12 @@ def cli():
+     # =========================================================================================
+     parser.add_argument("--config_file", type=str, default=None)
+ 
++    # =========================================================================================
++    # AXDIMM configuration
++    # =========================================================================================
++    parser.add_argument('--use_axdimm_caffe2_backend', action="store_true", default=False)
++    parser.add_argument("--table_weight_path", type=str, default="./pretrained/real_0.5M_120table")
++
+     args = parser.parse_args()
+ 
+     if args.model_type == "din":
+-- 
+2.34.1
+

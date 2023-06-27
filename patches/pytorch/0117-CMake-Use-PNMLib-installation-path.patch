@@ -1,0 +1,299 @@
+From 4ec234fcb3b0e961537af9881b1e8fcb743da673 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Tue, 25 Apr 2023 17:14:33 +0300
+Subject: [PATCH 117/128] [CMake] Use PNMLib installation path
+
+PyTorch now in fact depends not on build directory
+on our PNMLib, but on directory with installation
+artifacts. Reflect that in variable naming and remove
+restriction on installation directory structure.
+
+Related to MCS23-920.
+
+Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>
+---
+ CMakeLists.txt                               |  8 +++---
+ aten/src/ATen/CMakeLists.txt                 |  6 ++---
+ aten/src/ATen/axdimm/is_axdimm_available.cpp |  2 +-
+ caffe2/CMakeLists.txt                        | 28 +++++++++-----------
+ cmake/Dependencies.cmake                     | 10 +++----
+ setup.py                                     | 22 +++++++--------
+ tools/setup_helpers/cmake.py                 |  2 +-
+ 7 files changed, 37 insertions(+), 41 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 75bf43a3..cadf3ea8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -191,8 +191,8 @@ option(USE_CPP_CODE_COVERAGE "Compile C/C++ with code coverage flags" OFF)
+ option(USE_COLORIZE_OUTPUT "Colorize output during compilation" ON)
+ option(USE_ASAN "Use Address+Undefined Sanitizers" OFF)
+ option(USE_TSAN "Use Thread Sanitizer" OFF)
+-option(USE_AXDIMM "Use AXDIMM" OFF)
+-option(CMAKE_AXDIMM_BUILD_DIR "A path to AXDIMM library build output directory" "")
++option(USE_PNM "Use AXDIMM" OFF)
++option(PNM_INSTALL_DIR "A path to PNM library installation directory" "")
+ option(USE_CUDA "Use CUDA" ON)
+ cmake_dependent_option(
+      BUILD_LAZY_CUDA_LINALG "Build cuda linalg ops as separate library" ON "USE_CUDA AND LINUX AND BUILD_PYTHON" OFF)
+@@ -764,8 +764,8 @@ if(USE_VULKAN)
+ 
+ endif()
+ 
+-if(USE_AXDIMM)
+-  string(APPEND CMAKE_CXX_FLAGS " -DUSE_AXDIMM")
++if(USE_PNM)
++  string(APPEND CMAKE_CXX_FLAGS " -DUSE_PNM")
+ endif()
+ 
+ if(BUILD_LITE_INTERPRETER)
+diff --git a/aten/src/ATen/CMakeLists.txt b/aten/src/ATen/CMakeLists.txt
+index 3e7f9fe5..d4d238a0 100644
+--- a/aten/src/ATen/CMakeLists.txt
++++ b/aten/src/ATen/CMakeLists.txt
+@@ -222,7 +222,7 @@ else()
+   set(all_cpu_cpp ${all_cpu_cpp} ${vulkan_cpp})
+ endif()
+ 
+-if(USE_AXDIMM)
++if(USE_PNM)
+   set(all_cpu_cpp ${all_cpu_cpp} ${axdimm_cpp} ${native_axdimm_cpp})
+ else()
+   set(all_cpu_cpp ${all_cpu_cpp} ${axdimm_cpp})
+@@ -292,7 +292,7 @@ if(USE_ROCM)
+   set(all_hip_cpp ${native_miopen_cpp} ${native_cudnn_hip_cpp} ${miopen_cpp} ${all_hip_cpp})
+ endif()
+ 
+-if(USE_AXDIMM)
++if(USE_PNM)
+   list(APPEND ATen_AXDIMM_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/axdimm)
+ endif()
+ 
+@@ -543,7 +543,7 @@ if(USE_ROCM)
+   # list(APPEND ATen_HIP_DEPENDENCY_LIBS ATEN_CUDA_FILES_GEN_LIB)
+ endif()
+ 
+-if(USE_AXDIMM)
++if(USE_PNM)
+   set(ATen_AXDIMM_SRCS ${all_axdimm_cpp})
+   list(APPEND ATen_AXDIMM_DEPENDENCY_LIBS ATEN_AXDIMM_FILES_GEN_LIB)
+ endif()
+diff --git a/aten/src/ATen/axdimm/is_axdimm_available.cpp b/aten/src/ATen/axdimm/is_axdimm_available.cpp
+index d2ee3d4e..60e046b7 100644
+--- a/aten/src/ATen/axdimm/is_axdimm_available.cpp
++++ b/aten/src/ATen/axdimm/is_axdimm_available.cpp
+@@ -9,7 +9,7 @@ namespace native {
+ // be in at::native namespace Some extra logic can be implemented but atm is not
+ // required
+ bool is_axdimm_available() {
+-#ifdef USE_AXDIMM
++#ifdef USE_PNM
+   return true;
+ #else
+   return false;
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 7b04bab0..52db61aa 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -981,7 +981,7 @@ elseif(USE_CUDA)
+     target_precompile_headers(torch_cuda PRIVATE
+         "$<$<COMPILE_LANGUAGE:CXX>:ATen/core/ATen_pch.h>")
+   endif()
+-elseif(USE_AXDIMM)
++elseif(USE_PNM)
+   add_library(torch_axdimm ${Caffe2_AXDIMM_SRCS})
+   set_property(TARGET torch_axdimm PROPERTY CXX_STANDARD 17)
+   set_property(TARGET torch_cpu PROPERTY CXX_STANDARD 17)
+@@ -1001,7 +1001,7 @@ if(NOT INTERN_BUILD_MOBILE)
+   # to establish the dependency, since the generation procedure is declared in a different CMake file.
+   # See https://samthursfield.wordpress.com/2015/11/21/cmake-dependencies-between-targets-and-files-and-custom-commands/#custom-commands-in-different-directories
+   add_dependencies(torch_cpu Caffe2_PROTO)
+-  if(USE_AXDIMM)
++  if(USE_PNM)
+     add_dependencies(torch_axdimm Caffe2_PROTO)
+   endif()
+ endif()
+@@ -1257,7 +1257,7 @@ elseif(USE_CUDA)
+   else()
+     include_torch_lib_dir(torch_cuda)
+   endif()
+-elseif(USE_AXDIMM)
++elseif(USE_PNM)
+   include_torch_lib_dir(torch_axdimm)
+ endif()
+ if(BUILD_PYTHON)
+@@ -1313,17 +1313,17 @@ endif()
+ if(NOT INTERN_BUILD_MOBILE)
+   caffe2_interface_library(caffe2_protos caffe2_protos_whole)
+   target_link_libraries(torch_cpu PRIVATE caffe2_protos_whole)
+-  if(USE_AXDIMM)
++  if(USE_PNM)
+     target_link_libraries(torch_axdimm PRIVATE caffe2_protos_whole)
+   endif()
+   if(${CAFFE2_LINK_LOCAL_PROTOBUF})
+     target_link_libraries(torch_cpu INTERFACE protobuf::libprotobuf)
+-    if(USE_AXDIMM)
++    if(USE_PNM)
+       target_link_libraries(torch_axdimm INTERFACE protobuf::libprotobuf)
+     endif()
+   else()
+     target_link_libraries(torch_cpu PUBLIC protobuf::libprotobuf)
+-    if(USE_AXDIMM)
++    if(USE_PNM)
+       target_link_libraries(torch_axdimm PUBLIC protobuf::libprotobuf)
+     endif()
+   endif()
+@@ -1366,7 +1366,7 @@ target_include_directories(torch_cpu INTERFACE $<INSTALL_INTERFACE:include>)
+ target_include_directories(torch_cpu PRIVATE ${Caffe2_CPU_INCLUDE})
+ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE}")
+ 
+-if (USE_AXDIMM)
++if (USE_PNM)
+   target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+ endif ()
+ 
+@@ -1379,10 +1379,6 @@ if(USE_CUDA)
+ elseif(USE_ROCM)
+   target_compile_options(torch_hip PRIVATE "-DTORCH_HIP_BUILD_MAIN_LIB")
+   target_compile_definitions(torch_hip PRIVATE "-DTORCH_HIP_BUILD_MAIN_LIB")
+-elseif(USE_AXDIMM)
+-  # Not sure we need this, but let it be.
+-  target_compile_options(torch_axdimm PRIVATE "-DTORCH_AXDIMM_BUILD_MAIN_LIB")
+-  target_compile_definitions(torch_axdimm PRIVATE "-DTORCH_AXDIMM_BUILD_MAIN_LIB")
+ endif()
+ 
+ if(USE_EXPERIMENTAL_CUDNN_V8_API)
+@@ -1478,7 +1474,7 @@ if(USE_CUDA)
+   caffe2_interface_library(torch_cuda torch_cuda_library)
+ elseif(USE_ROCM)
+   caffe2_interface_library(torch_hip torch_hip_library)
+-elseif(USE_AXDIMM)
++elseif(USE_PNM)
+   caffe2_interface_library(torch_axdimm torch_axdimm_library)
+ endif()
+ 
+@@ -1490,7 +1486,7 @@ if(USE_CUDA)
+   install(TARGETS torch_cuda torch_cuda_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
+ elseif(USE_ROCM)
+   install(TARGETS torch_hip torch_hip_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
+-elseif(USE_AXDIMM)
++elseif(USE_PNM)
+   install(TARGETS torch_axdimm torch_axdimm_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
+ endif()
+ install(TARGETS torch torch_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
+@@ -1501,7 +1497,7 @@ if(USE_CUDA)
+   target_link_libraries(torch PUBLIC torch_cuda_library)
+ elseif(USE_ROCM)
+   target_link_libraries(torch PUBLIC torch_hip_library)
+-elseif(USE_AXDIMM)
++elseif(USE_PNM)
+   target_link_libraries(torch PUBLIC torch_axdimm_library)
+ endif()
+ 
+@@ -1985,7 +1981,7 @@ if(BUILD_PYTHON)
+     set_target_properties(caffe2_pybind11_state_hip PROPERTIES INSTALL_RPATH "${caffe2_pybind11_rpath}")
+   endif()
+ 
+-  if(USE_AXDIMM)
++  if(USE_PNM)
+     add_library(caffe2_pybind11_state_axdimm MODULE ${Caffe2_AXDIMM_PYTHON_SRCS})
+     set_property(TARGET caffe2_pybind11_state_axdimm PROPERTY CXX_STANDARD 17)
+ 
+@@ -2047,7 +2043,7 @@ if(BUILD_PYTHON)
+           $<TARGET_FILE:caffe2_pybind11_state_hip>
+           ${CMAKE_BINARY_DIR}/caffe2/python)
+     endif()
+-    if(USE_AXDIMM)
++    if(USE_PNM)
+       # TODO: our code here.
+     endif()
+   endif()
+diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
+index 676f0d98..5bf12498 100644
+--- a/cmake/Dependencies.cmake
++++ b/cmake/Dependencies.cmake
+@@ -1827,13 +1827,13 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/fmt)
+ # since Axdimm libraries are already built at this point and used solely
+ # to define one, to stop cmake complaining.
+ # Axdimm cmake files are required only to export axdimm library packages
+-if(USE_AXDIMM)
+-  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_AXDIMM_BUILD_DIR}/cmake")
++if(USE_PNM)
++  list(APPEND CMAKE_PREFIX_PATH ${PNM_INSTALL_DIR})
+   find_package(PNMLib REQUIRED)
+-  set(AXDIMM_LIBS PNM::AxdimmSecure PNM::AxdimmAI)
++  set(PNM_LIBS PNM::AxdimmSecure PNM::AxdimmAI)
+ 
+-  list(APPEND Caffe2_DEPENDENCY_LIBS ${AXDIMM_LIBS})
+-  list(APPEND Caffe2_AXDIMM_DEPENDENCY_LIBS ${AXDIMM_LIBS})
++  list(APPEND Caffe2_DEPENDENCY_LIBS ${PNM_LIBS})
++  list(APPEND Caffe2_AXDIMM_DEPENDENCY_LIBS ${PNM_LIBS})
+ endif()
+ 
+ # Disable compiler feature checks for `fmt`.
+diff --git a/setup.py b/setup.py
+index 7e74c542..922e188c 100644
+--- a/setup.py
++++ b/setup.py
+@@ -14,11 +14,11 @@
+ #   USE_CUDA=0
+ #     disables CUDA build
+ #
+-#   USE_AXDIMM=1
+-#     enable AXDIMM build
++#   USE_PNM=1
++#     enable PNM build
+ #
+-#   CMAKE_AXDIMM_BUILD_DIR=<path>
+-#     path to AXDIMM library build output directectory
++#   PNM_INSTALL_DIR=<path>
++#     path to PNM library installation
+ #
+ #   CFLAGS
+ #     flags to apply to both C and C++ files to be compiled (a quirk of setup.py
+@@ -512,14 +512,14 @@ class build_ext(setuptools.command.build_ext.build_ext):
+             report('-- Detected CUDA at ' + cmake_cache_vars['CUDA_TOOLKIT_ROOT_DIR'])
+         else:
+             report('-- Not using CUDA')
+-        if cmake_cache_vars['USE_AXDIMM']:
+-            report('-- Using AXDIMM build')
++        if cmake_cache_vars['USE_PNM']:
++            report('-- Using PNM build')
+         else:
+-            report('-- Not using AXDIMM')
+-        if cmake_cache_vars['CMAKE_AXDIMM_BUILD_DIR']:
+-            report('-- Detected AXDIMM build dir at {}'.format(cmake_cache_vars['CMAKE_AXDIMM_BUILD_DIR']))
++            report('-- Not using PNM')
++        if cmake_cache_vars['PNM_INSTALL_DIR']:
++            report('-- Detected PNM installation at {}'.format(cmake_cache_vars['PNM_INSTALL_DIR']))
+         else:
+-            report('-- Not using CMAKE_AXDIMM_BUILD_DIR')
++            report('-- Not using PNM_INSTALL_DIR')
+         if cmake_cache_vars['USE_MKLDNN']:
+             report('-- Using MKLDNN')
+             if cmake_cache_vars['USE_MKLDNN_ACL']:
+@@ -973,7 +973,7 @@ def configure_extension_build():
+                     name=str('caffe2.python.caffe2_pybind11_state_gpu'),
+                     sources=[]),
+             )
+-        if cmake_cache_vars['USE_AXDIMM']:
++        if cmake_cache_vars['USE_PNM']:
+             extensions.append(
+                 Extension(
+                     name=str('caffe2.python.caffe2_pybind11_state_axdimm'),
+diff --git a/tools/setup_helpers/cmake.py b/tools/setup_helpers/cmake.py
+index 16d66136..c53a75cc 100644
+--- a/tools/setup_helpers/cmake.py
++++ b/tools/setup_helpers/cmake.py
+@@ -212,7 +212,7 @@ class CMake:
+                     "CUDNN_LIBRARY",
+                     "CUDNN_INCLUDE_DIR",
+                     "CUDNN_ROOT",
+-                    "AXDIMM_ROOT_DIR",
++                    "PNM_INSTALL_DIR",
+                     "EXPERIMENTAL_SINGLE_THREAD_POOL",
+                     "INSTALL_TEST",
+                     "JAVA_HOME",
+-- 
+2.34.1
+

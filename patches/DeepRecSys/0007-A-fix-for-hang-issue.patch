@@ -1,0 +1,38 @@
+From ca46e554489e332e34ebcee1c2dacb14a4b12c7b Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 28 Jun 2022 18:14:38 +0900
+Subject: [PATCH 07/33] A fix for hang issue
+
+Un-daemonize inferernce thread and join it before exit instead of relying
+on timeout value. Otherwise main thread can die before inference thread which
+causes joining error in DeepRecSys parent process.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ inferenceEngine.py | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/inferenceEngine.py b/inferenceEngine.py
+index e733c03..af1d8e1 100644
+--- a/inferenceEngine.py
++++ b/inferenceEngine.py
+@@ -225,7 +225,6 @@ def inferenceEngine(args,
+                                                  responseQueue
+                                                 )
+                                        )
+-    inference_thread.daemon = True
+     inference_thread.start()
+ 
+     total_time = 0
+@@ -237,7 +236,7 @@ def inferenceEngine(args,
+       if request is None:
+         if args.enable_profiling:
+             python_profiling_stop()
+-        time.sleep(4)
++        inference_thread.join()
+         q_inference_logging.put(None)
+         responseQueue.put(None)
+         return
+-- 
+2.34.1
+

@@ -1,0 +1,60 @@
+From 02b2062a5805caf140f22267dde0258ecfd086b5 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 2 Dec 2021 10:42:10 +0900
+Subject: [PATCH 010/161] [drivers/dax/axdimm] NFC: use better name for
+ remap_axdimm_range
+
+Rename remap_axdimm_range, remove unused parameter, add comment.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm-private.h | 2 +-
+ drivers/dax/axdimm.c         | 2 +-
+ drivers/dax/device.c         | 4 +++-
+ 3 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index 704721f52..e31576a83 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -76,7 +76,7 @@ static inline int is_axdimm_range(u64 start, u64 end)
+ 	       end < AXDIMM_BASE_ADDR + AXDIMM_MEMORY_SIZE;
+ }
+ 
+-void remap_axdimm_range(struct dev_dax *dev_dax, struct range *range);
++void remap_axdimm_ranges(struct dev_dax *dev_dax);
+ 
+ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma);
+ 
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index b36d89ad4..7fa964647 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -165,7 +165,7 @@ static int setup_axdimm_ranges(struct dev_dax *dev_dax, ulong *offset,
+ 	return rc;
+ }
+ 
+-void remap_axdimm_range(struct dev_dax *dev_dax, struct range *range)
++void remap_axdimm_ranges(struct dev_dax *dev_dax)
+ {
+ 	unsigned long offset[NUM_OF_MEM_REGION];
+ 	unsigned long remap_size[NUM_OF_MEM_REGION];
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 0ad4a7b81..653628617 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -451,8 +451,10 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 
+ 		is_axdimm_device = dev_dax->is_axdimm_device ||
+ 				   is_axdimm_range(range->start, range->end);
++
++		/* Even though AXDIMM device has several ranges, we remap all of them at once */
+ 		if (is_axdimm_device) {
+-			remap_axdimm_range(dev_dax, range);
++			remap_axdimm_ranges(dev_dax);
+ 			break;
+ 		}
+ 
+-- 
+2.34.1
+

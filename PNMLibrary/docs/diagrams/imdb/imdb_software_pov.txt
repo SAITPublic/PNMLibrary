@@ -1,0 +1,110 @@
+@startuml
+|U| User
+|API| IMDB API
+|API_ENG| IMDB Engines Control/Kernel Library
+
+|U|
+start
+:Prepare Compressed DB
+Prepare InRange requests
+Prepare InList requests (predictor lists);
+
+:device = new IMDBDevice();
+
+|API|
+:Init SFR Registers
+CXL_BASE = mmap(..., "/dev/mem", BAR4_OFFSET);
+
+:Create request queue
+Queue = new RequestQueue;
+
+|API_ENG|
+:CXL_THREAD[0] = CXL_BASE + 0x1000
+CXL_THREAD[1] = CXL_BASE + 0x1400
+CXL_THREAD[2] = CXL_BASE + 0x1800;
+fork
+:Handle CXL_THREAD[0] registers;
+while (isActive)
+    : req = Queue.pop();
+    : Setup registers
+    THREAD_COMP_MODE
+    [THREAD_START_ADDR_L,THREAD_START_ADDR_H] =
+        phys_addr(req.db.data) - CXL_MEM_OFFSET
+    [TBLS_SIZE_LSB, TBLS_SIZE_MSB] = req.db.count
+    THREAD_MIN_OPCODE = 0b100
+    THREAD_MAX_OPCODE = 0b010
+    [THREAD_RES_ADDR_L, THREAD_RES_ADDR_H] =
+        phys_addr(req.result.data) - CXL_MEM_OFFSET
+    ;
+    if (req.scan_type) is (InRange) then
+        :THREAD_MIN_VALUE = req.inrange.min
+        THREAD_MAX_VALUE = req.inrange.max;
+    else (InList)
+        :[THREAD_INLIST_ADDR_L, THREAD_INLIST_ADDR_H] =
+           phys_addr(req.inlist.predictor.data) - CXL_MEM_OFFSET
+        THREAD_INLIST_SIZE = req.inlist.max_value;
+    endif
+    :Setup THREAD_CTRL;
+    :cv[0].wait([](){ return THREAD_STATUS});
+    if (req.scan_type) is (InRange) then
+        :req.result.size = [TBLS_RES_SIZE_LSB, TBLS_RES_SIZE_MSB]
+    endif
+    :req.stat.start_time = THREAD_START_TIME
+    req.stat.done_time = THREAD_DONE_TIME;
+endwhile
+stop
+
+fork again
+:Same as for Thread 1 but
+register address is CXL_THREAD[1];
+stop
+
+fork again
+:Same as for Thread 1 but
+register address is CXL_THREAD[2];
+stop
+endfork
+
+|U|
+:device->load_db(CompressedDB.data);
+
+|API|
+: Map datastorage
+CXL_MEMORY = mmap(..., "/dev/dax*", 0)
+CXL_DB_REGION = [0x0, 0x400 000 000];
+
+:memcpy_avx(CXL_DB_REGION, CompressedDB.data);
+
+|U|
+while (hasRequest)
+    if (request_type) is (InRange) then
+        :future = device.in_range_scan(from, to);
+
+        |API|
+        :Make InRange Request;
+        :future = Queue.push(InRangeReq);
+
+    |U|
+    else (InList)
+        :pvec = device.copy_predictor(predictor);
+        |API|
+        :Allocate predictor region
+        PREDICTOR_ADDR = mmap(..., "/dev/dax*", 0x400 000 000);
+        :memcpy_avx(PREDICROR_ADDR + OFFSET, predictor);
+        :return PREDICROR_ADDR + OFFSET;
+
+        |U|
+        :future = device.in_list_scan(pvec);
+
+        |API|
+        :Make InList Request;tc
+        :future = Queue.push(InListReq);
+    endif
+
+    |U|
+    :future.wait();
+endwhile
+:Collect Execution statistics;
+:Verify and dump results;
+stop
+@enduml

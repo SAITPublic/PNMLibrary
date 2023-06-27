@@ -1,0 +1,121 @@
+BasedOnStyle: LLVM
+MaxEmptyLinesToKeep: 1
+Standard: c++17
+InsertNewlineAtEOF: true
+
+################################### HEADERS ####################################
+# Each category of headers is formatted as a separate block,
+# with a new line between the blocks.
+# HEADERS MAP section shows an approximate sequence of headers.
+# See 'Priority' and corresponding 'Regex' fields below for the latest.
+################################################################################
+################################# HEADERS MAP ##################################
+################################################################################
+#include "ClassName.h" if exists in ClassName.cpp
+
+#... directory name starts with secure
+#include "secure/pnm_class_nameN.h"
+
+#include "sls/sls_class_name1.h"
+#... directory name starts with sls
+#include "sls/sls_class_nameN.h"
+
+#include "core/pnm_class_name1.h"
+#include "core/device/pnm_class_name2.h"
+
+#include "common/comm_class_name1.h"
+#include "hw/hw_class_name2.h"
+#... directory name starts with common, hw ...
+#include "hw/hw_class_nameN.h"
+
+#include "gtest/gtest.h"
+# ... directory name starts with gtest and special case linux/pnm_sls_mem_topology.h ...
+#include <linux/pnm_sls_mem_topology.h>
+
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#... all OS system headers ...
+#include <uuid/uuid.h>
+
+#include <cerrno>
+#include <fstream>
+#... all C/C++ language headers, please use the C++ headers
+# with the prefix C instead the old C style ...
+#include <vector>
+################################################################################
+################################# HEADERS MAP ##################################
+################################################################################
+IncludeBlocks:       Regroup
+IncludeCategories:
+  # Priority 0 is already reserved for headers in their class implementations
+  # with the same name i.e. classF.h -> classF.cpp case
+
+  #include "secure/
+  #include <secure/
+  - Regex:           '^[<"]secure/'
+    Priority:        2
+
+  - Regex:           '^[<"]sls/'
+    Priority:        3
+
+  - Regex:           '^[<"]imdb/'
+    Priority:        4
+
+  - Regex:           '^[<"]core/'
+    Priority:        5
+
+  - Regex:           '^[<"](common|hw)/'
+    Priority:        6
+
+  - Regex:           '^[<"](test|tools)/'
+    Priority:        7
+
+  #include "pnmlib/secure/
+  #include <pnmlib/secure/
+  - Regex:           '^[<"]pnmlib/secure/'
+    Priority:        8
+
+  - Regex:           '^[<"]pnmlib/sls/'
+    Priority:        9
+
+  - Regex:           '^[<"]pnmlib/imdb/'
+    Priority:        10
+
+  - Regex:           '^[<"]pnmlib/core/'
+    Priority:        11
+
+  - Regex:           '^[<"]pnmlib/common/'
+    Priority:        12
+
+  #include "gtest/
+  #include <gtest/
+  - Regex:           '^[<"](benchmark/|gtest/)'
+    Priority:        13
+
+  #include "CLI/
+  #include <CLI/
+  - Regex:           '^[<"]CLI/'
+    Priority:        14
+
+  #include "fmt/
+  #include <fmt/
+  - Regex:           '^[<"]fmt/'
+    Priority:        15
+
+  #include "linux/pnm_sls_mem_topology
+  #include <linux/pnm_sls_mem_topology
+  - Regex:           '^[<"]linux/(imdb_resources|sls_resources|pnm_sls_mem_topology)'
+    Priority:        16
+
+  #include < ... .h>
+  - Regex:           '^<.*\.h>'
+    Priority:        17
+
+  #include < ... > excluding the previous ones
+  - Regex:           '^<.*>'
+    Priority:        18
+
+  # all the other headers are local
+  - Regex:           '.*'
+    Priority:        1
+# ################################### HEADERS ####################################

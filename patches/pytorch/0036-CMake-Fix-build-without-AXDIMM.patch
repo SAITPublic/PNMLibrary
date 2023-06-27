@@ -1,0 +1,68 @@
+From 88a96e684e7b2f8ce00a5621b32ec8b100ed58ad Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 11 Feb 2022 16:54:20 +0900
+Subject: [PATCH 036/128] [CMake] Fix build without AXDIMM
+
+Add necessary 'ifs' into CMakeLists.txt files. Also, disable
+USE_AXDIMM by default, this is more natural default config.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ CMakeLists.txt        |  2 +-
+ caffe2/CMakeLists.txt | 16 ++++++++++++----
+ 2 files changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c442ec11..85735d14 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -191,7 +191,7 @@ option(USE_CPP_CODE_COVERAGE "Compile C/C++ with code coverage flags" OFF)
+ option(USE_COLORIZE_OUTPUT "Colorize output during compilation" ON)
+ option(USE_ASAN "Use Address+Undefined Sanitizers" OFF)
+ option(USE_TSAN "Use Thread Sanitizer" OFF)
+-option(USE_AXDIMM "Use AXDIMM" ON)
++option(USE_AXDIMM "Use AXDIMM" OFF)
+ option(CMAKE_AXDIMM_ROOT_PATH "A path to AXDIMM library root directory" "")
+ option(USE_CUDA "Use CUDA" ON)
+ cmake_dependent_option(
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 0cbf9e16..bdfc61c1 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1006,7 +1006,9 @@ if(NOT INTERN_BUILD_MOBILE)
+   # to establish the dependency, since the generation procedure is declared in a different CMake file.
+   # See https://samthursfield.wordpress.com/2015/11/21/cmake-dependencies-between-targets-and-files-and-custom-commands/#custom-commands-in-different-directories
+   add_dependencies(torch_cpu Caffe2_PROTO)
+-  add_dependencies(torch_axdimm Caffe2_PROTO)
++  if(USE_AXDIMM)
++    add_dependencies(torch_axdimm Caffe2_PROTO)
++  endif()
+ endif()
+ 
+ # Build model tracer for tracing-based selective build
+@@ -1316,13 +1318,19 @@ endif()
+ if(NOT INTERN_BUILD_MOBILE)
+   caffe2_interface_library(caffe2_protos caffe2_protos_whole)
+   target_link_libraries(torch_cpu PRIVATE caffe2_protos_whole)
+-  target_link_libraries(torch_axdimm PRIVATE caffe2_protos_whole)
++  if(USE_AXDIMM)
++    target_link_libraries(torch_axdimm PRIVATE caffe2_protos_whole)
++  endif()
+   if(${CAFFE2_LINK_LOCAL_PROTOBUF})
+     target_link_libraries(torch_cpu INTERFACE protobuf::libprotobuf)
+-    target_link_libraries(torch_axdimm INTERFACE protobuf::libprotobuf)
++    if(USE_AXDIMM)
++      target_link_libraries(torch_axdimm INTERFACE protobuf::libprotobuf)
++    endif()
+   else()
+     target_link_libraries(torch_cpu PUBLIC protobuf::libprotobuf)
+-    target_link_libraries(torch_axdimm PUBLIC protobuf::libprotobuf)
++    if(USE_AXDIMM)
++      target_link_libraries(torch_axdimm PUBLIC protobuf::libprotobuf)
++    endif()
+   endif()
+ endif()
+ 
+-- 
+2.34.1
+

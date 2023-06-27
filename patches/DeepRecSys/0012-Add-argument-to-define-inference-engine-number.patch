@@ -1,0 +1,97 @@
+From 62d60e44d9edb054999c4739c3170a90c9e89d80 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Mon, 11 Jul 2022 13:31:30 +0300
+Subject: [PATCH 12/33] Add argument to define inference engine number
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ run_DeepRecSys_axdimm.sh | 43 +++++++++++++++++++++++-----------------
+ 1 file changed, 25 insertions(+), 18 deletions(-)
+
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index 5e8e85b..a3643ba 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -25,15 +25,6 @@ num_batches=20
+ 
+ epoch_args="--nepochs $nepochs --num_batches $num_batches"
+ 
+-########## Inference engine args ##############
+-# The number of inference engines determines the unique number of Caffe2
+-# CPU processes to parallelize queries over
+-# inference_engines=32
+-inference_engines=1
+-caffe2_net_type="async_dag"
+-
+-engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
+-
+ ########## Query size args ##############
+ # Configuration for query sizes.
+ # batch_size_distribution="normal" # number of candidate items in query follows normal distribution
+@@ -72,6 +63,13 @@ scheduler_args="--target_latency $target_latency --min_arr_range $min_arr_range
+ 
+ #python DeepRecSys.py $epoch_args $engine_args $batch_args $scheduler_args --queue --config_file "models/configs/wide_and_deep.json" --tune_batch_qps
+ 
++########## Inference engine args ##############
++# The number of inference engines determines the unique number of Caffe2
++# CPU processes to parallelize queries over
++# inference_engines=32
++inference_engines=1
++caffe2_net_type="async_dag"
++
+ ########## Accelerator arguments ##############
+ accel_configs="96-128-192-256-384-512"
+ # accel_args="--accel_configs $accel_configs --model_accel"
+@@ -86,11 +84,11 @@ while [ "$#" -ne 0 ]
+ do
+   case "$1" in
+   "--secure")
+-            USE_SECURE_ALGO="--use_secndp_algo"
+-            ;;
++          USE_SECURE_ALGO="--use_secndp_algo"
++          ;;
+   "--tables")
+-            shift
+-            table_weight_path=$1
++          shift
++          table_weight_path=$1
+ 	        ;;
+   "--sgx")
+ 	        USE_SGX="--use_sgx"
+@@ -99,12 +97,17 @@ do
+ 	        TAG_VERIFICATION="--use_tags"
+ 	        ;;
+   "--device")
+-            shift
+-            SLS_DEVICE=$1
+-            ;;
++          shift
++          SLS_DEVICE=$1
++          ;;
+   "--sls_dtype")
+-            shift
+-            SLS_DTYPE=$1
++          shift
++          SLS_DTYPE=$1
++          ;;
++  "--num_engines")
++          shift
++          inference_engines=$1
++          ;;
+   esac
+   shift
+ done
+@@ -115,6 +118,10 @@ then
+   echo "Example: export SECNDP_ENCLAVE_PATH=/home/yalavrinenko/git/axdimm_lib/driver/build/secure/AxdimmSecureEnclave.signed.so"
+ fi
+ 
++
++
++engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
++
+ axdimm_args="--use_axdimm_caffe2_backend --table_weight_path $table_weight_path $USE_SECURE_ALGO $USE_SGX $TAG_VERIFICATION --sls_device $SLS_DEVICE --sls_dtype $SLS_DTYPE"
+ # axdimm_args=""
+ 
+-- 
+2.34.1
+

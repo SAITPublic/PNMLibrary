@@ -1,0 +1,40 @@
+From f459f944e6baaa7fc5c86c1a9cbef0adacde72fb Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 2 Dec 2021 10:44:55 +0900
+Subject: [PATCH 035/128] [lengths_reducer_ops_axdimm.cc] Do not pass useless
+ parameters to AXDIMM lib calls
+
+* 'axdimm_init' doesn't take 'engine_id' as input parameter anymore.
+* 'axdimm_run' doesn't take 'request_id' as input parameter anymore.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index a5c77287..5eb57025 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -224,7 +224,6 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       // Setup debug flag.
+       axdimm_initialized_ = true;
+       axdimm::axdimm_init(
+-          0,
+           M,
+           D,
+           block_size_,
+@@ -289,8 +288,8 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     axd_status_e status = axdimm::axdimm_run(
+         (uint32_t*)lengths_blocked_,
+         (uint32_t*)indices_blocked_,
+-        output_buf /* psum buffer */,
+-        0);
++        output_buf /* psum buffer */
++    );
+ 
+     return status == AXDIMM_SUCCESS;
+   }
+-- 
+2.34.1
+

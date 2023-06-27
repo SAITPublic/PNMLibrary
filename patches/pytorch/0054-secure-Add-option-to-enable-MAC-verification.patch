@@ -1,0 +1,240 @@
+From 7183a2a551c600b03572b4c5780b7a72a3ee8172 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Wed, 29 Jun 2022 19:14:19 +0300
+Subject: [PATCH 054/128] [secure] Add option to enable MAC verification
+
+Add `with_tag` option to operator's arguments set. This option allows to enable
+tag verification process to confirm data consistence and correctness.
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ CMakeLists.txt                                |  1 +
+ caffe2/CMakeLists.txt                         | 13 +---
+ .../lengths_reducer_ops_sec_axdimm.cc         |  4 ++
+ .../lengths_reducer_ops_sec_axdimm.h          | 72 +++++++++++++++----
+ setup.py                                      |  7 ++
+ 5 files changed, 74 insertions(+), 23 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 85735d14..b260dfc4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -193,6 +193,7 @@ option(USE_ASAN "Use Address+Undefined Sanitizers" OFF)
+ option(USE_TSAN "Use Thread Sanitizer" OFF)
+ option(USE_AXDIMM "Use AXDIMM" OFF)
+ option(CMAKE_AXDIMM_ROOT_PATH "A path to AXDIMM library root directory" "")
++cmake_dependent_option(USE_AXDIMM_SGX "Use SGX for secure SLS" OFF USE_AXDIMM OFF)
+ option(USE_CUDA "Use CUDA" ON)
+ cmake_dependent_option(
+      BUILD_LAZY_CUDA_LINALG "Build cuda linalg ops as separate library" ON "USE_CUDA AND LINUX AND BUILD_PYTHON" OFF)
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 75bc1e95..194e44fe 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1373,24 +1373,17 @@ target_include_directories(torch_cpu PRIVATE ${Caffe2_CPU_INCLUDE})
+ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE}")
+ 
+ if (USE_AXDIMM)
+-  option(AXDIMM_SGX OFF "Use SGX for secure SLS")
+-
+-  if (DEFINED ENV{AXDIMM_SGX})
+-    set(AXDIMM_SGX $ENV{AXDIMM_SGX})
+-  endif ()
+-
+   target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+-  set(AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/libAxdimmAI.so"
+-          "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecure.a")
++  set(AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/ai/libAxdimmAI.so" "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecure.a")
+ 
+-  if (AXDIMM_SGX)
++  if (USE_AXDIMM_SGX)
+     target_compile_definitions(torch_axdimm PUBLIC -DSGX_ENABLE)
+     list(APPEND AXDIMM_LIBS "${CMAKE_AXDIMM_ROOT_PATH}/build/secure/libAxdimmSecureSgx.so")
+   endif ()
+ 
+   target_link_libraries(torch_axdimm PUBLIC ${AXDIMM_LIBS})
+   target_include_directories(torch_axdimm PRIVATE ${Caffe2_AXDIMM_INCLUDE})
+-endif()
++endif ()
+ 
+ target_compile_options(torch_cpu PRIVATE "-DCAFFE2_BUILD_MAIN_LIB")
+ if(USE_CUDA)
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 8b0888f1..2951a69e 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -58,6 +58,7 @@ OPERATOR_SCHEMA(SecureSparseLengthsSumVec)
+     .Arg("num_tables", "uint: number of embedded tables")
+     .Arg("sparse_feature_size", "uint: sparse feature size")
+     .Arg("rows", "vector<uint64>: number of rows for each table")
++    .Arg("with_tag", "bool: perform MAC verification of result")
+     .Input(
+         0,
+         "T1, ..., TN, I1, ..., IN, L1, ..., LN",
+@@ -73,6 +74,7 @@ OPERATOR_SCHEMA(SecureSparseLengthsSumIntVec)
+     .Arg("num_tables", "uint: number of embedded tables")
+     .Arg("sparse_feature_size", "uint: sparse feature size")
+     .Arg("rows", "vector<uint64>: number of rows for each table")
++    .Arg("with_tag", "bool: perform MAC verification of result")
+     .Input(
+         0,
+         "T1, ..., TN, I1, ..., IN, L1, ..., LN",
+@@ -115,6 +117,7 @@ OPERATOR_SCHEMA(SgxSecureSparseLengthsSumVec)
+     .Arg("num_tables", "uint: number of embedded tables")
+     .Arg("sparse_feature_size", "uint: sparse feature size")
+     .Arg("rows", "vector<uint64>: number of rows for each table")
++    .Arg("with_tag", "bool: perform MAC verification of result")
+     .Input(
+         0,
+         "T1, ..., TN, I1, ..., IN, L1, ..., LN",
+@@ -130,6 +133,7 @@ OPERATOR_SCHEMA(SgxSecureSparseLengthsSumIntVec)
+     .Arg("num_tables", "uint: number of embedded tables")
+     .Arg("sparse_feature_size", "uint: sparse feature size")
+     .Arg("rows", "vector<uint64>: number of rows for each table")
++    .Arg("with_tag", "bool: perform MAC verification of result")
+     .Input(
+         0,
+         "T1, ..., TN, I1, ..., IN, L1, ..., LN",
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index 3cd63582..c0f6380a 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -60,6 +60,12 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+                       "by expression I = static_cast<I>(F * "
+                    << SecureTypeTraits<T>::SCALE_FACTOR << " )";
+     }
++
++    with_tag_ = this->template GetSingleArgument<bool>("with_tag", false);
++    if (with_tag_) {
++        LOG(INFO) << "MAC Verification is enabled.";
++    }
++
+     if (!this->template GetSingleArgument<bool>("from_file", false)) {
+       init_from_input();
+     } else {
+@@ -128,27 +134,62 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+         at::dtype<T>());
+ 
+     T* output_buf = output->template data<T>();
+-
+     auto output_view = axdimm::make_view(
+         output_buf,
+         output_buf + minibatch_size * block_size_ * sparse_feature_size_);
+ 
++    axdimm::common_view<uint8_t> checks{};
++    axdimm::common_view<secure_core_value_type> psum_view =
++        axdimm::view_cast<secure_core_value_type>(output_view);
++
++    if (with_tag_) {
++      tag_checks_.resize(minibatch_size * block_size_);
++      checks = axdimm::make_view(tag_checks_);
++
++      psum_buffer_.resize(
++          minibatch_size * block_size_ * (sparse_feature_size_ + tag_size));
++      psum_view = axdimm::make_view(psum_buffer_);
++    }
++
+     auto status = runner_.run(
+         minibatch_size,
+         axdimm::make_view(std::cref(lengths_blocked_).get()),
+         axdimm::make_view(std::cref(indices_blocked_).get()),
+-        axdimm::view_cast<uint8_t>(output_view));
+-
+-    auto output_int_v = axdimm::view_cast<uint32_t>(output_view);
++        axdimm::view_cast<uint8_t>(psum_view),
++        checks,
++        with_tag_);
++
++    if (!SecureTypeTraits<T>::apply_scale && !with_tag_)
++      return status; // we already have result in output buffer
++
++    if (!status) {
++      LOG(ERROR) << "MAC verification failed. Tag mismatch for psum[i]:";
++      for (auto i = 0U; i < tag_checks_.size(); ++i)
++        if (!tag_checks_[i])
++          LOG(ERROR) << "\t" << i;
++    }
+ 
+-    if constexpr (SecureTypeTraits<T>::apply_scale) {
+-      std::transform(
+-          output_int_v.begin(),
+-          output_int_v.end(),
+-          output_view.begin(),
+-          [this](const auto v) {
+-            return static_cast<T>(v) / SecureTypeTraits<T>::SCALE_FACTOR;
+-          }); // Restore floating point values
++    auto rowwise_psum = (with_tag_)
++        ? axdimm::make_rowwise_view(
++              psum_view.begin(),
++              psum_view.end(),
++              sparse_feature_size_ + tag_size,
++              0,
++              tag_size)
++        : axdimm::make_rowwise_view(
++              psum_view.begin(), psum_view.end(), sparse_feature_size_);
++
++    // Copy (or transform) psum from internal buffer to output
++    auto output_it = output_view.begin();
++    for (auto psum_row : rowwise_psum) {
++      output_it = std::transform(
++          psum_row.begin(), psum_row.end(), output_it, [this](const auto v) {
++            if constexpr (SecureTypeTraits<T>::apply_scale) {
++              return static_cast<T>(v) / SecureTypeTraits<T>::SCALE_FACTOR;
++            } else {
++              return v;
++            }
++          });
+     }
+ 
+     return status;
+@@ -165,7 +206,7 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+     axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
+         .rows = rows, .sparse_feature_size = sparse_feature_size});
+     runner_.init(&args);
+-    runner_.load_tables(data.begin(), rows, sparse_feature_size, false);
++    runner_.load_tables(data.begin(), rows, sparse_feature_size, with_tag_);
+   }
+ 
+   void init_from_file();
+@@ -180,8 +221,13 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       num_indices_per_lookup_; // Number of indices per one SLS lookup (we have
+                                // "block_size_" of them).
+ 
++  static constexpr auto tag_size =
++      sizeof(axdimm::secure::uint128_t) / sizeof(secure_core_value_type);
+   int64_t sparse_feature_size_{};
+   std::vector<uint64_t> rows_;
++  bool with_tag_{false};
++  std::vector<uint8_t> tag_checks_;
++  std::vector<secure_core_value_type> psum_buffer_;
+ 
+   SecureRunner runner_;
+ };
+diff --git a/setup.py b/setup.py
+index a3de2171..623ad2ea 100644
+--- a/setup.py
++++ b/setup.py
+@@ -17,6 +17,9 @@
+ #   USE_AXDIMM=1
+ #     enable AXDIMM build
+ #
++#   USE_AXDIMM_SGX=1
++#     enable Axdimm with IntelSgx build
++#
+ #   CMAKE_AXDIMM_ROOT_PATH=<path>
+ #     path to AXDIMM library root directectory
+ #
+@@ -514,6 +517,10 @@ class build_ext(setuptools.command.build_ext.build_ext):
+             report('-- Not using CUDA')
+         if cmake_cache_vars['USE_AXDIMM']:
+             report('-- Using AXDIMM build')
++            if cmake_cache_vars['USE_AXDIMM_SGX']:
++                report('-- Using IntelSGX build')
++            else:
++                report('-- Not using IntelSGX build')
+         else:
+             report('-- Not using AXDIMM')
+         if cmake_cache_vars['CMAKE_AXDIMM_ROOT_PATH']:
+-- 
+2.34.1
+

@@ -1,0 +1,62 @@
+From 4dfc6969a56893f858757cf9e8e8a05acdc99bb3 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 12 May 2023 04:32:23 +0000
+Subject: [PATCH 106/161] NFC: rename config-axdimm -> config-pnm
+
+* rename config-axdimm -> config-pnm.
+* rename linux kernel suffix for pnm config build.
+* update PNM_HOW_TO_BUILD.md and MAINTAINERS.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ MAINTAINERS                 | 2 +-
+ PNM_HOW_TO_BUILD.md         | 2 +-
+ config-axdimm => config-pnm | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+ rename config-axdimm => config-pnm (99%)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index a907cc7ec..5a46b969b 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -5235,7 +5235,7 @@ M:	Yong-Min Tai <ym.tai@samsung.com>
+ M:	Youngsam Shin <youngsam.shin@samsung.com>
+ S:	Maintained
+ F:	PNM_HOW_TO_BUILD.md
+-F:	config-axdimm
++F:	config-pnm
+ F:	include/uapi/linux/dba_resources.h
+ F:	include/uapi/linux/libaxdimm.h
+ F:	install_axdimm_headers.sh
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 43d68a4ce..349d46e06 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -3,7 +3,7 @@
+ ## Clean build
+ 
+ ```bash
+-$ rm -f .config; cp -v config-axdimm .config
++$ rm -f .config; cp -v config-pnm .config
+ $ rm -fr debian/ vmlinux-gdb.py # cleanup from previous build
+ $ make -j `getconf _NPROCESSORS_ONLN` bindeb-pkg # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
+ ...
+diff --git a/config-axdimm b/config-pnm
+similarity index 99%
+rename from config-axdimm
+rename to config-pnm
+index cf86a2ad8..435081f3f 100644
+--- a/config-axdimm
++++ b/config-pnm
+@@ -28,7 +28,7 @@ CONFIG_THREAD_INFO_IN_TASK=y
+ CONFIG_INIT_ENV_ARG_LIMIT=32
+ # CONFIG_COMPILE_TEST is not set
+ # CONFIG_WERROR is not set
+-CONFIG_LOCALVERSION="hmem-cxl"
++CONFIG_LOCALVERSION="-pnm"
+ # CONFIG_LOCALVERSION_AUTO is not set
+ CONFIG_BUILD_SALT=""
+ CONFIG_HAVE_KERNEL_GZIP=y
+-- 
+2.34.1
+

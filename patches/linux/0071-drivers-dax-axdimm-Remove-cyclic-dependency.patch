@@ -1,0 +1,202 @@
+From 8d44e00dd04a3c2ce705bf26cb69c0bd27e5120f Mon Sep 17 00:00:00 2001
+From: Valentin Iliushin <v.iliushin@partner.samsung.com>
+Date: Wed, 30 Nov 2022 16:46:37 +0300
+Subject: [PATCH 071/161] [drivers/dax/axdimm] Remove cyclic dependency
+
+Remove cyclic dependency between axdimm_process_manager.h and
+axdimm_allocator.h/axdimm_rank_scheduler.h
+
+Resolves: AXDIMM-476
+
+Signed-off-by: Valentin Iliushin <v.iliushin@partner.samsung.com>
+---
+ drivers/dax/axdimm.c                |  6 +++---
+ drivers/dax/axdimm_allocator.c      | 11 +++++------
+ drivers/dax/axdimm_allocator.h      |  6 +-----
+ drivers/dax/axdimm_rank_scheduler.c | 10 +++++-----
+ drivers/dax/axdimm_rank_scheduler.h |  6 +-----
+ drivers/dax/axdimm_sysfs.c          |  1 +
+ 6 files changed, 16 insertions(+), 24 deletions(-)
+
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 65be0823d..860ee4a56 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -380,11 +380,11 @@ int init_axdimm_device(struct dev_dax *dev_dax)
+ 	init_axdimm_process_manager(&axdimm_proc_mgr);
+ 
+ 	/* Reset ranks status and synchronization primitives */
+-	init_axdimm_rank_scheduler(&axdimm_rank_sched, &axdimm_proc_mgr);
++	init_axdimm_rank_scheduler(&axdimm_rank_sched);
+ 
+ 	/* Initialize memory allocator */
+-	return init_axdimm_allocator(&axdimm_allocator, &axdimm_device.mem_info,
+-				     &axdimm_proc_mgr);
++	return init_axdimm_allocator(&axdimm_allocator,
++				     &axdimm_device.mem_info);
+ }
+ 
+ void cleanup_axdimm_device(void)
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index d4d5fc3bf..7e66efc49 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -13,6 +13,8 @@
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
++extern struct axdimm_process_manager axdimm_proc_mgr;
++
+ static int init_rank_pool(struct axdimm_allocator *alloc, uint8_t rank,
+ 			  uint64_t size)
+ {
+@@ -138,8 +140,7 @@ static int preinit_axdimm_allocator(struct axdimm_allocator *alloc,
+ }
+ 
+ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+-			  struct axdmem_info *mem_info,
+-			  struct axdimm_process_manager *proc_mgr)
++			  struct axdmem_info *mem_info)
+ {
+ 	int err_code;
+ 
+@@ -151,8 +152,6 @@ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+ 
+ 	INIT_LIST_HEAD(&alloc->obj_pack_list);
+ 
+-	alloc->proc_mgr = proc_mgr;
+-
+ 	/* Protect memory allocation operations */
+ 	mutex_init(&alloc->memory_mutex);
+ 
+@@ -503,7 +502,7 @@ static int allocate_memory_ioctl(struct axdimm_allocator *alloc,
+ 	}
+ 
+ 	/* descriptor is valid and copied to user, so add it to process resources */
+-	err_code = axdimm_proc_register_alloc(alloc->proc_mgr, desc);
++	err_code = axdimm_proc_register_alloc(&axdimm_proc_mgr, desc);
+ 
+ deinit_kreq:
+ 	kfree(kreq.user_objects_sizes);
+@@ -676,7 +675,7 @@ static int deallocate_memory_ioctl(struct axdimm_allocator *alloc,
+ 	if (unlikely(err_code))
+ 		return err_code;
+ 
+-	return axdimm_proc_remove_alloc(alloc->proc_mgr, in_desc);
++	return axdimm_proc_remove_alloc(&axdimm_proc_mgr, in_desc);
+ }
+ 
+ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+index f551d524f..9ab9a7833 100644
+--- a/drivers/dax/axdimm_allocator.h
++++ b/drivers/dax/axdimm_allocator.h
+@@ -5,7 +5,6 @@
+ #define __AXDIMM_ALLOCATOR_H__
+ 
+ #include "axdimm-private.h"
+-#include "axdimm_process_manager.h"
+ 
+ #include <linux/mutex.h>
+ #include <linux/libaxdimm.h>
+@@ -46,14 +45,11 @@ struct axdimm_allocator {
+ 	struct list_head obj_pack_list;
+ 	/* Packages counter */
+ 	uint64_t pack_counter;
+-	/* For process allocation ownership tracking */
+-	struct axdimm_process_manager *proc_mgr;
+ 	struct mutex memory_mutex;
+ };
+ 
+ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+-			  struct axdmem_info *mem_info,
+-			  struct axdimm_process_manager *proc_mgr);
++			  struct axdmem_info *mem_info);
+ /*
+  * Not proccess(thread)-safe.
+  * `mem_info` might be NULL, if it is
+diff --git a/drivers/dax/axdimm_rank_scheduler.c b/drivers/dax/axdimm_rank_scheduler.c
+index 814d59dce..021a36b9d 100644
+--- a/drivers/dax/axdimm_rank_scheduler.c
++++ b/drivers/dax/axdimm_rank_scheduler.c
+@@ -22,6 +22,8 @@ static atomic_t rd_flag = ATOMIC_INIT(0);
+ static DECLARE_WAIT_QUEUE_HEAD(wr_wq);
+ static DECLARE_WAIT_QUEUE_HEAD(rd_wq);
+ 
++extern struct axdimm_process_manager axdimm_proc_mgr;
++
+ static unsigned long acquire_free_rank_for_write(struct axdimm_rank_scheduler *rank_sched,
+ 				       unsigned int rw_msk, unsigned int wo_msk)
+ {
+@@ -74,10 +76,8 @@ void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched)
+ 	atomic64_set(&rank_sched->retry_timeout_ns, RETRY_TIMEOUT_NS);
+ }
+ 
+-void init_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched,
+-				struct axdimm_process_manager *proc_mgr)
++void init_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched)
+ {
+-	rank_sched->proc_mgr = proc_mgr;
+ 	reset_axdimm_rank_scheduler(rank_sched);
+ 	mutex_init(&rank_sched->rank_stat_lock);
+ }
+@@ -242,7 +242,7 @@ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 		ret = get_rank_retry(rank_sched, cmd, arg);
+ 
+ 	if (ret >= 0) /* finally got rank, add to process resources */
+-		axdimm_proc_register_rank(rank_sched->proc_mgr, ret, cmd);
++		axdimm_proc_register_rank(&axdimm_proc_mgr, ret, cmd);
+ 
+ 	return ret;
+ }
+@@ -282,7 +282,7 @@ int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched,
+ 	rank = release_and_wakeup(rank_sched, cmd, arg);
+ 
+ 	if (rank >= 0)
+-		return axdimm_proc_remove_rank(rank_sched->proc_mgr, rank, cmd);
++		return axdimm_proc_remove_rank(&axdimm_proc_mgr, rank, cmd);
+ 
+ 	return -1;
+ }
+diff --git a/drivers/dax/axdimm_rank_scheduler.h b/drivers/dax/axdimm_rank_scheduler.h
+index f594b5aaa..4726653f6 100644
+--- a/drivers/dax/axdimm_rank_scheduler.h
++++ b/drivers/dax/axdimm_rank_scheduler.h
+@@ -5,7 +5,6 @@
+ #define __AXDIMM_RANK_SCHEDULER_H__
+ 
+ #include <linux/atomic.h>
+-#include "axdimm_process_manager.h"
+ 
+ #include <linux/libaxdimm.h>
+ #include <linux/types.h>
+@@ -24,13 +23,10 @@ struct axdimm_rank_scheduler {
+ 	atomic64_t retry_timeout_ns;
+ 	uint8_t cacheline_padding_4[L1_CACHE_BYTES - sizeof(atomic64_t)];
+ 	struct mutex rank_stat_lock;
+-	/* For process allocation ownership tracking */
+-	struct axdimm_process_manager *proc_mgr;
+ };
+ 
+ void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched);
+-void init_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched,
+-				struct axdimm_process_manager *proc_mgr);
++void init_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched);
+ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 		    unsigned int arg);
+ int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched,
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index c5c257ee0..f8705eb7e 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -5,6 +5,7 @@
+ #include "axdimm_log.h"
+ #include "axdimm_rank_scheduler.h"
+ #include "axdimm-private.h"
++#include "axdimm_process_manager.h"
+ 
+ #include <linux/device.h>
+ #include <linux/genalloc.h>
+-- 
+2.34.1
+

@@ -1,0 +1,27 @@
+From afd7c193a77c32db68c3ba2c81860872f43b78d5 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Wed, 16 Nov 2022 15:11:24 +0000
+Subject: [PATCH 063/161] [install_dax_drivers.sh] Fix installation script
+
+---
+ install_dax_drivers.sh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/install_dax_drivers.sh b/install_dax_drivers.sh
+index b590f78e0..4dbb77474 100755
+--- a/install_dax_drivers.sh
++++ b/install_dax_drivers.sh
+@@ -4,8 +4,8 @@ set -e
+ 
+ sudo cp -v drivers/dax/*.ko /lib/modules/`uname -r`/kernel/drivers/dax/
+ sudo cp -v drivers/dax/hmem/*.ko /lib/modules/`uname -r`/kernel/drivers/dax/hmem
+-sudo cp include/uapi/linux/libaxdimm.h /usr/include/linux
+-sudo cp include/uapi/linux/libaxdimm.h /usr/src/`uname -r`/include/uapi/linux/libaxdimm.h
++sudo cp -v include/uapi/linux/libaxdimm.h /usr/include/linux
++sudo cp -v include/uapi/linux/libaxdimm.h /usr/src/linux-headers-`uname -r`/include/uapi/linux/libaxdimm.h
+ 
+ sudo rmmod device_dax
+ sudo modprobe device_dax "$@"
+-- 
+2.34.1
+

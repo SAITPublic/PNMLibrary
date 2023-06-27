@@ -1,0 +1,156 @@
+From 93513f44780265f508a2e01863e9f652c5045126 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 15 Nov 2021 13:34:17 +0900
+Subject: [PATCH 030/128] [lengths_reducer_ops_axdimm.cc] Call 'axdimm_init' if
+ needed
+
+Move 'axdimm_init' call into SLS operator itself, allowing to remove direct
+call from DLRM application. Multiple 'axdimm_init's calls are not supported
+yet.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ .../operators/lengths_reducer_ops_axdimm.cc   | 62 +++++++++++++++++--
+ 1 file changed, 57 insertions(+), 5 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index d1dba05e..a5c77287 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -7,6 +7,8 @@
+ #include "caffe2/utils/math.h"
+ 
+ #include "api/axdimm.h"
++#include <algorithm>
++#include <vector>
+ 
+ namespace caffe2 {
+ 
+@@ -131,6 +133,9 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     tables_vec_start_idx_ = 0;
+     indices_vec_start_idx_ = tables_vec_start_idx_ + block_size_;
+     lengths_vec_start_idx_ = indices_vec_start_idx_ + block_size_;
++    num_indices_per_lookup_.resize(block_size_);
++    std::fill(
++        num_indices_per_lookup_.begin(), num_indices_per_lookup_.end(), 0);
+   }
+ 
+   ~AXDIMMSparseLengthsReductionOpVec() {
+@@ -165,6 +170,10 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     uint64_t cur_indices_total_size_in_bytes = 0;
+     uint64_t cur_lengths_total_size_in_bytes = 0;
+ 
++    // Indicate whether one need to call axd_init (i.e. whether some parameters
++    // changed from previous operator call).
++    bool need_call_axd_init = false;
++
+     // 1) Calculate total sizes for indices/lengths to be blocked.
+     for (int i = 0; i < block_size_; ++i) {
+       auto& dataInput = Input(tables_vec_start_idx_ + i);
+@@ -184,9 +193,46 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       CAFFE_ENFORCE_EQ(1, indicesInput.dim(), "INDICES must be a vector");
+       CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
+       (void)dataInput;
++
++      const int* lengths = lengthsInput.template data<int>();
++      if (lengths[0] != num_indices_per_lookup_[i]) {
++        CAFFE_ENFORCE_EQ(
++            num_indices_per_lookup_[i],
++            0,
++            "Multiple axd_init calls are not supported at the moment.");
++        num_indices_per_lookup_[i] = lengths[0];
++        need_call_axd_init = true;
++      }
++    }
++
++    // 2) Call axd_init if needed.
++    if (need_call_axd_init) {
++      // Check for yet unsupported reinitialization.
++      CAFFE_ENFORCE_EQ(
++          false,
++          axdimm_initialized_,
++          "AXDIMM reinitialization is not supported now.");
++      // Minibatch size.
++      const int64_t M = Input(lengths_vec_start_idx_).size(0);
++      // Sparse feature size.
++      const int64_t D = Input(tables_vec_start_idx_).size_from_dim(1);
++      // A vector of embedding sizes.
++      std::vector<uint32_t> table_entry_list(block_size_, 0);
++      for (int i = 0; i < block_size_; ++i) {
++        table_entry_list[i] = Input(tables_vec_start_idx_ + i).size(0);
++      }
++      // Setup debug flag.
++      axdimm_initialized_ = true;
++      axdimm::axdimm_init(
++          0,
++          M,
++          D,
++          block_size_,
++          table_entry_list.data(),
++          num_indices_per_lookup_.data());
+     }
+ 
+-    // 2.1) If new operator invocation consumes more memory for indices,
++    // 3.1) If new operator invocation consumes more memory for indices,
+     // increase total capacity.
+     if (cur_indices_total_size_in_bytes > indices_total_size_in_bytes_) {
+       indices_total_size_in_bytes_ = cur_indices_total_size_in_bytes;
+@@ -194,7 +240,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+           (char*)realloc(indices_blocked_, indices_total_size_in_bytes_);
+     }
+ 
+-    // 2.2) Same for lengths: if new operator invocation consumes more memory,
++    // 3.2) Same for lengths: if new operator invocation consumes more memory,
+     // increase total capacity.
+     if (cur_lengths_total_size_in_bytes > lengths_total_size_in_bytes_) {
+       lengths_total_size_in_bytes_ = cur_lengths_total_size_in_bytes;
+@@ -202,7 +248,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+           (char*)realloc(lengths_blocked_, lengths_total_size_in_bytes_);
+     }
+ 
+-    // 3) Setup output buffer.
++    // 4) Setup output buffer.
+     const int64_t M = Input(lengths_vec_start_idx_).size(0);
+     auto shape = Input(tables_vec_start_idx_).sizes().vec();
+     shape[0] = M;
+@@ -212,7 +258,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     uint64_t indices_offset_in_bytes = 0;
+     uint64_t lengths_offset_in_bytes = 0;
+ 
+-    // 4) Copy indices/lengths inputs into respecive "blocked" memory.
++    // 5) Copy indices/lengths inputs into respecive "blocked" memory.
+     for (int i = 0; i < block_size_; ++i) {
+       auto& indicesInput = Input(indices_vec_start_idx_ + i);
+       auto& lengthsInput = Input(lengths_vec_start_idx_ + i);
+@@ -239,7 +285,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+     T* output_buf = output->template data<T>();
+ 
+-    // 5) And finally run the operator.
++    // 6) And finally run the operator.
+     axd_status_e status = axdimm::axdimm_run(
+         (uint32_t*)lengths_blocked_,
+         (uint32_t*)indices_blocked_,
+@@ -263,6 +309,9 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+   char* lengths_blocked_ = nullptr; // Concatenated lengths arrays
+ 
+   int block_size_; // Number of tables/indices/lengths to be blocked
++  std::vector<uint32_t>
++      num_indices_per_lookup_; // Number of indices per one SLS lookup (we have
++                               // "block_size_" of them).
+ 
+   int tables_vec_start_idx_; // Starting input index for tables blobs
+   int indices_vec_start_idx_; // Starting input index for indices blobs
+@@ -272,6 +321,9 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked indices buffer
+   uint64_t lengths_total_size_in_bytes_ =
+       0; // Size of currently allocated blocked lengths buffer
++  bool axdimm_initialized_ =
++      false; // Debug flag to prevent axdimm reinitialization (not supported at
++             // the moment)
+ };
+ 
+ using SparseLengthsSumOp =
+-- 
+2.34.1
+

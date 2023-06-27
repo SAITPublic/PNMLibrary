@@ -1,0 +1,95 @@
+From 7fe6eef6e72e1333a97b87d2c9e9b04b5bf4759b Mon Sep 17 00:00:00 2001
+From: Valentin Iliushin <v.iliushin@partner.samsung.com>
+Date: Tue, 6 Dec 2022 14:18:32 +0300
+Subject: [PATCH 17/23] Add integer embeddings tests
+
+Add tests for PyTorch Axdimm tensor with integer embeddings
+
+Resolves: AXDIMM-486
+
+Signed-off-by: Valentin Iliushin <v.iliushin@partner.samsung.com>
+---
+ test_axdimm_op.py | 34 +++++++++++++++++++++++++---------
+ 1 file changed, 25 insertions(+), 9 deletions(-)
+
+diff --git a/test_axdimm_op.py b/test_axdimm_op.py
+index 38e3665..a5f1b55 100644
+--- a/test_axdimm_op.py
++++ b/test_axdimm_op.py
+@@ -37,8 +37,9 @@ class AxdimmEmbeddingsTest:
+     random_lookups: bool # Each lookup length in batch will be random
+     fixed_lookups_len: int # Length of fixed lookup (ignored if random_lookups is True)
+     result_tolerance: float # Tolerable deviation of result values
++    embedding_scalar_type_name: str  # embedding scalar type name (int32 or float32)
+ 
+-    def __init__(self, args):
++    def __init__(self, args, embedding_scalar_type_name):
+         self.tensor_types = set(args.tensor_types) # only unique values
+         self.tables_num = args.tables_num
+         self.table_len = args.table_len
+@@ -50,6 +51,7 @@ class AxdimmEmbeddingsTest:
+         self.random_lookups = args.randomize_lookups_len
+         self.fixed_lookups_len = args.fixed_lookups_len
+         self.result_tolerance = args.result_tolerance
++        self.embedding_scalar_type_name = embedding_scalar_type_name
+         self.gen_test_data()
+     
+     def gen_indices(self):
+@@ -84,9 +86,20 @@ class AxdimmEmbeddingsTest:
+         return offsets
+ 
+     def gen_tables(self):
+-        return [np.random.uniform(
+-            low=0.5, high=1.0, size=(self.table_len, self.sparse_feature_size)
+-        ).astype(np.float32) for x in range(0, self.tables_num)]
++        rng = np.random.default_rng()
++        if self.embedding_scalar_type_name == "float32":
++            return [rng.uniform(
++                low=0.5, high=1.0, size=(self.table_len, self.sparse_feature_size)
++            ).astype(np.float32) for x in range(0, self.tables_num)]
++
++        elif self.embedding_scalar_type_name == "int32":
++            return [rng.integers(
++                low=1, high=5, size=(self.table_len, self.sparse_feature_size)
++            ).astype(np.int32) for x in range(0, self.tables_num)]
++
++        else:
++            log.info(f"Unknown scalar type: {self.embedding_scalar_type_name}")
++            sys.exit(-1)
+ 
+     def gen_test_data(self):
+         self.tables = torch.from_numpy(np.asarray(self.gen_tables()))
+@@ -108,7 +121,8 @@ class AxdimmEmbeddingsTest:
+ 
+ 
+     def run_test(self):
+-        log.info("Running EmbeddingBag calculations")
++        log.info(f"Running EmbeddingBag calculations with scalar type {self.embedding_scalar_type_name}")
++        # EmbeddingBag does not support int32, but float32 should work for validation
+         cpu_ops = [EmbeddingBag.from_pretrained(torch.tensor(self.tables[i], dtype=torch.float32), mode='sum') for i in range(0, self.tables_num)]
+         # CPU version doesn't require last offset, since it knows size of index bag
+         # AXDIMM requires it because indices must be flat 2D list of all indices bags
+@@ -124,7 +138,7 @@ class AxdimmEmbeddingsTest:
+         indices_tensor = torch.tensor(axdimm_indices, dtype=torch.int32)
+         offsets_tensor = torch.tensor(self.offsets, dtype=torch.int32)
+         for tensor_type in self.tensor_types:
+-            log.info("Loading weights for tensor type: %s" % tensor_type)
++            log.info(f"Loading weights for tensor type: {tensor_type}, scalar type: {self.embedding_scalar_type_name}")
+             op = EmbeddingBagAxdimm(create_axdimm_tensor(tensor_type, self.tables))
+             log.info("Running AXDIMM...")
+             with profiler.profile(with_stack=True, profile_memory=True) as axdimm_prof:
+@@ -192,6 +206,8 @@ if __name__ == "__main__":
+     if not validate_args(args):
+         log.info("Arguments validation failed")
+         sys.exit(-1)
+-    test = AxdimmEmbeddingsTest(args)
+-    if not test.run_test():
+-        sys.exit(-1)
++
++    for embedding_scalar_type_name in ["int32", "float32"]:
++        test = AxdimmEmbeddingsTest(args, embedding_scalar_type_name)
++        if not test.run_test():
++            sys.exit(-1)
+-- 
+2.34.1
+

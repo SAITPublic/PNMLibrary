@@ -1,0 +1,351 @@
+From 862e73b1ee76b60d57022976fe4f4f4a9a4279fc Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Thu, 20 Jul 2023 15:21:41 +0300
+Subject: [PATCH 147/161] [SLS][Allocator] Align to dynamic pools size
+
+* Refactoring a little
+
+Related: MCS-1373
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c           |   2 +-
+ drivers/pnm/sls_resource/sls_allocator.c | 153 ++++++++++++-----------
+ drivers/pnm/sls_resource/sls_allocator.h |   2 +-
+ 3 files changed, 81 insertions(+), 76 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index fe573227e..1a15ec4b0 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -96,7 +96,7 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+ 		reset_sls_rank_scheduler();
+-		retval = reset_sls_allocator(&mem_info, sls_device_type);
++		retval = reset_sls_allocator();
+ 		reset_sls_process_manager();
+ 		break;
+ 	case ALLOCATE_MEMORY:
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index 894465c34..884747023 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -25,9 +25,10 @@ struct sls_allocator {
+ 	 * range, currently this range is not bound to the real memory by PA,
+ 	 * Range: [reserved_indent == PAGE_SIZE, rank_size - reserved_indent]
+ 	 */
+-	struct gen_pool *mem_pools[NUM_OF_RANK];
++	struct gen_pool **pools;
++	uint8_t nr_pools;
+ 	enum sls_device_type devtype;
+-	uint8_t pool_count;
++	struct sls_mem_info *mem_info;
+ } static allocator;
+ 
+ DEFINE_MUTEX(memory_mutex);
+@@ -42,11 +43,6 @@ void unlock_allocator(void)
+ 	mutex_unlock(&memory_mutex);
+ }
+ 
+-static bool allocator_is_locked(void)
+-{
+-	return mutex_is_locked(&memory_mutex);
+-}
+-
+ static int init_rank_pool(struct sls_allocator *alloc, uint8_t rank,
+ 			  uint64_t size)
+ {
+@@ -71,7 +67,7 @@ static int init_rank_pool(struct sls_allocator *alloc, uint8_t rank,
+ 
+ 	SLS_INF("Memory rank pool[%hhu] initialized: granularity = [%llu], size = [%llu]\n",
+ 		rank, alloc->gran, size);
+-	alloc->mem_pools[rank] = pool;
++	alloc->pools[rank] = pool;
+ 
+ init_rank_pool_out:
+ 	return err_code;
+@@ -85,13 +81,13 @@ static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+ 	chunk->end_addr = chunk->start_addr - 1;
+ }
+ 
+-static void cleanup_memory_pools(struct sls_allocator *alloc)
++static void cleanup_pools(struct sls_allocator *alloc)
+ {
+ 	uint8_t rank;
+ 	struct gen_pool *pool;
+ 
+-	for (rank = 0; rank < alloc->pool_count; ++rank) {
+-		pool = alloc->mem_pools[rank];
++	for (rank = 0; rank < alloc->nr_pools; ++rank) {
++		pool = alloc->pools[rank];
+ 		if (unlikely(!pool)) {
+ 			SLS_WRN("Trying to cleanup memory rank pool[%hhu] that was not created\n",
+ 				rank);
+@@ -114,34 +110,32 @@ static void cleanup_memory_pools(struct sls_allocator *alloc)
+ 		gen_pool_destroy(pool);
+ 		SLS_INF("Memory rank pool[%hhu] is destroyed\n", rank);
+ 	}
+-	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
++	kfree(alloc->pools);
+ }
+ 
+-static inline uint64_t get_rank_size(struct sls_mem_info *mem_info,
+-				     enum sls_device_type devtype, uint8_t rank)
++static inline uint64_t get_rank_size(struct sls_allocator *alloc, uint8_t rank)
+ {
+-	uint64_t size = mem_info->mem_size[rank % NUM_OF_CS][SLS_BLOCK_BASE];
++	uint64_t size =
++		alloc->mem_info->mem_size[rank % NUM_OF_CS][SLS_BLOCK_BASE];
+ 
+-	if (devtype == SLS_AXDIMM)
++	if (alloc->devtype == SLS_AXDIMM)
+ 		size /= NUM_RANKS_PER_CS;
+ 
+ 	return size;
+ }
+ 
+-static int init_memory_pools(struct sls_allocator *alloc,
+-			     struct sls_mem_info *mem_info)
++static int init_pools(struct sls_allocator *alloc)
+ {
+ 	uint8_t rank;
+ 	uint64_t rank_size;
+ 	int err_code;
+ 
+-	if (unlikely(!is_power_of_2(alloc->gran))) {
+-		SLS_ERR("Memory granularity should be a power of 2!\n");
+-		return -EINVAL;
+-	}
++	alloc->pools =
++		kcalloc(alloc->nr_pools, sizeof(alloc->pools[0]), GFP_KERNEL);
++	if (!alloc->pools)
++		return -ENOMEM;
+ 
+-	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+-	for (rank = 0; rank < alloc->pool_count; ++rank) {
++	for (rank = 0; rank < alloc->nr_pools; ++rank) {
+ 		/*
+ 		 * reserve PAGE_SIZE size from start to eliminate allocator
+ 		 * ambiguity, technically we could back off by just 1 byte,
+@@ -150,11 +144,10 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 		 * the real allocation, and we'll not be able to distinguish
+ 		 * the result from the allocator fail.
+ 		 */
+-		rank_size = get_rank_size(mem_info, alloc->devtype, rank) -
+-			    alloc->gran;
++		rank_size = get_rank_size(alloc, rank) - alloc->gran;
+ 		err_code = init_rank_pool(alloc, rank, rank_size);
+ 		if (unlikely(err_code)) {
+-			cleanup_memory_pools(alloc);
++			cleanup_pools(alloc);
+ 			return err_code;
+ 		}
+ 	}
+@@ -162,64 +155,77 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 	return 0;
+ }
+ 
+-/* General preinitializing allocator part, reset/init independent */
+-static int preinit_sls_allocator(struct sls_allocator *alloc,
+-				 struct sls_mem_info *mem_info,
+-				 enum sls_device_type devtype)
++static int set_granularity(struct sls_allocator *alloc, uint64_t gran)
+ {
+-	alloc->devtype = devtype;
+-	alloc->pool_count = NUM_OF_CH;
+-
+-	if (alloc->devtype == SLS_AXDIMM)
+-		alloc->pool_count *= NUM_RANKS_PER_CS;
+-
+-	// [TODO: @p.bred] make configurable
+-	alloc->gran = (alloc->devtype == SLS_AXDIMM) ? PAGE_SIZE :
+-						       HUGE_PAGE_SIZE;
+-
+-	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+-	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
++	if (unlikely(!is_power_of_2(gran))) {
++		SLS_ERR("Memory granularity should be a power of 2!\n");
++		return -EINVAL;
++	}
++	alloc->gran = gran;
++	return 0;
+ }
+ 
+-int init_sls_allocator(struct sls_mem_info *mem_info,
+-		       enum sls_device_type devtype)
++// [TODO: @p.bred] Generalize all PNM allocators logic
++static int init_allocator(struct sls_allocator *alloc,
++			  struct sls_mem_info *mem_info,
++			  enum sls_device_type devtype)
+ {
+-	int err_code;
++	int err = 0;
+ 
+-	if (devtype == SLS_UNDEFINED)
++	if (devtype == SLS_UNDEFINED) {
++		SLS_ERR("Initialize an allocator with an undefined device!\n");
+ 		return -EINVAL;
++	}
+ 
+-	SLS_DBG("Initializing SLS allocator\n");
++	if (!mem_info) {
++		SLS_ERR("mem_info is NULL!\n");
++		return -EINVAL;
++	}
+ 
+-	err_code = preinit_sls_allocator(&allocator, mem_info, devtype);
+-	if (unlikely(err_code))
+-		return err_code;
++	alloc->mem_info = mem_info;
++	alloc->devtype = devtype;
+ 
+-	return 0;
++	if (alloc->devtype == SLS_AXDIMM) {
++		alloc->nr_pools = NUM_OF_CH * NUM_RANKS_PER_CS;
++		err = set_granularity(alloc, PAGE_SIZE);
++	} else { /* SLS_CXL case */
++		alloc->nr_pools = NUM_OF_CH;
++		err = set_granularity(alloc, HUGE_PAGE_SIZE);
++	}
++	if (err)
++		return err;
++
++	return init_pools(alloc);
+ }
+ 
+-int reset_sls_allocator(struct sls_mem_info *mem_info,
+-			enum sls_device_type devtype)
++int init_sls_allocator(struct sls_mem_info *mem_info,
++		       enum sls_device_type devtype)
+ {
+-	if (devtype == SLS_UNDEFINED)
+-		return -EINVAL;
+-
+-	SLS_DBG("Resetting SLS allocator\n");
++	SLS_DBG("Initializing SLS allocator\n");
++	return init_allocator(&allocator, mem_info, devtype);
++}
+ 
+-	if (unlikely(allocator_is_locked())) {
++static void reset_lock(void)
++{
++	if (unlikely(mutex_is_locked(&memory_mutex))) {
+ 		SLS_WRN("Mutex unlock forced.\n");
+ 		unlock_allocator();
+ 	}
++}
+ 
+-	cleanup_memory_pools(&allocator);
+-
+-	return preinit_sls_allocator(&allocator, mem_info, devtype);
++int reset_sls_allocator(void)
++{
++	SLS_DBG("Resetting SLS allocator\n");
++	reset_lock();
++	cleanup_pools(&allocator);
++	return init_pools(&allocator);
+ }
+ 
+ void cleanup_sls_allocator(void)
+ {
+ 	SLS_DBG("Cleaning up SLS allocator\n");
+-	reset_sls_allocator(NULL, SLS_UNDEFINED);
++	reset_lock();
++	cleanup_pools(&allocator);
+ 	mutex_destroy(&memory_mutex);
+ }
+ 
+@@ -227,10 +233,10 @@ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ {
+ 	uint8_t rank;
+ 	uint8_t optimal_rank = 0;
+-	size_t max_free_space = gen_pool_avail(alloc->mem_pools[0]);
++	size_t max_free_space = gen_pool_avail(alloc->pools[0]);
+ 
+-	for (rank = 1; rank < alloc->pool_count; ++rank) {
+-		size_t rank_free_space = gen_pool_avail(alloc->mem_pools[rank]);
++	for (rank = 1; rank < alloc->nr_pools; ++rank) {
++		size_t rank_free_space = gen_pool_avail(alloc->pools[rank]);
+ 
+ 		if (max_free_space < rank_free_space) {
+ 			max_free_space = rank_free_space;
+@@ -244,7 +250,7 @@ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ static int allocate_memory_unsafe(struct sls_allocator *alloc,
+ 				  struct sls_memory_alloc_request *req)
+ {
+-	if (req->rank != SLS_ALLOC_ANY_RANK && req->rank >= alloc->pool_count) {
++	if (req->rank != SLS_ALLOC_ANY_RANK && req->rank >= alloc->nr_pools) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req->rank);
+ 		return -EINVAL;
+ 	}
+@@ -257,8 +263,7 @@ static int allocate_memory_unsafe(struct sls_allocator *alloc,
+ 	if (req->rank == SLS_ALLOC_ANY_RANK)
+ 		req->rank = select_optimal_rank(alloc);
+ 
+-	req->rank_offset =
+-		gen_pool_alloc(alloc->mem_pools[req->rank], req->size);
++	req->rank_offset = gen_pool_alloc(alloc->pools[req->rank], req->size);
+ 
+ 	if (unlikely(req->rank_offset == 0)) {
+ 		SLS_ERR("No free memory for object of size = [%llu] at pool[%hhu]\n",
+@@ -322,7 +327,7 @@ int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ {
+ 	req.rank_offset += allocator.gran;
+ 
+-	if (req.rank >= allocator.pool_count) {
++	if (req.rank >= allocator.nr_pools) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req.rank);
+ 		return -EINVAL;
+ 	}
+@@ -338,14 +343,14 @@ int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ 	 * valid allocations in here, or calling into process manager
+ 	 * before this call.
+ 	 */
+-	if (unlikely(!gen_pool_has_addr(allocator.mem_pools[req.rank],
++	if (unlikely(!gen_pool_has_addr(allocator.pools[req.rank],
+ 					req.rank_offset, req.size))) {
+ 		SLS_ERR("Deallocating a nonexistent object at %llu of size %llu from pool[%u]\n",
+ 			req.rank_offset, req.size, req.rank);
+ 		return -EINVAL;
+ 	}
+ 
+-	gen_pool_free(allocator.mem_pools[req.rank], req.rank_offset, req.size);
++	gen_pool_free(allocator.pools[req.rank], req.rank_offset, req.size);
+ 
+ 	return 0;
+ }
+@@ -391,7 +396,7 @@ uint64_t get_total_size(uint8_t rank)
+ 	lock_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
+-		pool = allocator.mem_pools[rank];
++		pool = allocator.pools[rank];
+ 		size = pool ? gen_pool_size(pool) : 0;
+ 	}
+ 	unlock_allocator();
+@@ -407,7 +412,7 @@ uint64_t get_free_size(uint8_t rank)
+ 	lock_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
+-		pool = allocator.mem_pools[rank];
++		pool = allocator.pools[rank];
+ 		size = pool ? gen_pool_avail(pool) : 0;
+ 	}
+ 	unlock_allocator();
+diff --git a/drivers/pnm/sls_resource/sls_allocator.h b/drivers/pnm/sls_resource/sls_allocator.h
+index 184aab785..ada0882e5 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.h
++++ b/drivers/pnm/sls_resource/sls_allocator.h
+@@ -19,7 +19,7 @@ int init_sls_allocator(struct sls_mem_info *mem_info, enum sls_device_type devty
+  * then just reset allocator, if it's not
+  * then reset with memory pools initialization.
+  */
+-int reset_sls_allocator(struct sls_mem_info *mem_info, enum sls_device_type devtype);
++int reset_sls_allocator(void);
+ void cleanup_sls_allocator(void);
+ int mem_process_ioctl(unsigned int cmd, unsigned long __user arg);
+ int deallocate_memory_unsafe(struct sls_memory_alloc_request req);
+-- 
+2.34.1
+

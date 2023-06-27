@@ -1,0 +1,47 @@
+From 3b22933b6fb4d27b297dd643dfaee71f3723ecf6 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 16:52:44 +0900
+Subject: [PATCH 005/128] [c0/core] Add AXDIMM dispatch key
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ c10/core/Backend.h     | 3 +++
+ c10/core/DispatchKey.h | 1 +
+ 2 files changed, 4 insertions(+)
+
+diff --git a/c10/core/Backend.h b/c10/core/Backend.h
+index 5f3d0779..0edc919d 100644
+--- a/c10/core/Backend.h
++++ b/c10/core/Backend.h
+@@ -56,6 +56,7 @@ enum class Backend {
+   Lazy,
+   MTIA,
+   PrivateUse1,
++  AXDIMM,
+   NumOptions
+ };
+ 
+@@ -116,6 +117,8 @@ static inline Backend dispatchKeyToBackend(DispatchKey t) {
+     return Backend::MTIA;
+   } else if (t == DispatchKey::PrivateUse1) {
+     return Backend::PrivateUse1;
++  } else if (t == DispatchKey::AXDIMM) {
++    return Backend::AXDIMM;
+   } else if (t == DispatchKey::Undefined) {
+     return Backend::Undefined;
+   } else {
+diff --git a/c10/core/DispatchKey.h b/c10/core/DispatchKey.h
+index abc4ab7e..3e2db110 100644
+--- a/c10/core/DispatchKey.h
++++ b/c10/core/DispatchKey.h
+@@ -211,6 +211,7 @@ enum class DispatchKey : uint16_t {
+ 
+   // See [Note: Per-Backend Functionality Dispatch Keys]
+   Sparse,
++  AXDIMM, // AXDIMM
+ 
+   // TODO: Make SparseCsr a functionality key
+   SparseCsrCPU,
+-- 
+2.34.1
+

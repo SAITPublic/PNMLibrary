@@ -1,0 +1,335 @@
+From f96a4ae347fe5827bbf9feba7057e1221257e4a8 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 10 Nov 2021 15:32:53 +0900
+Subject: [PATCH 026/128] [caffe2/operators] Rework SparseLengthsSumVec
+ operator
+
+Rework SparseLengthsSumVec operator to use more intuitive interface
+(concatenated list of table blobs, indices blobs and lengths blobs) instead
+of fragile "block_size" parameter. This also allows to remove global state from
+operator implementation. Gradients were disabled for simplicity as we don't
+need them now.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops.cc       |  15 +-
+ .../operators/lengths_reducer_ops_axdimm.cc   | 225 ++++++++++++------
+ 2 files changed, 155 insertions(+), 85 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops.cc b/caffe2/operators/lengths_reducer_ops.cc
+index c75a434e..de9b86fd 100644
+--- a/caffe2/operators/lengths_reducer_ops.cc
++++ b/caffe2/operators/lengths_reducer_ops.cc
+@@ -96,24 +96,21 @@ OPERATOR_SCHEMA(SparseLengthsSumGradient)
+ REGISTER_GRADIENT(SparseLengthsSum, SparseLengthsSumDef::GetGradient)
+ 
+ OPERATOR_SCHEMA(SparseLengthsSumVec)
+-    .NumInputs(SparseLengthsSumDef::ForwardOp::kNumInputs)
++    .NumInputs(2, INT_MAX)
+     .NumOutputs(1)
+     .ValueKeyLengthInputFillers(
+         SparseLengthsSumOp::DATA,
+         SparseLengthsSumOp::INDICES,
+         SparseLengthsSumOp::LENGTHS)
+     .SetDoc(FormatDoc<SparseLengthsSumDef>())
++    .Input(
++        0,
++        "I1, ..., IN, L1, ..., LN",
++        "*(type: Tensor`<int>`)* List of input tensors: lengths and indices.")
+     .Output(0, "OUTPUT", "Aggregated tensor")
+     .FillUsing(SparseLengthsSumDef::PopulateSchema)
+     .InheritOnnxSchema();
+-REGISTER_CPU_OPERATOR(
+-    SparseLengthsSumVecGradient,
+-    SparseLengthsSumDef::BackwardOp);
+-OPERATOR_SCHEMA(SparseLengthsSumGradientVec)
+-    .NumInputs(SparseLengthsSumDef::BackwardOp::kNumInputs + 1)
+-    .NumOutputs(1)
+-    .DisallowInputFillers();
+-REGISTER_GRADIENT(SparseLengthsSumVec, SparseLengthsSumDef::GetGradient)
++NO_GRADIENT(SparseLengthsSumVec);
+ 
+ REGISTER_CPU_OPERATOR(
+     TTSparseLengthsSum,
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 18d088ea..05a18ad5 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -14,10 +14,10 @@ template <
+     class InputTypes, // supported input types, such as TensorTypes<float>
+     bool USE_WEIGHT = false, // Whether it is SparseLengthsWeightedSum
+     bool USE_MEAN = false, // Whether this is SparseLengthsMean
+-    bool USE_POSITIONAL_WEIGHT = false,
++    bool USE_POSITIONAL_WEIGHT = false
+     // USE_WEIGHT = true and USE_POSITIONAL_WEIGHT = true
+     // -> SparseLengthsPositionalWeightedSum
+-    bool USE_BLOCKING = false>
++    >
+ class AXDIMMSparseLengthsReductionOp : public Operator<AXDIMMContext> {
+  public:
+   USE_OPERATOR_FUNCTIONS(AXDIMMContext);
+@@ -69,9 +69,6 @@ class AXDIMMSparseLengthsReductionOp : public Operator<AXDIMMContext> {
+     const int64_t N = dataInput.size(0);
+     const int D = dataInput.size_from_dim(1);
+ 
+-    const InputType* in_data = dataInput.template data<InputType>();
+-    const IndexType* indices = indicesInput.template data<IndexType>();
+-    const int* lengths = lengthsInput.template data<int>();
+     const T* in_weight = nullptr;
+ 
+     if (USE_WEIGHT) {
+@@ -87,79 +84,149 @@ class AXDIMMSparseLengthsReductionOp : public Operator<AXDIMMContext> {
+       in_weight = weightInput.template data<T>();
+     }
+ 
+-    if (USE_BLOCKING) {
+-      // TODO: make this thread safe.
+-      CAFFE_ENFORCE(
+-          OperatorBase::HasArgument("block_size"),
+-          "block_size must be specified for blocking SLS operation");
+-      auto block_size = this->template GetSingleArgument<int>("block_size", 0);
+-      static uint64_t request_no = 0;
+-      static char* indices_blocked = nullptr;
+-      static char* lengths_blocked = nullptr;
+-      static float* out_data_vector = nullptr;
+-      static float** out_buffers = nullptr;
+-
+-      if (request_no == 0) {
+-        CAFFE_ENFORCE(
+-            !indices_blocked, "indices_blocked must be nullptr at this point.");
+-        CAFFE_ENFORCE(
+-            !lengths_blocked, "lengths_blocked must be nullptr at this point.");
+-        CAFFE_ENFORCE(
+-            !out_data_vector, "out_data_vector must be nullptr at this point.");
+-        CAFFE_ENFORCE(
+-            !out_buffers, "out_buffers must be nullptr at this point.");
+-
+-        // This memory never gets freed at the moment, but we don't care.
+-        indices_blocked = (char*)malloc(block_size * indices_size);
+-        lengths_blocked = (char*)malloc(block_size * M);
+-        out_data_vector = (float*)malloc(block_size * M * D * sizeof(float));
+-        out_buffers = (float**)malloc(block_size * sizeof(float*));
+-      }
++    (void)N;
++    (void)D;
++    // FIXME: support generic execution w/o SLS ops blocking.
++    CAFFE_THROW("AXDIMM SLS is supported only with blocking.");
++    return true;
++  }
+ 
+-      // Get request index in a block.
+-      int request_no_in_block = request_no % block_size;
++  enum {
++    DATA = 0, // Data input.
++    WEIGHT = 1, // Weight input used in SparseLengthsWeightedSum
++    INDICES = 1 + USE_WEIGHT, // 1 in SparseLengths[Sum,Mean] and
++                              // 2 in SparseLengthsWeightedSum
++    LENGTHS = 2 + USE_WEIGHT, // 2 in SparseLengths[Sum, Mean],
++                              // 3 in SparseLengthsWeightedSum
++  };
++};
+ 
+-      // Save a pointer to original output buffer.
+-      // TODO: implement superblobs and get rid of this.
+-      out_buffers[request_no_in_block] = out_data;
++// A templated class that implements SparseLengths[Sum,WeightedSum,Mean] for
++// AXDIMM.
++template <
++    typename T, // output type
++    class InputTypes, // supported input types, such as TensorTypes<float>
++    bool USE_WEIGHT = false, // Whether it is SparseLengthsWeightedSum
++    bool USE_MEAN = false, // Whether this is SparseLengthsMean
++    bool USE_POSITIONAL_WEIGHT = false
++    // USE_WEIGHT = true and USE_POSITIONAL_WEIGHT = true
++    // -> SparseLengthsPositionalWeightedSum
++    >
++class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
++ public:
++  USE_OPERATOR_FUNCTIONS(AXDIMMContext);
++  template <class... Args>
++  explicit AXDIMMSparseLengthsReductionOpVec(Args&&... args)
++      : Operator<AXDIMMContext>(std::forward<Args>(args)...) {
++    static_assert(
++        !(USE_WEIGHT & USE_MEAN), "Cannot both specify weight and mean.");
++    // Setup input pointers for tables/indices/lengths. The input comes in
++    // following format:
++    //    N := block_size_
++    //    [T1, T2, ..., TN, I1, I2, ..., IN, L1, L2, ..., LN]
++    block_size_ = InputSize() / 3;
++    tables_vec_start_idx_ = 0;
++    indices_vec_start_idx_ = tables_vec_start_idx_ + block_size_;
++    lengths_vec_start_idx_ = indices_vec_start_idx_ + block_size_;
++  }
++
++  ~AXDIMMSparseLengthsReductionOpVec() {
++    free(indices_blocked);
++    free(lengths_blocked);
++    indices_blocked = nullptr;
++    lengths_blocked = nullptr;
++  }
++
++  // Currently, we support float and at::Half inputs for input data type, and
++  // int32_t and int64_t for the index type.
++
++  bool RunOnDevice() override {
++    int tables_vec_start_idx = 0;
++    return DispatchHelper<InputTypes>::call(this, Input(tables_vec_start_idx));
++  }
++
++  template <typename InputType>
++  bool DoRunWithType() {
++    int indices_vec_start_idx = InputSize() / 3;
++    return DispatchHelper<TensorTypes2<int32_t, int64_t>, InputType>::call(
++        this, Input(indices_vec_start_idx));
++  }
++
++  template <typename InputType, typename IndexType>
++  bool DoRunWithType2() {
++    CAFFE_ENFORCE_EQ(
++        InputSize() % 3,
++        0,
++        "Operator input must consist of 3 equal vectors: TablesVec, IndicesVec and LengthsVec.");
++
++    uint64_t indices_total_size_in_bytes = 0;
++    uint64_t lengths_total_size_in_bytes = 0;
++
++    for (int i = 0; i < block_size_; ++i) {
++      auto& dataInput = Input(tables_vec_start_idx_ + i);
++      auto& indicesInput = Input(indices_vec_start_idx_ + i);
++      auto& lengthsInput = Input(lengths_vec_start_idx_ + i);
++
++      const int64_t indices_size_in_bytes =
++          indicesInput.numel() * indicesInput.itemsize();
++      const int64_t lengths_size_in_bytes =
++          lengthsInput.numel() * lengthsInput.itemsize();
++
++      indices_total_size_in_bytes += indices_size_in_bytes;
++      lengths_total_size_in_bytes += lengths_size_in_bytes;
++
++      CAFFE_ENFORCE_GT(indices_size_in_bytes, 0, "indicesInput can't be empty");
++
++      CAFFE_ENFORCE_EQ(1, indicesInput.dim(), "INDICES must be a vector");
++      CAFFE_ENFORCE_EQ(1, lengthsInput.dim(), "LENGTHS must be a vector");
++      (void)dataInput;
++    }
++
++    indices_blocked = (char*)malloc(indices_total_size_in_bytes);
++    lengths_blocked = (char*)malloc(lengths_total_size_in_bytes);
++
++    const int64_t M = Input(lengths_vec_start_idx_).size(0);
++    auto shape = Input(tables_vec_start_idx_).sizes().vec();
++    shape[0] = M;
++    shape[1] *= block_size_;
++    auto* output = Output(0, shape, at::dtype<T>());
++
++    uint64_t indices_offset_in_bytes = 0;
++    uint64_t lengths_offset_in_bytes = 0;
++
++    for (int i = 0; i < block_size_; ++i) {
++      auto& indicesInput = Input(indices_vec_start_idx_ + i);
++      auto& lengthsInput = Input(lengths_vec_start_idx_ + i);
++
++      const int64_t indices_size_in_bytes =
++          indicesInput.numel() * indicesInput.itemsize();
++      const int64_t lengths_size_in_bytes =
++          lengthsInput.numel() * lengthsInput.itemsize();
++
++      const IndexType* indices = indicesInput.template data<IndexType>();
++      const int* lengths = lengthsInput.template data<int>();
+ 
+-      // Copy data from inputs to blocked inputs.
+-      // TODO: implement superblobs and get rid of this.
+       memcpy(
+-          indices_blocked + request_no_in_block * indices_size,
++          indices_blocked + indices_offset_in_bytes,
+           indices,
+-          indices_size);
+-      memcpy(lengths_blocked + request_no_in_block * M, lengths, M);
+-
+-      // FIXME: avoid ugly casts here, axdimm_run should have correct types
+-      // instead.
+-      axd_status_e status = AXDIMM_SUCCESS;
+-
+-      // Do actual run when combined block_size requests.
+-      if (request_no_in_block == block_size - 1) {
+-        status = axdimm::axdimm_run(
+-            (uint32_t*)lengths_blocked,
+-            (uint32_t*)indices_blocked,
+-            out_data_vector /* psum buffer */,
+-            0);
+-
+-        // And copy results to original output buffers.
+-        // TODO: implement superblobs and get rid of this.
+-        int one_out_buffer_size = M * D * sizeof(float);
+-        for (uint64_t i = 0, out_buffer_i = (uint64_t)out_data_vector;
+-             i < block_size;
+-             ++i, out_buffer_i += one_out_buffer_size) {
+-          memcpy(out_buffers[i], (void*)out_buffer_i, one_out_buffer_size);
+-        }
+-      }
+-      ++request_no;
+-      return status == AXDIMM_SUCCESS;
++          indices_size_in_bytes);
++      memcpy(
++          lengths_blocked + lengths_offset_in_bytes,
++          lengths,
++          lengths_size_in_bytes);
++      indices_offset_in_bytes += indices_size_in_bytes;
++      lengths_offset_in_bytes += lengths_size_in_bytes;
+     }
+-    (void)N;
+-    (void)in_data;
+-    // FIXME: support generic execution w/o SLS ops blocking.
+-    CAFFE_THROW("AXDIMM SLS is supported only with blocking.");
+-    return true;
++
++    T* output_buf = output->template data<T>();
++
++    axd_status_e status = axdimm::axdimm_run(
++        (uint32_t*)lengths_blocked,
++        (uint32_t*)indices_blocked,
++        output_buf /* psum buffer */,
++        0);
++
++    return status == AXDIMM_SUCCESS;
+   }
+ 
+   enum {
+@@ -170,6 +237,14 @@ class AXDIMMSparseLengthsReductionOp : public Operator<AXDIMMContext> {
+     LENGTHS = 2 + USE_WEIGHT, // 2 in SparseLengths[Sum, Mean],
+                               // 3 in SparseLengthsWeightedSum
+   };
++
++ private:
++  char* indices_blocked = nullptr; // Concatenated indices arrays
++  char* lengths_blocked = nullptr; // Concatenated lengths arrays
++  int block_size_; // Number of tables/indices/lengths to be blocked
++  int tables_vec_start_idx_; // Starting input index for tables blobs
++  int indices_vec_start_idx_; // Starting input index for indices blobs
++  int lengths_vec_start_idx_; // Starting input index for lengths blobs
+ };
+ 
+ using SparseLengthsSumOp =
+@@ -179,17 +254,15 @@ using SparseLengthsSumOp =
+         TensorTypes<float, at::Half>,
+         0,
+         0,
+-        0,
+         0>;
+ using SparseLengthsSumOpVec =
+     // NOLINTNEXTLINE(modernize-use-bool-literals)
+-    AXDIMMSparseLengthsReductionOp<
++    AXDIMMSparseLengthsReductionOpVec<
+         float,
+         TensorTypes<float, at::Half>,
+         0,
+         0,
+-        0,
+-        1>;
++        0>;
+ 
+ REGISTER_AXDIMM_OPERATOR(SparseLengthsSum, SparseLengthsSumOp);
+ REGISTER_AXDIMM_OPERATOR(SparseLengthsSumVec, SparseLengthsSumOpVec);
+-- 
+2.34.1
+

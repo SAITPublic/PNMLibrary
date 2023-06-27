@@ -1,0 +1,41 @@
+From cc7b433b2a76c5222e5b606de91b328415cd0a65 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 3 Nov 2021 16:19:29 +0900
+Subject: [PATCH 020/128] [caffe2/core] Disable async scheduling for AXDIMM
+ operations
+
+Use current sync scheduling for AXDIMM operations. Async scheduling
+should be investigated and maybe enabled further.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/context_axdimm.h | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/caffe2/core/context_axdimm.h b/caffe2/core/context_axdimm.h
+index dbf3c27e..b0704ab1 100644
+--- a/caffe2/core/context_axdimm.h
++++ b/caffe2/core/context_axdimm.h
+@@ -81,15 +81,16 @@ class C10_EXPORT AXDIMMContext final : public BaseContext {
+     CopyBytes<SrcContext, DstContext>(n * meta.itemsize(), src, dst);
+   }
+ 
+-  // By default AXDIMM operators have async device parts (???)
++  // By default AXDIMM operators don't support async scheduling.
++  // TODO: figure out and implement.
+   static bool HasAsyncPartDefault() {
+-    return true;
++    return false;
+   }
+ 
+   // (???)
+   // TODO: figure out and implement.
+   static bool SupportsAsyncScheduling() {
+-    return true;
++    return false;
+   }
+ 
+   // (???)
+-- 
+2.34.1
+

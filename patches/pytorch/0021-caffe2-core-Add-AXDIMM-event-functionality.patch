@@ -1,0 +1,187 @@
+From 9cd77f98e1e10dbdd40809dd60183002589fec1e Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 3 Nov 2021 16:21:40 +0900
+Subject: [PATCH 021/128] [caffe2/core] Add AXDIMM event functionality
+
+Sync/Async runs are handled with events; each device has its own event
+handling. Implement this for AXDIMM (almost same to CPU though).
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/event_axdimm.cc | 164 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 164 insertions(+)
+ create mode 100644 caffe2/core/event_axdimm.cc
+
+diff --git a/caffe2/core/event_axdimm.cc b/caffe2/core/event_axdimm.cc
+new file mode 100644
+index 00000000..c6aa9b1e
+--- /dev/null
++++ b/caffe2/core/event_axdimm.cc
+@@ -0,0 +1,164 @@
++#include "caffe2/core/context_axdimm.h"
++#include "caffe2/core/event_cpu.h"
++#include "caffe2/core/operator.h"
++
++#include <atomic>
++#include <iostream>
++
++namespace caffe2 {
++
++struct AxdimmEventWrapper {
++  explicit AxdimmEventWrapper(const DeviceOption& option)
++      : status_(EventStatus::EVENT_INITIALIZED) {
++    CAFFE_ENFORCE(
++        option.device_type(), PROTO_AXDIMM, "Expected AXDIMM device type");
++  }
++  ~AxdimmEventWrapper() {}
++
++  std::mutex mutex_;
++  std::condition_variable cv_completed_;
++  std::atomic<int> status_;
++  std::string err_msg_;
++  std::vector<EventCallbackFunction> callbacks_;
++};
++
++namespace {
++const std::string kNoError = "No error";
++}
++
++void EventCreateAXDIMM(const DeviceOption& option, Event* event) {
++  event->event_ = std::make_shared<AxdimmEventWrapper>(option);
++}
++
++void EventRecordAXDIMM(
++    Event* event,
++    const void* /* unused */,
++    const char* err_msg) {
++  auto* wrapper = static_cast<AxdimmEventWrapper*>(event->event_.get());
++  std::unique_lock<std::mutex> lock(wrapper->mutex_);
++
++  // Possible state changes:
++  //  INITIALIZED -> SCHEDULED or SUCCESS/FAILED
++  //  SCHEDULED -> SUCCESS/FAILED
++  //  SUCCESS/FAILED - terminal, no further changes to status_/err_msg_
++
++  CAFFE_ENFORCE(
++      wrapper->status_ != EventStatus::EVENT_SCHEDULED,
++      "Calling Record multiple times");
++
++  // Event might be in SUCCESS/FAILED state in case an op has
++  // finished async execution part first
++  if (wrapper->status_ == EventStatus::EVENT_INITIALIZED) {
++    if (!err_msg) {
++      wrapper->status_ = EventStatus::EVENT_SCHEDULED;
++    } else {
++      wrapper->err_msg_ = err_msg;
++      wrapper->status_ = EventStatus::EVENT_FAILED;
++      wrapper->cv_completed_.notify_all();
++    }
++  }
++}
++
++void EventFinishAXDIMM(const Event* event) {
++  auto* wrapper = static_cast<AxdimmEventWrapper*>(event->event_.get());
++  std::unique_lock<std::mutex> lock(wrapper->mutex_);
++  while (wrapper->status_ != EventStatus::EVENT_SUCCESS &&
++         wrapper->status_ != EventStatus::EVENT_FAILED) {
++    wrapper->cv_completed_.wait(lock);
++  }
++}
++
++// Both waiter and event are AXDIMM.
++void EventWaitAXDIMMAXDIMM(const Event* event, void* /* context */) {
++  EventFinishAXDIMM(event);
++}
++
++// Waiter is CPU, event is AXDIMM.
++void EventWaitCPUAXDIMM(const Event* event, void* context) {
++  EventFinishAXDIMM(event);
++}
++
++// Waiter is AXDIMM, event is CPU
++void EventWaitCUDACPU(const Event* event, void* context) {
++  event->Finish(); // calls EventFinishCPU
++}
++
++EventStatus EventQueryAXDIMM(const Event* event) {
++  auto* wrapper = static_cast<AxdimmEventWrapper*>(event->event_.get());
++  return static_cast<EventStatus>(wrapper->status_.load());
++}
++
++const std::string& EventErrorMessageAXDIMM(const Event* event) {
++  auto* wrapper = static_cast<AxdimmEventWrapper*>(event->event_.get());
++  if (wrapper->status_ == EventStatus::EVENT_FAILED) {
++    // Failed is a terminal state, not synchronizing,
++    // err_msg_ should not be changed anymore
++    return wrapper->err_msg_;
++  } else {
++    return kNoError;
++  }
++}
++
++void EventSetFinishedAXDIMM(const Event* event, const char* err_msg) {
++  auto* wrapper = static_cast<AxdimmEventWrapper*>(event->event_.get());
++  std::unique_lock<std::mutex> lock(wrapper->mutex_);
++
++  if (wrapper->status_ == EventStatus::EVENT_FAILED) {
++    LOG(WARNING) << "SetFinished called on a finished event. "
++                 << "Most likely caused by an external cancellation. "
++                 << "old message: " << wrapper->err_msg_ << ", "
++                 << "new message: " << err_msg;
++    return;
++  }
++
++  CAFFE_ENFORCE(
++      wrapper->status_ == EventStatus::EVENT_INITIALIZED ||
++          wrapper->status_ == EventStatus::EVENT_SCHEDULED,
++      "Calling SetFinished on finished event");
++
++  if (!err_msg) {
++    wrapper->status_ = EventStatus::EVENT_SUCCESS;
++  } else {
++    wrapper->err_msg_ = err_msg;
++    wrapper->status_ = EventStatus::EVENT_FAILED;
++  }
++
++  for (auto& callback : wrapper->callbacks_) {
++    callback();
++  }
++
++  wrapper->cv_completed_.notify_all();
++}
++
++void EventSetCallbackAXDIMM(Event* event, EventCallbackFunction callback) {
++  auto* wrapper = static_cast<AxdimmEventWrapper*>(event->event_.get());
++  std::unique_lock<std::mutex> lock(wrapper->mutex_);
++
++  wrapper->callbacks_.push_back(callback);
++  if (wrapper->status_ == EventStatus::EVENT_SUCCESS ||
++      wrapper->status_ == EventStatus::EVENT_FAILED) {
++    callback();
++  }
++}
++
++void EventResetAXDIMM(Event* event) {
++  auto* wrapper = static_cast<AxdimmEventWrapper*>(event->event_.get());
++  std::unique_lock<std::mutex> lock(wrapper->mutex_);
++  wrapper->status_ = EventStatus::EVENT_INITIALIZED;
++  wrapper->err_msg_ = "";
++  wrapper->callbacks_.clear();
++}
++
++REGISTER_EVENT_CREATE_FUNCTION(AXDIMM, EventCreateAXDIMM);
++REGISTER_EVENT_RECORD_FUNCTION(AXDIMM, EventRecordAXDIMM);
++REGISTER_EVENT_WAIT_FUNCTION(AXDIMM, AXDIMM, EventWaitAXDIMMAXDIMM);
++REGISTER_EVENT_FINISH_FUNCTION(AXDIMM, EventFinishAXDIMM);
++
++REGISTER_EVENT_QUERY_FUNCTION(AXDIMM, EventQueryAXDIMM);
++REGISTER_EVENT_ERROR_MESSAGE_FUNCTION(AXDIMM, EventErrorMessageAXDIMM);
++REGISTER_EVENT_SET_FINISHED_FUNCTION(AXDIMM, EventSetFinishedAXDIMM);
++REGISTER_EVENT_RESET_FUNCTION(AXDIMM, EventResetAXDIMM);
++
++REGISTER_EVENT_SET_CALLBACK_FUNCTION(AXDIMM, EventSetCallbackAXDIMM);
++
++} // namespace caffe2
+-- 
+2.34.1
+

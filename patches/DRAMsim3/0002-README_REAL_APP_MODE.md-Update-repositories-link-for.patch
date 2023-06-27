@@ -1,0 +1,32 @@
+From 3d05b661838ad0f918fecfcabfa9a68cf009c81e Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 31 Aug 2023 00:51:35 +0000
+Subject: [PATCH 2/4] [README_REAL_APP_MODE.md] Update repositories link for
+ OneMCC
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ README_REAL_APP_MODE.md | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/README_REAL_APP_MODE.md b/README_REAL_APP_MODE.md
+index 602c8a6..1cf0066 100644
+--- a/README_REAL_APP_MODE.md
++++ b/README_REAL_APP_MODE.md
+@@ -2,11 +2,8 @@
+ 
+ ## Repositories
+ 
+-- [PNM QEMU](https://github.samsungds.net/SAITPublic/PNMqemu)
+-- [PNM Linux](https://github.samsungds.net/SAITPublic/PNMlinux)
+-- [PNM Library](https://github.samsungds.net/SAITPublic/PNMLibrary)
+-- [PNM PyTorch](https://github.samsungds.net/SAITPublic/PNMpytorch)
+-- [PNM DLRM](https://github.samsungds.net/SAITPublic/PNMdlrm)
++- [PNM Library](https://github.samsungds.net/SAITPublic/PNMLibrary/PNMLibrary)
++- [PNM patches](https://github.samsungds.net/SAITPublic/PNMLibrary/patches)
+ 
+ ## PNM QEMU
+ 
+-- 
+2.34.1
+

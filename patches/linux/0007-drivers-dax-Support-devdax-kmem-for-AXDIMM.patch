@@ -1,0 +1,370 @@
+From bf0ee2a2da2ca218403cc70402b887b7cb2ca31e Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 25 Nov 2021 13:43:45 +0900
+Subject: [PATCH 007/161] [drivers/dax] Support devdax <-> kmem for AXDIMM
+
+* make AXDIMM dax_dev multi-range: base, cfg, inst, psum.
+* export only base and psum ranges as system memory; writing to
+  cfg/inst can possibly break the device.
+* small refactoring.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm-private.h |  74 ++++++++++++++++-
+ drivers/dax/axdimm.c         | 157 +++++++++++++++--------------------
+ drivers/dax/device.c         |  18 ++--
+ 3 files changed, 149 insertions(+), 100 deletions(-)
+
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index a8834d389..704721f52 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -4,7 +4,79 @@
+ #include <linux/fs.h>
+ #include "dax-private.h"
+ 
+-int remap_axdimm_range(struct dev_dax *dev_dax, struct range *range);
++/*
++ *  AXDIMM System Memory Specification
++ */
++/* Total Memory size for AXDIMM */
++#define AXDIMM_MEMORY_SIZE 0x1000000000
++
++/* Start address of AXDIMM */
++#define AXDIMM_BASE_ADDR 0x100000000
++
++/* Base offset for each CS */
++#define EMBT_BASE_CS0_OFFSET 0x0
++#define EMBT_BASE_CS1_OFFSET 0x800000000
++
++/* number of CS(# of rank connected to one CH) */
++#define NUM_OF_CS 2
++
++/* channel ID used by axdimm */
++#define AXDIMM_CH_ID 0
++
++/* Number of mapped blocks */
++#define NUM_BLOCKS 4
++
++/*
++ * Ioctl definitions
++ */
++
++/* Use 'k' as magic number */
++#define AXDIMM_IOC_MAGIC 'T'
++
++#define DEVICE_IOCRESET _IO(AXDIMM_IOC_MAGIC, 0)
++#define SET_FIRST_BUFFER _IO(AXDIMM_IOC_MAGIC, 1)
++#define SET_SECOND_BUFFER _IO(AXDIMM_IOC_MAGIC, 2)
++#define WHICH_BUFFER _IOR(AXDIMM_IOC_MAGIC, 3, int)
++#define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
++#define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
++#define GET_RANK _IOR(AXDIMM_IOC_MAGIC, 6, int)
++
++#define AXDIMM_IOC_MAXNR (6)
++
++/* The enumeration of axdimm memory addresses */
++typedef enum _axd_mem_regions_e {
++	AXDIMM_BASE_CS0 = 0,
++	AXDIMM_PSUM_CS0 = 1,
++	AXDIMM_BASE_CS1 = 2,
++	AXDIMM_PSUM_CS1 = 3,
++	NUM_OF_MEM_REGION = 4 /* Number of index for memory mapping region */
++} axd_mem_regions_e;
++
++struct axdmem_t {
++	uint64_t base;
++	uint64_t inst;
++	uint64_t cfgr;
++	uint64_t psum;
++};
++
++struct axdmem_info {
++	struct axdmem_t mem_offset[NUM_OF_CS];
++	struct axdmem_t mem_size[NUM_OF_CS];
++};
++
++struct axdimm_device_data {
++	int rank;
++	int region;
++	int channel;
++};
++
++static inline int is_axdimm_range(u64 start, u64 end)
++{
++	return start >= AXDIMM_BASE_ADDR &&
++	       end < AXDIMM_BASE_ADDR + AXDIMM_MEMORY_SIZE;
++}
++
++void remap_axdimm_range(struct dev_dax *dev_dax, struct range *range);
+ 
+ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma);
+ 
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index c8e9bb054..59007a372 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -15,82 +15,11 @@
+ #include <linux/io.h>
+ #include "axdimm-private.h"
+ 
+-/*
+- *  AXDIMM System Memory Specification
+- */
+-/* Total Memory size for AXDIMM */
+-#define AXDIMM_MEMORY_SIZE 0x1000000000
+-
+-/* Start address of AXDIMM */
+-#define AXDIMM_BASE_ADDR 0x100000000
+-
+-/* Base offset for each CS */
+-#define EMBT_BASE_CS0_OFFSET 0x0
+-#define EMBT_BASE_CS1_OFFSET 0x800000000
+-
+-/* number of CS(# of rank connected to one CH) */
+-#define NUM_OF_CS 2
+-
+-/* channel ID used by axdimm */
+-#define AXDIMM_CH_ID 0
+-
+-/* Number of mapped blocks */
+-#define NUM_BLOCKS 4
+-
+-/*
+- * Ioctl definitions
+- */
+-
+-/* Use 'k' as magic number */
+-#define AXDIMM_IOC_MAGIC 'T'
+-
+-#define DEVICE_IOCRESET _IO(AXDIMM_IOC_MAGIC, 0)
+-#define SET_FIRST_BUFFER _IO(AXDIMM_IOC_MAGIC, 1)
+-#define SET_SECOND_BUFFER _IO(AXDIMM_IOC_MAGIC, 2)
+-#define WHICH_BUFFER _IOR(AXDIMM_IOC_MAGIC, 3, int)
+-#define SET_SC_LOCK _IO(AXDIMM_IOC_MAGIC, 4)
+-#define SET_SC_UNLOCK _IO(AXDIMM_IOC_MAGIC, 5)
+-#define GET_RANK _IOR(AXDIMM_IOC_MAGIC, 6, int)
+-
+-#define AXDIMM_IOC_MAXNR (6)
+-
+-/* The enumeration of axdimm memory addresses */
+-typedef enum _axd_mem_regions_e {
+-	AXDIMM_BASE_CS0 = 0,
+-	AXDIMM_PSUM_CS0 = 1,
+-	AXDIMM_BASE_CS1 = 2,
+-	AXDIMM_PSUM_CS1 = 3,
+-	NUM_OF_MEM_REGION = 4 /* Number of index for memory mapping region */
+-} axd_mem_regions_e;
+-
+-struct axdmem_t {
+-	uint64_t base;
+-	uint64_t inst;
+-	uint64_t cfgr;
+-	uint64_t psum;
+-};
+-
+-struct axdmem_info {
+-	struct axdmem_t mem_offset[NUM_OF_CS];
+-	struct axdmem_t mem_size[NUM_OF_CS];
+-};
+-
+-struct axdimm_device_data {
+-	int rank;
+-	int region;
+-	int channel;
+-};
+-
+-struct axdimm_dev {
++/* Helper structure containing auxiliary info for AXDIMM device */
++static struct axdimm_dev {
+ 	struct semaphore sem_axdimm; /* semaphore */
+ } axdimm_device;
+ 
+-static int is_axdimm_range(u64 start, u64 end)
+-{
+-	return start >= AXDIMM_BASE_ADDR &&
+-	       end < AXDIMM_BASE_ADDR + AXDIMM_MEMORY_SIZE;
+-}
+-
+ static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+ 				     int bank, int row, int column)
+ {
+@@ -136,7 +65,8 @@ static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+ /*
+  * Set Offset, Size and flags for memremap
+  */
+-static int axdimm_setmeminfo(ulong *offset, ulong *size, uint *permission)
++static int axdimm_setmeminfo(ulong *offset, ulong *remap_size,
++			     ulong *sys_mem_size, uint *permission)
+ {
+ 	struct axdmem_info mem_info;
+ 	int cs;
+@@ -176,13 +106,21 @@ static int axdimm_setmeminfo(ulong *offset, ulong *size, uint *permission)
+ 		AXDIMM_BASE_ADDR + mem_info.mem_offset[1].base;
+ 	offset[AXDIMM_PSUM_CS1] =
+ 		AXDIMM_BASE_ADDR + mem_info.mem_offset[1].psum;
+-	/* Set size(size of remap) */
+-	size[AXDIMM_BASE_CS0] =
++
++	/* Set remap_size (size for remap) */
++	remap_size[AXDIMM_BASE_CS0] =
+ 		mem_info.mem_offset[0].psum - mem_info.mem_offset[0].base;
+-	size[AXDIMM_PSUM_CS0] = mem_info.mem_size[0].psum;
+-	size[AXDIMM_BASE_CS1] =
++	remap_size[AXDIMM_PSUM_CS0] = mem_info.mem_size[0].psum;
++	remap_size[AXDIMM_BASE_CS1] =
+ 		mem_info.mem_offset[1].psum - mem_info.mem_offset[1].base;
+-	size[AXDIMM_PSUM_CS1] = mem_info.mem_size[1].psum;
++	remap_size[AXDIMM_PSUM_CS1] = mem_info.mem_size[1].psum;
++
++	/* Set sys_mem_size (size for using as system memory: cfg and inst are excluded) */
++	sys_mem_size[AXDIMM_BASE_CS0] = mem_info.mem_size[0].base;
++	sys_mem_size[AXDIMM_PSUM_CS0] = mem_info.mem_size[0].psum;
++	sys_mem_size[AXDIMM_BASE_CS1] = mem_info.mem_size[1].base;
++	sys_mem_size[AXDIMM_PSUM_CS1] = mem_info.mem_size[1].psum;
++
+ 	/* Set flags(MEMREMAP_WB or MEMREMAP_WT or MEMREMAP_WC) */
+ 	permission[AXDIMM_BASE_CS0] = MEMREMAP_WC; // 1 << 2;
+ 	permission[AXDIMM_PSUM_CS0] = MEMREMAP_WB; // 1 << 0;
+@@ -192,19 +130,53 @@ static int axdimm_setmeminfo(ulong *offset, ulong *size, uint *permission)
+ 	return 0;
+ }
+ 
+-int remap_axdimm_range(struct dev_dax *dev_dax, struct range *range)
++static int setup_axdimm_ranges(struct dev_dax *dev_dax, ulong *offset,
++			       ulong *sys_mem_size)
++{
++	struct dev_dax_range *ranges;
++	unsigned long pgoff = 0;
++	unsigned long orig_range_start = dev_dax->ranges[0].range.start;
++	int i, rc;
++	rc = 0;
++
++	dev_dax->nr_range = NUM_OF_MEM_REGION;
++	ranges = krealloc(dev_dax->ranges, sizeof(*ranges) * dev_dax->nr_range,
++			  GFP_KERNEL);
++
++	for (i = 0; i < dev_dax->nr_range; ++i)
++		pgoff += PHYS_PFN(range_len(&ranges[i].range));
++
++	dev_dax->ranges = ranges;
++	for (i = 0; i < dev_dax->nr_range; ++i) {
++		ranges[i] = (struct dev_dax_range) {
++		.pgoff = pgoff,
++		.range = {
++			/* For any reason range[0].start, which is set up by devdax driver,
++			 * has some small offset from AXDIMM_BASE_ADDR.
++			 * TODO(maxim.o): Figure out why.
++			 */
++			.start = i > 0 ? offset[i] : orig_range_start,
++			.end = offset[i] + sys_mem_size[i],
++			},
++		};
++		printk(KERN_INFO
++		       "[DAX_AXDIMM_DD] Filling dev_dax range %d via addresses %llx - %llx\n",
++		       i, ranges[i].range.start, ranges[i].range.end);
++	}
++
++	return rc;
++}
++
++void remap_axdimm_range(struct dev_dax *dev_dax, struct range *range)
+ {
+ 	unsigned long offset[NUM_OF_MEM_REGION];
+-	unsigned long size[NUM_OF_MEM_REGION];
++	unsigned long remap_size[NUM_OF_MEM_REGION];
++	unsigned long sys_mem_size[NUM_OF_MEM_REGION];
+ 	unsigned int permission[NUM_OF_MEM_REGION];
+ 	void *addr;
+-	int r, is_axdimm_dev;
++	int r;
+ 	struct device *dev = &dev_dax->dev;
+ 
+-	is_axdimm_dev = is_axdimm_range(range->start, range->end);
+-	if (!is_axdimm_dev)
+-		return 0;
+-
+ 	/* Mark DAX device as AXDIMM, this is used in mmap implementation */
+ 	dev_dax->is_axdimm_device = 1;
+ 
+@@ -212,20 +184,23 @@ int remap_axdimm_range(struct dev_dax *dev_dax, struct range *range)
+ 	sema_init(&axdimm_device.sem_axdimm, 1);
+ 
+ 	/* set offset, size & permission */
+-	axdimm_setmeminfo(offset, size, permission);
++	axdimm_setmeminfo(offset, remap_size, sys_mem_size, permission);
++
++	/* set dev_dax ranges for AXDIMM, this is needed for proper
++	 * devdax <-> system-ram transitions (devdax <-> kmem).
++	 */
++	setup_axdimm_ranges(dev_dax, offset, sys_mem_size);
+ 
+ 	for (r = 0; r < NUM_BLOCKS; r++) {
+ 		printk(KERN_INFO "[DAX_AXDIMM_DD] Initializing %d/%d block\n",
+ 		       r + 1, NUM_BLOCKS);
+ 		printk(KERN_INFO "[DAX_AXDIMM_DD] Address: %lx, size: %lu\n",
+-		       offset[r], size[r]);
+-		addr = devm_memremap(dev, offset[r], size[r], permission[r]);
++		       offset[r], remap_size[r]);
++		addr = devm_memremap(dev, offset[r], remap_size[r], permission[r]);
+ 		printk(KERN_INFO
+ 		       "[DAX_AXDIMM_DD] Mapped block %d at address %p\n",
+ 		       r, addr);
+ 	}
+-
+-	return 1;
+ }
+ 
+ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma)
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 089092d7e..0ad4a7b81 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -413,16 +413,17 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	struct cdev *cdev;
+ 	void *addr;
+ 	int rc, i;
+-	int is_axdimm_dev;
++	int is_axdimm_device = 0;
++
++	pgmap = dev_dax->pgmap;
+ 
+ 	if (static_dev_dax(dev_dax))  {
+-		if (dev_dax->nr_range > 1) {
++		/* AXDIMM has static pgmap and multi-range device */
++		if (dev_dax->nr_range > 1 && !dev_dax->is_axdimm_device) {
+ 			dev_warn(dev,
+ 				"static pgmap / multi-range device conflict\n");
+ 			return -EINVAL;
+ 		}
+-
+-		pgmap = dev_dax->pgmap;
+ 	} else {
+ 		if (dev_dax->pgmap) {
+ 			dev_warn(dev,
+@@ -448,9 +449,10 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 	for (i = 0; i < dev_dax->nr_range; i++) {
+ 		struct range *range = &dev_dax->ranges[i].range;
+ 
+-		is_axdimm_dev = remap_axdimm_range(dev_dax, range);
+-		if (is_axdimm_dev) {
+-			BUG_ON(dev_dax->nr_range > 1);
++		is_axdimm_device = dev_dax->is_axdimm_device ||
++				   is_axdimm_range(range->start, range->end);
++		if (is_axdimm_device) {
++			remap_axdimm_range(dev_dax, range);
+ 			break;
+ 		}
+ 
+@@ -467,7 +469,7 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 		pgmap->vmemmap_shift =
+ 			order_base_2(dev_dax->align >> PAGE_SHIFT);
+ 
+-	if (!is_axdimm_dev) {
++	if (!is_axdimm_device) {
+ 		addr = devm_memremap_pages(dev, pgmap);
+ 		if (IS_ERR(addr))
+ 			return PTR_ERR(addr);
+-- 
+2.34.1
+

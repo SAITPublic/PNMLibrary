@@ -1,0 +1,67 @@
+From 9b2929cdd94d4f28172b203fc96d07cce40a6996 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Thu, 18 May 2023 06:55:13 +0300
+Subject: [PATCH 114/161] [DBA][Allocator] Do not reduce the rank size due to
+ allocator constraints
+
+* Just align the address given the initial total offset.
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/dba_resource/dba_allocator.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/pnm/dba_resource/dba_allocator.c b/drivers/pnm/dba_resource/dba_allocator.c
+index 41579daa3..c1b8fdd4a 100644
+--- a/drivers/pnm/dba_resource/dba_allocator.c
++++ b/drivers/pnm/dba_resource/dba_allocator.c
+@@ -95,13 +95,12 @@ static int init_memory_pools(struct MemoryAllocator *alloc)
+ 	/*
+ 	 * Reserve alloc->gran size from start to eliminate allocator
+ 	 * ambiguity, technically we could back off by just 1 byte,
+-	 * but the alignment is preferred. The size changes accordingly.
++	 * but the alignment is preferred.
+ 	 * Otherwise, the allocator may return 0 as a pointer to
+ 	 * the real allocation, and we'll not be able to distinguish
+ 	 * the result from the allocator fail.
+ 	 */
+ 	uint64_t start = alloc->gran;
+-	const uint64_t rank_size = DBA_RANK_SIZE - alloc->gran;
+ 	int err_code;
+ 	uint8_t rank = 0;
+ 
+@@ -119,8 +118,8 @@ static int init_memory_pools(struct MemoryAllocator *alloc)
+ 				rank);
+ 		}
+ 
+-	for (rank = 0; rank < DBA_NUM_OF_RANK; ++rank, start += rank_size) {
+-		err_code = init_rank_pool(alloc, rank, start, rank_size);
++	for (rank = 0; rank < DBA_NUM_OF_RANK; ++rank, start += DBA_RANK_SIZE) {
++		err_code = init_rank_pool(alloc, rank, start, DBA_RANK_SIZE);
+ 		if (err_code) {
+ 			cleanup_memory_pools(alloc);
+ 			return err_code;
+@@ -158,6 +157,12 @@ static int allocate_memory(struct dba_allocation *req)
+ 	if (req->address == 0) {
+ 		DBA_ERR("Fail to allocate %llu bytes.", req->size);
+ 		result = -ENOMEM;
++	} else {
++		/*
++		 * Address adjustment taking into account
++		 * the starting reserve.
++		 */
++		req->address -= general_alloc.gran;
+ 	}
+ 
+ 	mutex_unlock(&allocator_lock);
+@@ -167,6 +172,7 @@ static int allocate_memory(struct dba_allocation *req)
+ static void deallocate_memory(struct dba_allocation *req)
+ {
+ 	mutex_lock(&allocator_lock);
++	req->address += general_alloc.gran;
+ 	gen_pool_free(general_alloc.pools[req->rank], req->address, req->size);
+ 	mutex_unlock(&allocator_lock);
+ }
+-- 
+2.34.1
+

@@ -1,0 +1,37 @@
+From f5402b0b0ee13ae1beb2f1eb466f773ba36576ff Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 18 Aug 2022 14:09:37 +0900
+Subject: [PATCH 065/128] [caffe2/operators] Use 'insert' instead of 'copy' for
+ blocked indices/lengths
+
+'insert' is faster than 'copy' for trivial vector concatenation so use it here.
+
+Resolves: AXDIMM-357.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.h | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+index f6970f6d..25babaff 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.h
+@@ -120,10 +120,10 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+         num_indices_per_lookup_[i] = *lengths.begin();
+       }
+ 
+-      std::copy(
+-          indices.begin(), indices.end(), std::back_inserter(indices_blocked_));
+-      std::copy(
+-          lengths.begin(), lengths.end(), std::back_inserter(lengths_blocked_));
++      indices_blocked_.insert(
++          indices_blocked_.end(), indices.begin(), indices.end());
++      lengths_blocked_.insert(
++          lengths_blocked_.end(), lengths.begin(), lengths.end());
+     }
+ 
+     const auto minibatch_size = Input(lengths_vec_start_idx).size(0);
+-- 
+2.34.1
+

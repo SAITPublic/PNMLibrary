@@ -1,0 +1,609 @@
+From f54d9632a6127ba5fd315ff680a59c83dd707dfc Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 11 Jul 2023 04:09:04 -0400
+Subject: [PATCH 137/161] [sls_resource][proc_mgr] Make process manager more
+ independent
+
+Related-to: MCS23-1300
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c                |  14 +-
+ drivers/pnm/sls_resource/sls_allocator.c      |   4 +-
+ .../pnm/sls_resource/sls_process_manager.c    | 151 ++++++++++++------
+ .../pnm/sls_resource/sls_process_manager.h    |  67 ++------
+ drivers/pnm/sls_resource/sls_rank_scheduler.c |   4 +-
+ drivers/pnm/sls_resource/sls_rank_scheduler.h |   2 -
+ drivers/pnm/sls_resource/sls_sysfs.c          |  16 +-
+ drivers/pnm/sls_resource/sls_sysfs.h          |   2 -
+ 8 files changed, 131 insertions(+), 129 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index b1e49742b..dc64532c7 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -29,7 +29,6 @@ MODULE_VERSION(SLS_DRIVER_VERSION);
+ #define SLS_RESOURCE_ACCESS_MODE 0666
+ 
+ #define SLS_RESOURCE_DEVICE_NAME SLS_RESOURCE_PATH_INTERNAL
+-struct sls_process_manager sls_proc_mgr;
+ 
+ static struct sls_mem_info mem_info;
+ static struct class *sls_resource_class;
+@@ -39,12 +38,12 @@ static dev_t sls_resource_device_number;
+ 
+ int sls_release(struct inode *node, struct file *f)
+ {
+-	return release_sls_process(&sls_proc_mgr);
++	return release_sls_process();
+ }
+ 
+ int sls_open(struct inode *inode, struct file *filp)
+ {
+-	return register_sls_process(&sls_proc_mgr);
++	return register_sls_process();
+ }
+ 
+ static void dump_ioctl_err(unsigned int cmd)
+@@ -80,7 +79,7 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	case DEVICE_IOCRESET:
+ 		reset_sls_rank_scheduler();
+ 		retval = reset_sls_allocator(&mem_info);
+-		reset_sls_process_manager(&sls_proc_mgr);
++		reset_sls_process_manager();
+ 		break;
+ 	case ALLOCATE_MEMORY:
+ 	case DEALLOCATE_MEMORY:
+@@ -202,9 +201,6 @@ int init_sls_device(void)
+ 	if (err)
+ 		goto allocator_fail;
+ 
+-	/* Initialize manager of processes which use SLS resources */
+-	init_sls_process_manager(&sls_proc_mgr);
+-
+ 	/* Reset ranks status and synchronization primitives */
+ 	init_sls_rank_scheduler();
+ 
+@@ -218,7 +214,7 @@ int init_sls_device(void)
+ 
+ build_sysfs_fail:
+ 	destroy_sls_rank_scheduler();
+-	cleanup_sls_process_manager(&sls_proc_mgr);
++	cleanup_sls_process_manager();
+ allocator_fail:
+ 	destroy_sls_resource_dev();
+ resource_device_fail:
+@@ -233,7 +229,7 @@ void cleanup_sls_device(void)
+ 	cleanup_sls_allocator();
+ 
+ 	/* Free allocated memory if any user processes alive upon device remove*/
+-	cleanup_sls_process_manager(&sls_proc_mgr);
++	cleanup_sls_process_manager();
+ 
+ 	/* Reset state */
+ 	destroy_sls_rank_scheduler();
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index 85e218c60..10cf2d7c7 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -277,7 +277,7 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 			return err;
+ 		}
+ 
+-		err = sls_proc_register_alloc(&sls_proc_mgr, kreq);
++		err = sls_proc_register_alloc(kreq);
+ 
+ 		if (!err) {
+ 			SLS_DBG("Allocated obj: pool[%u], rank_offset = [0x%llx], size = [%llu]\n",
+@@ -347,7 +347,7 @@ static int deallocate_memory_ioctl(struct sls_allocator *alloc,
+ 			return err;
+ 		}
+ 
+-		err = sls_proc_remove_alloc(&sls_proc_mgr, kreq);
++		err = sls_proc_remove_alloc(kreq);
+ 	}
+ 	unlock_allocator();
+ 
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/sls_process_manager.c
+index 96cb55a37..019095488 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/sls_process_manager.c
+@@ -10,6 +10,53 @@
+ #include <linux/slab.h>
+ #include <linux/sched.h>
+ 
++// [TODO: @e-kutovoi MCS23-1260] Rename desc -> req, since there are no
++// "descriptors" anymore
++
++struct sls_proc_desc {
++	struct sls_memory_alloc_request request;
++	struct rb_node node;
++};
++
++/* resources allocated for particular process */
++struct sls_proc_resources {
++	int pid;
++	struct rb_root alloc_desc_tree;
++	int rank_write_mask;
++	int rank_read_mask;
++	/* this counter needed because release f_op is called on each close
++	 * syscall, sometimes userspace process can just open/close device
++	 * for reset ioctl purpose. take in mind this counter should be accessed
++	 * only under proc_list_lock in order to prevent race conditions
++	 */
++	int ref_cnt;
++	struct list_head list;
++};
++
++/*
++ * data structure for tracking device resources, allocated to user space
++ * processes
++ */
++struct sls_process_manager {
++	/* [TODO:] need to checkout performance impact of using just list,
++	 * maybe some more advanced data structure is required (rb_tree)
++	 */
++	atomic64_t enable_cleanup;
++	struct list_head active_process_list;
++	struct list_head leaked_process_list;
++	atomic64_t leaked;
++	/* mutex for accessing process_list concurrently */
++	struct mutex proc_list_lock;
++};
++
++static struct sls_process_manager proc_mgr = {
++	.enable_cleanup = ATOMIC64_INIT(0),
++	.active_process_list = LIST_HEAD_INIT(proc_mgr.active_process_list),
++	.leaked_process_list = LIST_HEAD_INIT(proc_mgr.leaked_process_list),
++	.leaked = ATOMIC64_INIT(0),
++	.proc_list_lock = __MUTEX_INITIALIZER(proc_mgr.proc_list_lock)
++};
++
+ enum rank_access_type { RANK_ACCESS_RD, RANK_ACCESS_WR, RANK_ACCESS_INVAL };
+ 
+ static inline bool sls_req_less(struct sls_memory_alloc_request a,
+@@ -174,7 +221,8 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 		{
+ 			//[TODO:s-motov] kcsan check
+ 
+-			failed |= deallocate_memory_unsafe(desc_node->request) != 0;
++			failed |= deallocate_memory_unsafe(
++					  desc_node->request) != 0;
+ 			SLS_INF(
+ 				"Abnormal release desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
+ 				desc_node->request.rank,
+@@ -190,18 +238,18 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 	return failed ? -1 : 0;
+ }
+ 
+-int release_sls_process(struct sls_process_manager *mgr)
++int release_sls_process(void)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+ 	bool res_leaked;
+ 
+-	mutex_lock(&mgr->proc_list_lock);
++	mutex_lock(&proc_mgr.proc_list_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.leaked_process_list);
+ 
+-		proc_res = find_current_proc_res(mgr);
++		proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 		if (!proc_res) {
+ 			SLS_ERR("Tried to release already released process by pid: %d, tid: %d\n",
+@@ -222,10 +270,10 @@ int release_sls_process(struct sls_process_manager *mgr)
+ 			if (!res_leaked)
+ 				goto free_proc_res;
+ 
+-			if (atomic64_read(&mgr->enable_cleanup)) {
++			if (atomic64_read(&proc_mgr.enable_cleanup)) {
+ 				err_code = release_process_resources(proc_res);
+ 			} else {
+-				track_leaked_resources(mgr, proc_res);
++				track_leaked_resources(&proc_mgr, proc_res);
+ 				goto release_process_unlock;
+ 			}
+ 
+@@ -235,7 +283,7 @@ int release_sls_process(struct sls_process_manager *mgr)
+ 		}
+ 	}
+ release_process_unlock:
+-	mutex_unlock(&mgr->proc_list_lock);
++	mutex_unlock(&proc_mgr.proc_list_lock);
+ 
+ 	return err_code;
+ }
+@@ -273,8 +321,7 @@ static int set_rank_status(struct sls_process_manager *mgr,
+ 	return err_code;
+ }
+ 
+-int sls_proc_register_rank(struct sls_process_manager *mgr, int rank,
+-			   unsigned int cmd)
++int sls_proc_register_rank(int rank, unsigned int cmd)
+ {
+ 	enum rank_access_type rank_type = get_rank_access_type(cmd);
+ 
+@@ -286,7 +333,7 @@ int sls_proc_register_rank(struct sls_process_manager *mgr, int rank,
+ 	SLS_DBG("Registering rank_%s[%d], pid: %d, tid: %d\n",
+ 		rank_access_type_to_str(rank_type), rank,
+ 		get_current_process_id(), current->pid);
+-	if (set_rank_status(mgr, rank_type, rank, true)) {
++	if (set_rank_status(&proc_mgr, rank_type, rank, true)) {
+ 		SLS_ERR("Fail to register rank_%s[%d], pid: %d, tid: %d\n",
+ 			rank_access_type_to_str(rank_type), rank,
+ 			get_current_process_id(), current->pid);
+@@ -295,8 +342,7 @@ int sls_proc_register_rank(struct sls_process_manager *mgr, int rank,
+ 	return 0;
+ }
+ 
+-int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+-			 unsigned int cmd)
++int sls_proc_remove_rank(int rank, unsigned int cmd)
+ {
+ 	int rank_type = get_rank_access_type(cmd);
+ 
+@@ -308,7 +354,7 @@ int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+ 	SLS_DBG("Removing rank_%s[%d], pid: %d, tid: %d\n",
+ 		rank_access_type_to_str(rank_type), rank,
+ 		get_current_process_id(), current->pid);
+-	if (set_rank_status(mgr, rank_type, rank, false)) {
++	if (set_rank_status(&proc_mgr, rank_type, rank, false)) {
+ 		SLS_ERR("Fail to remove rank_%s[%d], pid: %d, tid: %d\n",
+ 			rank_access_type_to_str(rank_type), rank,
+ 			get_current_process_id(), current->pid);
+@@ -371,13 +417,12 @@ static int unregister_descriptor(struct sls_process_manager *mgr,
+ 	return update_descriptor_status(mgr, req, false);
+ }
+ 
+-int sls_proc_register_alloc(struct sls_process_manager *mgr,
+-			    struct sls_memory_alloc_request req)
++int sls_proc_register_alloc(struct sls_memory_alloc_request req)
+ {
+ 	SLS_DBG("Registering allocation, desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
+ 		req.rank, req.rank_offset, get_current_process_id(),
+ 		current->pid);
+-	if (register_descriptor(mgr, req)) {
++	if (register_descriptor(&proc_mgr, req)) {
+ 		SLS_ERR("Fail to register rank: %u, rank_offset: %llu, pid: %d, tid: %d\n",
+ 			req.rank, req.rank_offset, get_current_process_id(),
+ 			current->pid);
+@@ -386,13 +431,12 @@ int sls_proc_register_alloc(struct sls_process_manager *mgr,
+ 	return 0;
+ }
+ 
+-int sls_proc_remove_alloc(struct sls_process_manager *mgr,
+-			  struct sls_memory_alloc_request req)
++int sls_proc_remove_alloc(struct sls_memory_alloc_request req)
+ {
+ 	SLS_DBG("Removing allocation, desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
+ 		req.rank, req.rank_offset, get_current_process_id(),
+ 		current->pid);
+-	if (unregister_descriptor(mgr, req)) {
++	if (unregister_descriptor(&proc_mgr, req)) {
+ 		SLS_ERR("Fail to remove rank: %u, rank_offset: %llu, pid: %d, tid: %d\n",
+ 			req.rank, req.rank_offset, get_current_process_id(),
+ 			current->pid);
+@@ -401,18 +445,18 @@ int sls_proc_remove_alloc(struct sls_process_manager *mgr,
+ 	return 0;
+ }
+ 
+-int register_sls_process(struct sls_process_manager *mgr)
++int register_sls_process(void)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+ 	pid_t pid = get_current_process_id();
+ 
+-	mutex_lock(&mgr->proc_list_lock);
++	mutex_lock(&proc_mgr.proc_list_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.leaked_process_list);
+ 
+-		proc_res = find_current_proc_res(mgr);
++		proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 		if (proc_res)
+ 			goto inc_ref_count;
+@@ -429,7 +473,7 @@ int register_sls_process(struct sls_process_manager *mgr)
+ 
+ 		proc_res->pid = pid;
+ 		proc_res->alloc_desc_tree = RB_ROOT;
+-		list_add(&proc_res->list, &mgr->active_process_list);
++		list_add(&proc_res->list, &proc_mgr.active_process_list);
+ 		SLS_DBG("Registered process, pid: %d, tid: %d\n", pid,
+ 			current->pid);
+ 
+@@ -437,11 +481,11 @@ int register_sls_process(struct sls_process_manager *mgr)
+ 		proc_res->ref_cnt++;
+ 	}
+ out:
+-	mutex_unlock(&mgr->proc_list_lock);
++	mutex_unlock(&proc_mgr.proc_list_lock);
+ 	return err_code;
+ }
+ 
+-int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr)
++int sls_proc_manager_cleanup_on(void)
+ {
+ 	struct sls_proc_resources *proc_res_tmp;
+ 	struct sls_proc_resources *proc_res;
+@@ -449,31 +493,31 @@ int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr)
+ 
+ 	SLS_DBG("Enabling cleanup\n");
+ 
+-	atomic64_set(&mgr->enable_cleanup, 1);
++	atomic64_set(&proc_mgr.enable_cleanup, 1);
+ 
+ 	/* cleanup leaked_process_list */
+-	mutex_lock(&mgr->proc_list_lock);
++	mutex_lock(&proc_mgr.proc_list_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.leaked_process_list);
+ 
+ 		list_for_each_entry_safe(proc_res, proc_res_tmp,
+-					 &mgr->leaked_process_list, list) {
++					 &proc_mgr.leaked_process_list, list) {
+ 			err_code |= release_process_resources(proc_res);
+ 			list_del(&proc_res->list);
+ 			kfree(proc_res);
+ 		}
+-		atomic64_set(&mgr->leaked, 0);
++		atomic64_set(&proc_mgr.leaked, 0);
+ 	}
+-	mutex_unlock(&mgr->proc_list_lock);
++	mutex_unlock(&proc_mgr.proc_list_lock);
+ 
+ 	return err_code ? -1 : 0;
+ }
+ 
+-void sls_proc_manager_cleanup_off(struct sls_process_manager *mgr)
++void sls_proc_manager_cleanup_off(void)
+ {
+ 	SLS_DBG("Disabling cleanup\n");
+-	atomic64_set(&mgr->enable_cleanup, 0);
++	atomic64_set(&proc_mgr.enable_cleanup, 0);
+ }
+ 
+ void cleanup_process_list(struct list_head *process_list)
+@@ -487,37 +531,38 @@ void cleanup_process_list(struct list_head *process_list)
+ 	}
+ }
+ 
+-void reset_sls_process_manager(struct sls_process_manager *mgr)
++void reset_sls_process_manager(void)
+ {
+-	cleanup_process_list(&mgr->active_process_list);
+-	cleanup_process_list(&mgr->leaked_process_list);
++	cleanup_process_list(&proc_mgr.active_process_list);
++	cleanup_process_list(&proc_mgr.leaked_process_list);
+ }
+ 
+-void cleanup_sls_process_manager(struct sls_process_manager *mgr)
++void cleanup_sls_process_manager(void)
+ {
+ 	struct sls_proc_resources *proc_res_tmp;
+ 	struct sls_proc_resources *proc_res;
+ 
+-	mutex_lock(&mgr->proc_list_lock);
++	mutex_lock(&proc_mgr.proc_list_lock);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->active_process_list);
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(mgr->leaked_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.active_process_list);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(proc_mgr.leaked_process_list);
+ 
+ 		list_for_each_entry_safe(proc_res, proc_res_tmp,
+-					 &mgr->active_process_list, list) {
++					 &proc_mgr.active_process_list, list) {
+ 			list_del(&proc_res->list);
+ 			list_del(&proc_res->list);
+ 			kfree(proc_res);
+ 		}
+ 	}
+-	mutex_unlock(&mgr->proc_list_lock);
++	mutex_unlock(&proc_mgr.proc_list_lock);
++}
++
++uint64_t sls_proc_mgr_leaked(void)
++{
++	return atomic64_read(&proc_mgr.leaked);
+ }
+ 
+-void init_sls_process_manager(struct sls_process_manager *mgr)
++bool sls_proc_mgr_cleanup(void)
+ {
+-	INIT_LIST_HEAD(&mgr->active_process_list);
+-	INIT_LIST_HEAD(&mgr->leaked_process_list);
+-	mutex_init(&mgr->proc_list_lock);
+-	atomic64_set(&mgr->enable_cleanup, 0);
+-	atomic64_set(&mgr->leaked, 0);
++	return atomic64_read(&proc_mgr.enable_cleanup) == 1;
+ }
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.h b/drivers/pnm/sls_resource/sls_process_manager.h
+index 1cc16ad27..638de724f 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.h
++++ b/drivers/pnm/sls_resource/sls_process_manager.h
+@@ -11,66 +11,25 @@
+ #include <linux/list.h>
+ #include <linux/rbtree.h>
+ 
+-// [TODO: @e-kutovoi MCS23-1260] Rename desc -> req, since there are no
+-// "descriptors" anymore
+-
+-struct sls_proc_desc {
+-	struct sls_memory_alloc_request request;
+-	struct rb_node node;
+-};
+-
+-/* resources allocated for particular process */
+-struct sls_proc_resources {
+-	int pid;
+-	struct rb_root alloc_desc_tree;
+-	int rank_write_mask;
+-	int rank_read_mask;
+-	/* this counter needed because release f_op is called on each close
+-	 * syscall, sometimes userspace process can just open/close device
+-	 * for reset ioctl purpose. take in mind this counter should be accessed
+-	 * only under proc_list_lock in order to prevent race conditions
+-	 */
+-	int ref_cnt;
+-	struct list_head list;
+-};
+-
+-/*
+- * data structure for tracking device resources, allocated to user space
+- * processes
+- */
+-struct sls_process_manager {
+-	/* [TODO:] need to checkout performance impact of using just list,
+-	 * maybe some more advanced data structure is required (rb_tree)
+-	 */
+-	atomic64_t enable_cleanup;
+-	struct list_head active_process_list;
+-	struct list_head leaked_process_list;
+-	atomic64_t leaked;
+-	/* mutex for accessing process_list concurrently */
+-	struct mutex proc_list_lock;
+-};
+-
+-void init_sls_process_manager(struct sls_process_manager *mgr);
+-void cleanup_sls_process_manager(struct sls_process_manager *mgr);
+-void reset_sls_process_manager(struct sls_process_manager *mgr);
++void cleanup_sls_process_manager(void);
++void reset_sls_process_manager(void);
+ /* function for handling 'open' file operation */
+-int register_sls_process(struct sls_process_manager *mgr);
++int register_sls_process(void);
+ /* function for handling 'release' file operation */
+-int release_sls_process(struct sls_process_manager *mgr);
++int release_sls_process(void);
+ 
+ /* functions for adding allocation/ranks into process's resources data structure*/
+-int sls_proc_register_alloc(struct sls_process_manager *mgr,
+-			    struct sls_memory_alloc_request req);
+-int sls_proc_register_rank(struct sls_process_manager *mgr, int rank,
+-			   unsigned int cmd);
++int sls_proc_register_alloc(struct sls_memory_alloc_request req);
++int sls_proc_register_rank(int rank, unsigned int cmd);
+ 
+ /* function for removing allocation/ranks from process's resources data structure*/
+-int sls_proc_remove_alloc(struct sls_process_manager *mgr,
+-			  struct sls_memory_alloc_request req);
+-int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+-			 unsigned int cmd);
++int sls_proc_remove_alloc(struct sls_memory_alloc_request req);
++int sls_proc_remove_rank(int rank, unsigned int cmd);
++
++int sls_proc_manager_cleanup_on(void);
++void sls_proc_manager_cleanup_off(void);
+ 
+-int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr);
+-void sls_proc_manager_cleanup_off(struct sls_process_manager *mgr);
++uint64_t sls_proc_mgr_leaked(void);
++bool sls_proc_mgr_cleanup(void);
+ 
+ #endif /* __SLS_PROCESS_MANAGER_H__ */
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.c b/drivers/pnm/sls_resource/sls_rank_scheduler.c
+index 2f27bc49f..8c34e2d24 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.c
++++ b/drivers/pnm/sls_resource/sls_rank_scheduler.c
+@@ -276,7 +276,7 @@ int get_sls_rank(unsigned int cmd, unsigned int arg)
+ 		ret = get_rank_retry(&sls_rank_sched, cmd, arg);
+ 
+ 	if (ret >= 0) /* finally got rank, add to process resources */
+-		sls_proc_register_rank(&sls_proc_mgr, ret, cmd);
++		sls_proc_register_rank(ret, cmd);
+ 
+ 	return ret;
+ }
+@@ -343,7 +343,7 @@ int release_sls_rank(unsigned int cmd, unsigned int arg)
+ 	rank = release_and_wakeup(&sls_rank_sched, cmd, arg);
+ 
+ 	if (rank >= 0)
+-		return sls_proc_remove_rank(&sls_proc_mgr, rank, cmd);
++		return sls_proc_remove_rank(rank, cmd);
+ 
+ 	return -1;
+ }
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.h b/drivers/pnm/sls_resource/sls_rank_scheduler.h
+index e1a4e844f..ba90f2801 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.h
++++ b/drivers/pnm/sls_resource/sls_rank_scheduler.h
+@@ -10,8 +10,6 @@
+ #include <linux/types.h>
+ #include <linux/mutex.h>
+ 
+-extern struct sls_process_manager sls_proc_mgr;
+-
+ void reset_sls_rank_scheduler(void);
+ void init_sls_rank_scheduler(void);
+ void destroy_sls_rank_scheduler(void);
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.c b/drivers/pnm/sls_resource/sls_sysfs.c
+index 1e5ae0718..2fcca6c84 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.c
++++ b/drivers/pnm/sls_resource/sls_sysfs.c
+@@ -28,15 +28,21 @@ static struct kobject *ranks_kobj;
+ static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+ 			   char *buf)
+ {
+-	return sysfs_emit(buf, "%llu\n", atomic64_read(&sls_proc_mgr.leaked));
++	uint64_t leaked;
++
++	leaked = sls_proc_mgr_leaked();
++	return sysfs_emit(buf, "%llu\n", leaked);
+ }
+ static DEVICE_ATTR_RO(leaked);
+ 
+ static ssize_t cleanup_show(struct device *device,
+ 			    struct device_attribute *attr, char *buf)
+ {
+-	return sysfs_emit(buf, "%llu\n",
+-			  atomic64_read(&sls_proc_mgr.enable_cleanup));
++	bool cleanup;
++
++	cleanup = sls_proc_mgr_cleanup();
++
++	return sysfs_emit(buf, "%d\n", cleanup);
+ }
+ 
+ static ssize_t cleanup_store(struct device *device,
+@@ -44,10 +50,10 @@ static ssize_t cleanup_store(struct device *device,
+ 			     size_t count)
+ {
+ 	if (sysfs_streq(buf, "1")) {
+-		if (sls_proc_manager_cleanup_on(&sls_proc_mgr))
++		if (sls_proc_manager_cleanup_on())
+ 			SLS_ERR("Failed to enable resource manager\n");
+ 	} else if (sysfs_streq(buf, "0")) {
+-		sls_proc_manager_cleanup_off(&sls_proc_mgr);
++		sls_proc_manager_cleanup_off();
+ 	} else {
+ 		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
+ 			buf);
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.h b/drivers/pnm/sls_resource/sls_sysfs.h
+index ba638702c..990fd15ba 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.h
++++ b/drivers/pnm/sls_resource/sls_sysfs.h
+@@ -8,8 +8,6 @@
+ 
+ struct sls_mem_info;
+ 
+-extern struct sls_process_manager sls_proc_mgr;
+-
+ int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev);
+ void destroy_sls_sysfs(void);
+ 
+-- 
+2.34.1
+

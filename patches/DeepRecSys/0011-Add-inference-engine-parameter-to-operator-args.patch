@@ -1,0 +1,87 @@
+From cf9f920d6c4f0de1c1de7061f19c8f3f34d915a8 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Thu, 30 Jun 2022 19:50:21 +0300
+Subject: [PATCH 11/33] Add inference engine parameter to operator args
+
+Adding parameter required for rank offsets calculation
+
+Resolves: AXDIMM-255, AXDIMM-271
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ inferenceEngine.py      |  4 ++--
+ models/dlrm_s_caffe2.py | 10 ++++++++--
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/inferenceEngine.py b/inferenceEngine.py
+index 9bb31b4..2693afd 100644
+--- a/inferenceEngine.py
++++ b/inferenceEngine.py
+@@ -126,8 +126,8 @@ def inferenceEngine(args,
+         python_profiling_start()
+ 
+     # construct the neural network specified by command line arguments ###
+-
+-    model = DLRM_Wrapper( args, shared_tables_uuid )
++    # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
++    model = DLRM_Wrapper( args, engine_id, shared_tables_uuid )
+     model.create(lX[0], lS_l[0], lS_i[0], lT[0])
+ 
+   elif args.model_type == "wnd":
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index d644ca2..9e19a8e 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -88,6 +88,7 @@ class DLRM_Wrapper(object):
+     def __init__(
+         self,
+         cli_args,
++        engine_id, # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+         shared_tables_uuid,
+         model=None,
+         tag=None,
+@@ -142,13 +143,15 @@ class DLRM_Wrapper(object):
+ 
+         if self.args.queue:
+             with core.DeviceScope(device_opt):
+-                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, shared_tables_uuid,
++                # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
++                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, engine_id, shared_tables_uuid,
+                                      id_qs = self.id_qs,
+                                      len_qs = self.len_qs,
+                                      fc_q   = self.fc_q)
+         else:
+             with core.DeviceScope(device_opt):
+-                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, shared_tables_uuid)
++                # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
++                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, engine_id, shared_tables_uuid)
+ 
+ 
+     def create(self, X, S_lengths, S_indices, T):
+@@ -373,6 +376,7 @@ class DLRM_Net(object):
+                             [sls_s_combined],
+                             from_file=True, path=self.args.table_weight_path,
+                             num_tables=len(rows), sparse_feature_size=m, rows=rows,
++                            engine_id=self.engine_id, # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+                             with_tag=self.args.use_tags)
+                 else:
+                     EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+@@ -456,6 +460,7 @@ class DLRM_Net(object):
+         model=None,
+         tag=None,
+         enable_prof=False,
++        engine_id=0, # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+         shared_tables_uuid="None",
+         id_qs = None,
+         len_qs = None,
+@@ -480,6 +485,7 @@ class DLRM_Net(object):
+         # ##########################
+         self.use_axdimm_caffe2_backend = cli_args.use_axdimm_caffe2_backend
+         self.shared_tables_uuid = shared_tables_uuid
++        self.engine_id = engine_id # [TODO: AXDIMM-256] remove engine_id after rank allocator is ready
+ 
+         if cli_args.arch_interaction_op == "dot":
+             # approach 1: all
+-- 
+2.34.1
+

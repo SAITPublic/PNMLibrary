@@ -1,0 +1,54 @@
+@startuml
+participant DLRM
+
+participant ":SecurePreprocessor" as TP
+participant ":EncryptionEngine" as EE
+participant ":VerificationEngine" as VE
+participant ":OTPGenerator" as OTPGen
+participant ":AXDIMM_CL" as AXDIMM_CL
+
+DLRM -> TP : uploadTables(emb_table_path)\nContext switch
+activate TP
+
+group SGX (Trusted environment)
+    loop
+        TP -> TP: read_slice(&in, begin, end)
+        TP -> VE: generate_tag(begin, end, address)
+        activate VE
+
+        VE -> OTPGen: generate_otp(0x01, address, version, AES_Encoder, &s)
+        activate OTPGen
+        OTPGen --> VE: return
+        deactivate OTPGen
+        VE -> VE: linear_checksum(begin, end)
+        VE -> OTPGen: generate_otp(0x10, address, version, AES_Encoder, &otp)
+        activate OTPGen
+        OTPGen --> VE: return
+        deactivate OTPGen
+        VE -> VE: encrypt_tag(tag, otp)
+
+
+        VE --> TP: return
+        deactivate VE
+
+        TP -> EE: encrypt(begin, end, output, address)
+        activate EE
+
+        loop
+            EE -> OTPGen: generate_otp(0x00, address, version, AES_Encoder, &otp)
+            activate OTPGen
+            OTPGen --> EE: return
+            deactivate OTPGen
+            EE -> EE: encrypt_slice(it, it + otp.size(), oit, otp)
+        end
+        EE --> TP: return std::pair(output, encrypted_bytes)
+        deactivate EE
+
+        TP -> AXDIMM_CL: load slice to AXDIMM (OutputRankStream&)
+    end
+end
+
+TP --> DLRM: return TableHadler\nContext switch
+deactivate TP
+
+@enduml

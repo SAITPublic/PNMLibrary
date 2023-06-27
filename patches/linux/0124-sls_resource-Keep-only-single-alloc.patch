@@ -1,0 +1,1251 @@
+From 4402ae7e700b771fdd1c0f75623a25b55b2ea9a7 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Wed, 28 Jun 2023 15:51:08 +0000
+Subject: [PATCH 124/161] [sls_resource] Keep only single alloc
+
+* Remove all allocation methods from kernel into userspace, keep only
+  the simplest allocation method - a single region at a time
+* Remove object packs
+* Make process manager keep track of allocations directly instead of
+  descriptors
+* Fix typo in ioctl error message
+
+Related to: MCS23-1260
+
+Signed-off-by: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c                |   4 +-
+ drivers/pnm/sls_resource/sls_allocator.c      | 590 +++---------------
+ drivers/pnm/sls_resource/sls_allocator.h      |  30 +-
+ .../pnm/sls_resource/sls_process_manager.c    | 135 ++--
+ .../pnm/sls_resource/sls_process_manager.h    |  22 +-
+ include/uapi/linux/sls_resources.h            |  51 +-
+ 6 files changed, 192 insertions(+), 640 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 0c23aaf85..505c7c2d1 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -72,7 +72,7 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	if (_IOC_NR(cmd) > SLS_IOC_MAXNR) {
+ 		SLS_ERR("Ioctl number too large. Aborting ioctl:\n");
+ 		dump_ioctl_err(cmd);
+-		SLS_ERR(" maximum ioctl number: %u\n", SLS_IOC_MAGIC);
++		SLS_ERR(" maximum ioctl number: %u\n", SLS_IOC_MAXNR);
+ 		return -ENOTTY;
+ 	}
+ 
+@@ -87,8 +87,6 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		reset_sls_process_manager(&sls_proc_mgr);
+ 		break;
+ 	case ALLOCATE_MEMORY:
+-	case GET_MEMORY_OBJECTS_NUM:
+-	case GET_MEMORY_ALLOCATION:
+ 	case DEALLOCATE_MEMORY:
+ 		retval = mem_process_ioctl(cmd, sls_device.allocator, arg);
+ 		break;
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index f0e6c1af3..8b9241b77 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -159,9 +159,8 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 
+ /* General preinitializing allocator part, reset/init independent */
+ static int preinit_sls_allocator(struct sls_allocator *alloc,
+-				    struct sls_mem_info *mem_info)
++				 struct sls_mem_info *mem_info)
+ {
+-	alloc->pack_counter = 0;
+ 	alloc->gran = PAGE_SIZE; // [TODO: @p.bred] make configurable
+ 	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+ 	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
+@@ -179,30 +178,14 @@ int init_sls_allocator(struct sls_dev *dev)
+ 	if (unlikely(err_code))
+ 		return err_code;
+ 
+-	INIT_LIST_HEAD(&dev->allocator->obj_pack_list);
+-
+ 	/* Protect memory allocation operations */
+ 	mutex_init(&__allocator.memory_mutex);
+ 
+ 	return 0;
+ }
+ 
+-/* Cleanup memory object packages storage */
+-static void cleanup_obj_packs(struct sls_allocator *alloc)
+-{
+-	struct list_head *cur, *n;
+-	struct obj_pack *entry;
+-
+-	list_for_each_safe(cur, n, &alloc->obj_pack_list) {
+-		entry = list_entry(cur, struct obj_pack, list);
+-		kfree(entry->objects);
+-		list_del(cur);
+-		kfree(entry);
+-	}
+-}
+-
+ int reset_sls_allocator(struct sls_allocator *alloc,
+-			   struct sls_mem_info *mem_info)
++			struct sls_mem_info *mem_info)
+ {
+ 	SLS_DBG("Resetting SLS allocator\n");
+ 
+@@ -211,7 +194,6 @@ int reset_sls_allocator(struct sls_allocator *alloc,
+ 		unlock_allocator(alloc);
+ 	}
+ 
+-	cleanup_obj_packs(alloc);
+ 	cleanup_memory_pools(alloc);
+ 
+ 	return preinit_sls_allocator(alloc, mem_info);
+@@ -227,159 +209,6 @@ void cleanup_sls_allocator(struct sls_dev *dev)
+ 	mutex_destroy(&allocator->memory_mutex);
+ }
+ 
+-static int add_obj_pack(struct sls_allocator *alloc,
+-			struct sls_memory_object *objects, uint64_t num_obj)
+-{
+-	struct obj_pack *pack = kmalloc(sizeof(struct obj_pack), GFP_KERNEL);
+-
+-	if (unlikely(!pack)) {
+-		SLS_ERR("kmalloc failed for obj_pack [%zu]\n",
+-			   sizeof(struct obj_pack));
+-		return -ENOMEM;
+-	}
+-
+-	/* Set descriptor for this objects package */
+-	pack->desc = ++alloc->pack_counter;
+-	/* Set objects count */
+-	pack->num_obj = num_obj;
+-	/* Set memory objects */
+-	pack->objects = objects;
+-
+-	list_add_tail(&pack->list, &alloc->obj_pack_list);
+-
+-	return 0;
+-}
+-
+-/* Get total number of allocated objects depends on user memory policy. */
+-static inline uint64_t gen_num_obj(uint64_t num_user_obj,
+-				   enum sls_user_preferences pref)
+-{
+-	switch (GET_ALLOC_POLICY(pref)) {
+-	case SLS_ALLOC_AUTO:
+-	case SLS_ALLOC_REPLICATE_ALL:
+-		return num_user_obj * NUM_OF_RANK;
+-	case SLS_ALLOC_DISTRIBUTE_ALL:
+-	case SLS_ALLOC_SINGLE:
+-		return num_user_obj;
+-	}
+-
+-	SLS_ERR("Unknown memory policy [%d]\n", pref);
+-	return 0;
+-}
+-
+-/* Get total number of allocated objects per rank
+- * depends on user memory policy.
+- */
+-static inline uint64_t gen_rank_num_obj(uint64_t num_user_obj,
+-					enum sls_user_preferences pref)
+-{
+-	switch (GET_ALLOC_POLICY(pref)) {
+-	case SLS_ALLOC_AUTO:
+-	case SLS_ALLOC_REPLICATE_ALL:
+-		return num_user_obj;
+-	case SLS_ALLOC_DISTRIBUTE_ALL:
+-		/* [TODO: @p.bred] Not perfectly even distribution for a small number of objects */
+-		return DIV_ROUND_UP(num_user_obj, NUM_OF_RANK);
+-	case SLS_ALLOC_SINGLE:
+-		return 1;
+-	}
+-
+-	SLS_ERR("Unknown memory policy [%d]\n", pref);
+-	return 0;
+-}
+-
+-/* Get original user object index from user request
+- * depends on user memory policy.
+- */
+-static inline uint64_t get_user_obj_idx(uint64_t obj_idx, uint8_t rank,
+-					uint64_t rank_num_obj,
+-					enum sls_user_preferences pref)
+-{
+-	switch (GET_ALLOC_POLICY(pref)) {
+-	case SLS_ALLOC_AUTO:
+-	case SLS_ALLOC_REPLICATE_ALL:
+-		return obj_idx - rank * rank_num_obj;
+-	case SLS_ALLOC_DISTRIBUTE_ALL:
+-	case SLS_ALLOC_SINGLE:
+-		return obj_idx;
+-	}
+-
+-	SLS_ERR("Unknown memory policy [%d]\n", pref);
+-	return 0;
+-}
+-
+-/* Allocate and fill object by the corresponding user object inside rank pool */
+-static int pool_alloc_mem_obj(struct sls_allocator *alloc, uint64_t obj_idx,
+-			      uint8_t rank, uint64_t rank_num_obj,
+-			      struct sls_memory_object *objects,
+-			      struct sls_memory_alloc_request *request)
+-{
+-	uint64_t user_obj_size, offset;
+-	const uint64_t user_obj_idx = get_user_obj_idx(
+-		obj_idx, rank, rank_num_obj, request->preference);
+-
+-	if (user_obj_idx >= request->num_user_objects) {
+-		SLS_ERR(
+-			"user_obj_idx >= num_user_objects, user_obj_idx = [%llu], num_user_objects = [%llu]\n",
+-			user_obj_idx, request->num_user_objects);
+-		return -EINVAL;
+-	}
+-
+-	user_obj_size = request->user_objects_sizes[user_obj_idx];
+-	if (unlikely(!user_obj_size)) {
+-		SLS_ERR(
+-			"Memory object size is zero, user_obj_idx = [%llu]\n",
+-			user_obj_idx);
+-		return -EINVAL;
+-	}
+-
+-	offset = gen_pool_alloc(alloc->mem_pools[rank], user_obj_size);
+-	if (unlikely(!offset)) {
+-		SLS_ERR(
+-			"No free memory for user_object_id = [%llu], user_obj_size = [%llu] at pool[%hhu]\n",
+-			user_obj_idx, user_obj_size, rank);
+-		return -ENOMEM;
+-	}
+-
+-	SLS_DBG(
+-		"Allocated obj: pool[%hhu], user object index = [%llu], offset = [0x%llx], length = [%llu]\n",
+-		rank, user_obj_idx, offset, user_obj_size);
+-
+-	objects[obj_idx].rank = rank;
+-	objects[obj_idx].user_object_id = user_obj_idx;
+-	objects[obj_idx].offset = offset;
+-	objects[obj_idx].length = user_obj_size;
+-
+-	return 0;
+-}
+-
+-static int deallocate_objects(struct sls_allocator *alloc,
+-			      struct sls_memory_object *objects,
+-			      uint64_t actual_num)
+-{
+-	uint8_t rank;
+-	int err_code = 0;
+-	uint64_t obj_count;
+-	uint64_t addr, size;
+-
+-	for (obj_count = 0; obj_count < actual_num; ++obj_count) {
+-		rank = objects[obj_count].rank;
+-		addr = objects[obj_count].offset;
+-		size = objects[obj_count].length;
+-		if (unlikely(!gen_pool_has_addr(alloc->mem_pools[rank], addr,
+-						size))) {
+-			SLS_ERR(
+-				"Trying to deallocate object from a pool[%hhu] that doesn't contain it: addr = [%llu], size = [%llu]\n",
+-				rank, addr, size);
+-			err_code = -EINVAL;
+-			continue;
+-		}
+-		gen_pool_free(alloc->mem_pools[rank], addr, size);
+-	}
+-
+-	return err_code;
+-}
+-
+ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ {
+ 	uint8_t rank;
+@@ -397,382 +226,141 @@ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ 	return optimal_rank;
+ }
+ 
+-static int allocate_single_object(struct sls_allocator *alloc,
+-				  struct sls_memory_object *objects,
+-				  struct sls_memory_alloc_request *request,
+-				  uint64_t *actual_num)
+-{
+-	int err_code = 0;
+-	int optimal_rank =
+-		GET_ALLOC_SINGLE_RANK_PREFERENCE(request->preference);
+-
+-	if (optimal_rank == 0)
+-		optimal_rank = select_optimal_rank(alloc);
+-	else
+-		optimal_rank -= 1;
+-
+-	err_code =
+-		pool_alloc_mem_obj(alloc, 0, optimal_rank, 1, objects, request);
+-	*actual_num = (err_code == 0);
+-
+-	return err_code;
+-}
+-
+-static int allocate_in_ranks(uint64_t num_obj, struct sls_allocator *alloc,
+-			     struct sls_memory_object *objects,
+-			     struct sls_memory_alloc_request *request,
+-			     uint64_t *actual_num)
++static int allocate_memory(struct sls_allocator *alloc,
++			   struct sls_memory_alloc_request *req)
+ {
+-	uint8_t rank;
+-	int err_code = 0;
+-	uint64_t idx, max_idx_in_rank;
+-	uint64_t rank_num_obj;
+-
+-	if (GET_ALLOC_POLICY(request->preference) == SLS_ALLOC_SINGLE) {
+-		err_code =
+-			allocate_single_object(alloc, objects, request, &idx);
+-	} else {
+-		rank_num_obj = gen_rank_num_obj(request->num_user_objects,
+-						request->preference);
+-
+-		for (rank = 0, idx = 0; rank < NUM_OF_RANK && idx < num_obj;
+-		     ++rank) {
+-			max_idx_in_rank = idx + rank_num_obj;
+-			for (; idx < max_idx_in_rank && idx < num_obj; ++idx) {
+-				err_code = pool_alloc_mem_obj(alloc, idx, rank,
+-							      rank_num_obj,
+-							      objects, request);
+-				if (unlikely(err_code))
+-					goto alloc_ranks_out;
+-			}
+-		}
++	if (req->rank != SLS_ALLOC_ANY_RANK && req->rank >= NUM_OF_RANK) {
++		SLS_ERR("Rank %u doesn't exist.\n", req->rank);
++		return -EINVAL;
+ 	}
+ 
+-alloc_ranks_out:
+-	*actual_num = idx;
+-	return err_code;
+-}
+-
+-static int allocate_objects(struct sls_allocator *alloc,
+-			    struct sls_memory_alloc_request *request,
+-			    uint64_t *desc, uint64_t num_obj,
+-			    struct sls_memory_object *objects)
+-{
+-	int err_code = 0;
+-	uint64_t actual_num = 0;
++	if (req->size == 0) {
++		SLS_ERR("Trying to allocate zero memory.\n");
++		return -EINVAL;
++	}
+ 
+ 	lock_allocator(alloc);
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-		err_code = allocate_in_ranks(num_obj, alloc, objects, request,
+-					     &actual_num);
+-		if (unlikely(err_code)) {
+-			if (deallocate_objects(alloc, objects, actual_num))
+-				SLS_ERR("Failed partial deallocation\n");
+-			goto alloc_obj_out;
+-		}
+-
+-		err_code = add_obj_pack(alloc, objects, num_obj);
+-		if (unlikely(err_code)) {
+-			SLS_ERR("Failed to add objects package\n");
+-			goto alloc_obj_out;
+-		}
++		if (req->rank == SLS_ALLOC_ANY_RANK)
++			req->rank = select_optimal_rank(alloc);
+ 
+-		/* Return new descriptor to user space */
+-		*desc = alloc->pack_counter;
++		req->rank_offset =
++			gen_pool_alloc(alloc->mem_pools[req->rank], req->size);
+ 
+-		SLS_DBG(
+-			"Allocation succeeded, returning package descriptor = [%llu]\n",
+-			*desc);
++		if (unlikely(req->rank_offset == 0)) {
++			unlock_allocator(alloc);
++			SLS_ERR("No free memory for object of size = [%llu] at pool[%hhu]\n",
++				req->size, req->rank);
++			return -ENOMEM;
++		}
+ 	}
+-alloc_obj_out:
+ 	unlock_allocator(alloc);
+-	return err_code;
+-}
+ 
+-static int allocate_memory(struct sls_allocator *alloc,
+-			   struct sls_memory_alloc_request *request,
+-			   uint64_t *desc)
+-{
+-	int err_code;
+-	/* Array with allocated memory objects depends on user memory policy,
+-	 * if no issues with allocation and filling by original user objects,
+-	 * it's placed into object packages storage.
+-	 */
+-	struct sls_memory_object *objects = NULL;
+-	/* Total number of allocated objects given the user memory policy */
+-	const uint64_t num_obj =
+-		gen_num_obj(request->num_user_objects, request->preference);
+-
+-	SLS_DBG("Allocating memory for %llu objects\n", num_obj);
+-
+-	objects = kmalloc_array(num_obj, sizeof(struct sls_memory_object),
+-				GFP_KERNEL);
+-	if (unlikely(!objects)) {
+-		SLS_ERR("No free memory for objects, num_obj = [%llu]\n",
+-			   num_obj);
+-		return -ENOMEM;
+-	}
+-
+-	err_code = allocate_objects(alloc, request, desc, num_obj, objects);
+-	if (unlikely(err_code))
+-		kfree(objects);
+-
+-	return err_code;
+-}
+-
+-static int init_alloc_kreq(struct sls_memory_alloc_request *kreq,
+-			   struct sls_memory_alloc_request __user *ureq)
+-{
+-	int err_code;
+-	uint32_t array_size;
+-	uint64_t *sizes_ptr = NULL;
+-
+-	SLS_COPY_FROM_USER(err_code, kreq, ureq,
+-			      sizeof(struct sls_memory_alloc_request));
+-	if (unlikely(err_code))
+-		goto alloc_kreq_out;
+-
+-	array_size = sizeof(uint64_t) * kreq->num_user_objects;
+-	/* We must check the size before kmalloc! */
+-	if (unlikely(array_size == 0)) {
+-		SLS_ERR("Allocate request is invalid, array_size = [0]\n");
+-		err_code = -EINVAL;
+-		goto alloc_kreq_out;
+-	}
+-	sizes_ptr = kreq->user_objects_sizes;
+-	kreq->user_objects_sizes = kmalloc(array_size, GFP_KERNEL);
+-	if (unlikely(!kreq->user_objects_sizes)) {
+-		SLS_ERR("kmalloc failed for array_size = [%u]\n",
+-			   array_size);
+-		err_code = -ENOMEM;
+-		goto alloc_kreq_out;
+-	}
+-
+-	SLS_COPY_FROM_USER(err_code, kreq->user_objects_sizes, sizes_ptr,
+-			      array_size);
+-	if (unlikely(err_code))
+-		kfree(kreq->user_objects_sizes);
+-
+-alloc_kreq_out:
+-	return err_code;
++	return 0;
+ }
+ 
+ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 				 unsigned long __user arg)
+ {
+-	int err_code;
+-	uint64_t desc;
++	int err;
+ 	struct sls_memory_alloc_request kreq;
+ 	struct sls_memory_alloc_request __user *ureq =
+ 		(struct sls_memory_alloc_request __user *)arg;
+ 
+-	err_code = init_alloc_kreq(&kreq, ureq);
+-	if (unlikely(err_code))
+-		goto alloc_ioctl_out;
+-
+-	err_code = allocate_memory(alloc, &kreq, &desc);
+-	if (unlikely(err_code)) {
+-		SLS_ERR("Failed to allocate memory.\n");
+-		goto deinit_kreq;
+-	}
+-
+-	err_code = put_user(desc, &ureq->descriptor);
+-	if (unlikely(err_code)) {
+-		SLS_ERR("Can't copy allocation descriptor to user.\n");
+-		deallocate_memory(alloc, desc);
+-		goto deinit_kreq;
++	SLS_COPY_FROM_USER(err, &kreq, ureq,
++			   sizeof(struct sls_memory_alloc_request));
++	if (unlikely(err)) {
++		SLS_ERR("Failed to read user alloc request. Ptr = %p.\n", ureq);
++		return err;
+ 	}
+ 
+-	/* descriptor is valid and copied to user, so add it to process resources */
+-	err_code = sls_proc_register_alloc(&sls_proc_mgr, desc);
+-
+-deinit_kreq:
+-	kfree(kreq.user_objects_sizes);
+-alloc_ioctl_out:
+-	return err_code;
+-}
++	err = allocate_memory(alloc, &kreq);
++	if (unlikely(err))
++		return err;
+ 
+-static int get_num_obj(struct sls_allocator *alloc, uint64_t desc,
+-		       uint64_t *num_obj)
+-{
+-	int err_code = -EINVAL;
+-	struct list_head *ptr;
+-	struct obj_pack *pack;
+-
+-	if (unlikely(desc == 0))
+-		goto out_num_obj;
+-
+-	lock_allocator(alloc);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+-
+-		list_for_each(ptr, &alloc->obj_pack_list) {
+-			pack = list_entry(ptr, struct obj_pack, list);
+-			if (pack->desc == desc) {
+-				*num_obj = pack->num_obj;
+-				SLS_DBG("Number of objects: [%llu]\n",
+-					   *num_obj);
+-				err_code = 0;
+-				goto unlock_num_obj;
+-			}
+-		}
++	SLS_COPY_TO_USER(err, ureq, &kreq,
++			 sizeof(struct sls_memory_alloc_request));
++	if (unlikely(err)) {
++		SLS_ERR("Failed to write user alloc request. Ptr = %p.\n",
++			ureq);
++		return err;
+ 	}
+ 
+-unlock_num_obj:
+-	unlock_allocator(alloc);
+-out_num_obj:
+-	return err_code;
+-}
+-
+-static int get_num_obj_ioctl(struct sls_allocator *alloc,
+-			     unsigned long __user arg)
+-{
+-	int err_code;
+-	uint64_t num_obj;
+-	struct sls_num_objects_request __user *usr_get_num_obj_req =
+-		(struct sls_num_objects_request __user *)arg;
+-	struct sls_num_objects_request kernel_get_num_obj_req = {};
+-
+-	SLS_COPY_FROM_USER(err_code, &kernel_get_num_obj_req,
+-			      usr_get_num_obj_req,
+-			      sizeof(struct sls_num_objects_request));
+-	if (unlikely(err_code))
+-		goto out_num_obj_ioctl;
++	err = sls_proc_register_alloc(&sls_proc_mgr, kreq);
+ 
+-	err_code =
+-		get_num_obj(alloc, kernel_get_num_obj_req.descriptor, &num_obj);
+-	if (unlikely(err_code)) {
+-		SLS_ERR(
+-			"Can't get number of objects by objects package descriptor [%llu]\n",
+-			kernel_get_num_obj_req.descriptor);
+-		goto out_num_obj_ioctl;
++	if (!err) {
++		SLS_DBG("Allocated obj: pool[%u], rank_offset = [0x%llx], size = [%llu]\n",
++			kreq.rank, kreq.rank_offset, kreq.size);
+ 	}
+ 
+-	kernel_get_num_obj_req.num_objects = num_obj;
+-	SLS_COPY_TO_USER(err_code, usr_get_num_obj_req,
+-			    &kernel_get_num_obj_req,
+-			    sizeof(struct sls_num_objects_request));
+-out_num_obj_ioctl:
+-	return err_code;
++	return err;
+ }
+ 
+-static int get_obj_pack(struct sls_allocator *alloc,
+-			struct sls_memory_alloc *request)
++int deallocate_memory(struct sls_allocator *alloc,
++		      struct sls_memory_alloc_request req)
+ {
+-	int err_code = -EINVAL;
+-	struct list_head *ptr;
+-	struct obj_pack *pack;
+-
+-	SLS_DBG("Getting allocation for descriptor %llu\n",
+-		   request->descriptor);
+-	if (unlikely(request->descriptor == 0))
+-		goto out;
++	if (req.rank >= NUM_OF_RANK) {
++		SLS_ERR("Rank %u doesn't exist.\n", req.rank);
++		return -EINVAL;
++	}
+ 
+ 	lock_allocator(alloc);
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+-		list_for_each(ptr, &alloc->obj_pack_list) {
+-			pack = list_entry(ptr, struct obj_pack, list);
+-			if (pack->desc == request->descriptor) {
+-				if (request->num_objects < pack->num_obj) {
+-					SLS_ERR(
+-						"The output memory size is too small to store the [%llu] package objects\n",
+-						pack->num_obj);
+-					goto unlock;
+-				}
+-				SLS_COPY_TO_USER(
+-					err_code, request->objects,
+-					pack->objects,
+-					pack->num_obj *
+-						sizeof(struct sls_memory_object));
+-				goto unlock;
+-			}
++		/*
++		 * [TODO: @e-kutovoi] This check doesn't save against pointers
++		 * inside of allocated memory
++		 * i.e.:
++		 *   addr = alloc(0x100)
++		 *   ...
++		 *   dealloc(addr + 4)
++		 * We should consider either adding additional bookkeeping of
++		 * valid allocations in here, or calling into process manager
++		 * before this call.
++		 */
++		if (unlikely(!gen_pool_has_addr(alloc->mem_pools[req.rank],
++						req.rank_offset, req.size))) {
++			SLS_ERR(
++				"Deallocating a nonexistent object at %llu of size %llu from pool[%u]\n",
++				req.rank_offset, req.size, req.rank);
++			unlock_allocator(alloc);
++			return -EINVAL;
+ 		}
++
++		gen_pool_free(alloc->mem_pools[req.rank], req.rank_offset,
++			      req.size);
+ 	}
+-unlock:
+ 	unlock_allocator(alloc);
+-out:
+-	return err_code;
+-}
+ 
+-static int get_obj_pack_ioctl(struct sls_allocator *alloc,
+-			      unsigned long __user arg)
+-{
+-	int err_code;
+-	struct sls_memory_alloc __user *usr_get_alloc_req =
+-		(struct sls_memory_alloc __user *)arg;
+-	struct sls_memory_alloc kernel_get_alloc_req = {};
+-
+-	SLS_COPY_FROM_USER(err_code, &kernel_get_alloc_req,
+-			      usr_get_alloc_req,
+-			      sizeof(struct sls_memory_alloc));
+-	if (unlikely(err_code))
+-		goto get_pack_out;
+-	err_code = get_obj_pack(alloc, &kernel_get_alloc_req);
+-	if (unlikely(err_code))
+-		SLS_ERR("Can't get objects package by descriptor [%llu]\n",
+-			   kernel_get_alloc_req.descriptor);
+-
+-get_pack_out:
+-	return err_code;
++	return 0;
+ }
+ 
+-int deallocate_memory(struct sls_allocator *alloc, uint64_t desc)
++static int deallocate_memory_ioctl(struct sls_allocator *alloc,
++				   unsigned long __user arg)
+ {
+-	int err_code = -EINVAL;
+-	struct list_head *cur, *n;
+-	struct obj_pack *pack;
+-
+-	SLS_DBG("Deallocating memory (descriptor = [%llu])\n", desc);
+-
+-	if (unlikely(desc == 0)) {
+-		SLS_ERR("Memory package descriptor is zero!!!\n");
+-		goto out;
+-	}
+-
+-	lock_allocator(alloc);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+-
+-		list_for_each_safe(cur, n, &alloc->obj_pack_list) {
+-			pack = list_entry(cur, struct obj_pack, list);
+-			if (pack->desc != desc)
+-				continue;
+-
+-			err_code = deallocate_objects(alloc, pack->objects,
+-						      pack->num_obj);
+-			if (err_code) {
+-				SLS_ERR(
+-					"Failed to deallocate memory by descriptor [%llu]\n",
+-					desc);
+-			}
+-
+-			kfree(pack->objects);
+-			list_del(cur);
+-			kfree(pack);
++	int err;
++	struct sls_memory_alloc_request kreq;
++	struct sls_memory_alloc_request __user *ureq =
++		(struct sls_memory_alloc_request __user *)arg;
+ 
+-			goto unlock;
+-		}
++	SLS_COPY_FROM_USER(err, &kreq, ureq,
++			   sizeof(struct sls_memory_alloc_request));
++	if (unlikely(err)) {
++		SLS_ERR("Failed to read user dealloc request. Ptr = %p.\n",
++			ureq);
++		return err;
+ 	}
+-unlock:
+-	unlock_allocator(alloc);
+-out:
+-	return err_code;
+-}
+ 
+-static int deallocate_memory_ioctl(struct sls_allocator *alloc,
+-				   unsigned long __user arg)
+-{
+-	uint64_t in_desc = (uint64_t)arg;
+-	int err_code = deallocate_memory(alloc, in_desc);
++	err = deallocate_memory(alloc, kreq);
++	if (unlikely(err))
++		return err;
+ 
+-	if (unlikely(err_code))
+-		return err_code;
++	err = sls_proc_remove_alloc(&sls_proc_mgr, kreq);
+ 
+-	return sls_proc_remove_alloc(&sls_proc_mgr, in_desc);
++	return err;
+ }
+ 
+ int mem_process_ioctl(unsigned int cmd, struct sls_allocator *alloc,
+@@ -781,10 +369,6 @@ int mem_process_ioctl(unsigned int cmd, struct sls_allocator *alloc,
+ 	switch (cmd) {
+ 	case ALLOCATE_MEMORY:
+ 		return allocate_memory_ioctl(alloc, arg);
+-	case GET_MEMORY_OBJECTS_NUM:
+-		return get_num_obj_ioctl(alloc, arg);
+-	case GET_MEMORY_ALLOCATION:
+-		return get_obj_pack_ioctl(alloc, arg);
+ 	case DEALLOCATE_MEMORY:
+ 		return deallocate_memory_ioctl(alloc, arg);
+ 	default:
+diff --git a/drivers/pnm/sls_resource/sls_allocator.h b/drivers/pnm/sls_resource/sls_allocator.h
+index ee3f4a8f3..9570ad72c 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.h
++++ b/drivers/pnm/sls_resource/sls_allocator.h
+@@ -11,24 +11,6 @@
+ struct sls_dev;
+ struct sls_mem_info;
+ 
+-/*
+- * Element of the list with memory object packages.
+- * For each userland memory allocation request we generate internal memory
+- * objects set (objects package) depending on the memory policy. It includes all
+- * objects of all ranks based on the allocation request.
+- * These packages serve only for convenient exchange between userland processes.
+- */
+-struct obj_pack {
+-	/* Package number in list */
+-	uint64_t desc;
+-	/* Number of memory objects */
+-	uint64_t num_obj;
+-	/* Memory objects array */
+-	struct sls_memory_object *objects;
+-	/* Embedded for using lists only */
+-	struct list_head list;
+-};
+-
+ /* Helper structure for memory allocation */
+ struct sls_allocator {
+ 	/* Allocator granularity in bytes, the number should be a power of 2 */
+@@ -38,13 +20,6 @@ struct sls_allocator {
+ 	 * Range: [reserved_indent == PAGE_SIZE, rank_size - reserved_indent]
+ 	 */
+ 	struct gen_pool *mem_pools[NUM_OF_RANK];
+-	/*
+-	 * Linked list to store memory object packages, these packages serve
+-	 * only to unite multiple object allocations that exist in the pools.
+-	 */
+-	struct list_head obj_pack_list;
+-	/* Packages counter */
+-	uint64_t pack_counter;
+ };
+ 
+ int init_sls_allocator(struct sls_dev *dev);
+@@ -55,11 +30,12 @@ int init_sls_allocator(struct sls_dev *dev);
+  * then reset with memory pools initialization.
+  */
+ int reset_sls_allocator(struct sls_allocator *alloc,
+-			   struct sls_mem_info *mem_info);
++			struct sls_mem_info *mem_info);
+ void cleanup_sls_allocator(struct sls_dev *dev);
+ int mem_process_ioctl(unsigned int cmd, struct sls_allocator *alloc,
+ 		      unsigned long __user arg);
+-int deallocate_memory(struct sls_allocator *alloc, uint64_t desc);
++int deallocate_memory(struct sls_allocator *alloc,
++		      struct sls_memory_alloc_request req);
+ void lock_allocator(struct sls_allocator *alloc);
+ void unlock_allocator(struct sls_allocator *alloc);
+ 
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/sls_process_manager.c
+index 0fa819c41..e61c4c0a0 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/sls_process_manager.c
+@@ -12,7 +12,15 @@
+ 
+ enum rank_access_type { RANK_ACCESS_RD, RANK_ACCESS_WR, RANK_ACCESS_INVAL };
+ 
+-bool desc_delete(struct rb_root *root, int desc)
++static inline bool sls_req_less(struct sls_memory_alloc_request a,
++				struct sls_memory_alloc_request b)
++{
++	return a.rank < b.rank ||
++	       (a.rank == b.rank && a.rank_offset < b.rank_offset);
++}
++
++static bool desc_delete(struct rb_root *root,
++			struct sls_memory_alloc_request req)
+ {
+ 	struct rb_node *node = root->rb_node;
+ 
+@@ -20,9 +28,9 @@ bool desc_delete(struct rb_root *root, int desc)
+ 		struct sls_proc_desc *desc_node =
+ 			container_of(node, struct sls_proc_desc, node);
+ 
+-		if (desc < desc_node->alloc_desc) {
++		if (sls_req_less(req, desc_node->request)) {
+ 			node = node->rb_left;
+-		} else if (desc > desc_node->alloc_desc) {
++		} else if (sls_req_less(desc_node->request, req)) {
+ 			node = node->rb_right;
+ 		} else {
+ 			rb_erase(&desc_node->node, root);
+@@ -33,7 +41,7 @@ bool desc_delete(struct rb_root *root, int desc)
+ 	return false;
+ }
+ 
+-bool desc_insert(struct rb_root *root, struct sls_proc_desc *proc_desc)
++static bool desc_insert(struct rb_root *root, struct sls_proc_desc *proc_desc)
+ {
+ 	struct rb_node **new = &(root->rb_node);
+ 	struct rb_node *parent = NULL;
+@@ -43,9 +51,9 @@ bool desc_insert(struct rb_root *root, struct sls_proc_desc *proc_desc)
+ 			container_of(*new, struct sls_proc_desc, node);
+ 
+ 		parent = *new;
+-		if (proc_desc->alloc_desc < this->alloc_desc)
++		if (sls_req_less(proc_desc->request, this->request))
+ 			new = &((*new)->rb_left);
+-		else if (proc_desc->alloc_desc > this->alloc_desc)
++		else if (sls_req_less(this->request, proc_desc->request))
+ 			new = &((*new)->rb_right);
+ 		else
+ 			return false;
+@@ -106,18 +114,21 @@ static void track_leaked_resources(struct sls_process_manager *mgr,
+ 				   struct sls_proc_resources *proc_res)
+ {
+ 	struct rb_node *node;
++	struct sls_proc_desc *desc;
+ 
+ 	atomic64_inc(&mgr->leaked);
+ 	list_move(&proc_res->list, &mgr->leaked_process_list);
+ 
+ 	SLS_DBG("Tracked leakage by pid: %d, tid: %d; rank_rw_mask: %d, rank_rd_mask: %d\n",
+-		   get_current_process_id(), current->pid,
+-		   proc_res->rank_write_mask, proc_res->rank_read_mask);
++		get_current_process_id(), current->pid,
++		proc_res->rank_write_mask, proc_res->rank_read_mask);
+ 
+ 	for (node = rb_first(&proc_res->alloc_desc_tree); node;
+-	     node = rb_next(node))
+-		SLS_DBG("Leaked memory under desc[%lld]\n",
+-			rb_entry(node, struct sls_proc_desc, node)->alloc_desc);
++	     node = rb_next(node)) {
++		desc = rb_entry(node, struct sls_proc_desc, node);
++		SLS_DBG("Leaked memory under desc[rank = %u, rank_offset = %llu]\n",
++			desc->request.rank, desc->request.rank_offset);
++	}
+ }
+ 
+ static int release_process_resources(struct sls_proc_resources *proc_res,
+@@ -137,16 +148,14 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 		if (proc_res->rank_write_mask & (1 << i)) {
+ 			failed |= (release_rank_write(rank_sched, i) != i);
+ 			proc_res->rank_write_mask &= ~(1 << i);
+-			SLS_INF(
+-				"Abnormal release rank_wr[%d], pid: %d, tid: %d\n",
++			SLS_INF("Abnormal release rank_wr[%d], pid: %d, tid: %d\n",
+ 				i, get_current_process_id(), current->pid);
+ 		}
+ 
+ 		if (proc_res->rank_read_mask & (1 << i)) {
+ 			failed |= (release_rank_read(rank_sched, i) != i);
+ 			proc_res->rank_read_mask &= ~(1 << i);
+-			SLS_INF(
+-				"Abnormal release rank_rd[%d], pid: %d, tid: %d\n",
++			SLS_INF("Abnormal release rank_rd[%d], pid: %d, tid: %d\n",
+ 				i, get_current_process_id(), current->pid);
+ 		}
+ 	}
+@@ -156,10 +165,10 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ 		struct sls_proc_desc *desc_node =
+ 			rb_entry_safe(next, struct sls_proc_desc, node);
+ 
+-		failed |=
+-			(deallocate_memory(alloc, desc_node->alloc_desc) != 0);
+-		SLS_INF("Abnormal release desc[%lld], pid: %d, tid: %d\n",
+-			   desc_node->alloc_desc, get_current_process_id(), current->pid);
++		failed |= (deallocate_memory(alloc, desc_node->request) != 0);
++		SLS_INF("Abnormal release desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
++			desc_node->request.rank, desc_node->request.rank_offset,
++			get_current_process_id(), current->pid);
+ 		next = rb_first(&proc_res->alloc_desc_tree);
+ 		rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
+ 		kfree(desc_node);
+@@ -169,8 +178,8 @@ static int release_process_resources(struct sls_proc_resources *proc_res,
+ }
+ 
+ int release_sls_process(struct sls_process_manager *mgr,
+-			   struct sls_allocator *alloc,
+-			   struct sls_rank_scheduler *rank_sched)
++			struct sls_allocator *alloc,
++			struct sls_rank_scheduler *rank_sched)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+@@ -184,8 +193,7 @@ int release_sls_process(struct sls_process_manager *mgr,
+ 		proc_res = find_current_proc_res(mgr);
+ 
+ 		if (!proc_res) {
+-			SLS_ERR(
+-				"Tried to release already released process by pid: %d, tid: %d\n",
++			SLS_ERR("Tried to release already released process by pid: %d, tid: %d\n",
+ 				get_current_process_id(), current->pid);
+ 			goto release_process_unlock;
+ 		}
+@@ -197,7 +205,7 @@ int release_sls_process(struct sls_process_manager *mgr,
+ 		 */
+ 		if (proc_res->ref_cnt == 0) {
+ 			SLS_DBG("Releasing process pid: %d, tid: %d\n",
+-				   get_current_process_id(), current->pid);
++				get_current_process_id(), current->pid);
+ 
+ 			res_leaked = has_resources_leaked(proc_res);
+ 			if (!res_leaked)
+@@ -256,7 +264,7 @@ static int set_rank_status(struct sls_process_manager *mgr,
+ }
+ 
+ int sls_proc_register_rank(struct sls_process_manager *mgr, int rank,
+-			      unsigned int cmd)
++			   unsigned int cmd)
+ {
+ 	enum rank_access_type rank_type = get_rank_access_type(cmd);
+ 
+@@ -266,19 +274,19 @@ int sls_proc_register_rank(struct sls_process_manager *mgr, int rank,
+ 	}
+ 
+ 	SLS_DBG("Registering rank_%s[%d], pid: %d, tid: %d\n",
+-		   rank_access_type_to_str(rank_type), rank,
+-		   get_current_process_id(), current->pid);
++		rank_access_type_to_str(rank_type), rank,
++		get_current_process_id(), current->pid);
+ 	if (set_rank_status(mgr, rank_type, rank, true)) {
+ 		SLS_ERR("Fail to register rank_%s[%d], pid: %d, tid: %d\n",
+-			   rank_access_type_to_str(rank_type), rank,
+-			   get_current_process_id(), current->pid);
++			rank_access_type_to_str(rank_type), rank,
++			get_current_process_id(), current->pid);
+ 		return -1;
+ 	}
+ 	return 0;
+ }
+ 
+ int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+-			    unsigned int cmd)
++			 unsigned int cmd)
+ {
+ 	int rank_type = get_rank_access_type(cmd);
+ 
+@@ -288,19 +296,20 @@ int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+ 	}
+ 
+ 	SLS_DBG("Removing rank_%s[%d], pid: %d, tid: %d\n",
+-		   rank_access_type_to_str(rank_type), rank,
+-		   get_current_process_id(), current->pid);
++		rank_access_type_to_str(rank_type), rank,
++		get_current_process_id(), current->pid);
+ 	if (set_rank_status(mgr, rank_type, rank, false)) {
+ 		SLS_ERR("Fail to remove rank_%s[%d], pid: %d, tid: %d\n",
+-			   rank_access_type_to_str(rank_type), rank,
+-			   get_current_process_id(), current->pid);
++			rank_access_type_to_str(rank_type), rank,
++			get_current_process_id(), current->pid);
+ 		return -1;
+ 	}
+ 	return 0;
+ }
+ 
+ static int update_descriptor_status(struct sls_process_manager *mgr,
+-				    uint64_t desc, bool is_registration)
++				    struct sls_memory_alloc_request req,
++				    bool is_registration)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+@@ -320,18 +329,18 @@ static int update_descriptor_status(struct sls_process_manager *mgr,
+ 
+ 		if (is_registration) { /* allocate and add descritor to descriptors list */
+ 			proc_desc = kzalloc(sizeof(struct sls_proc_desc),
+-						GFP_KERNEL);
++					    GFP_KERNEL);
+ 
+ 			if (proc_desc == NULL) {
+ 				err_code = -1;
+ 				goto out;
+ 			}
+ 
+-			proc_desc->alloc_desc = desc;
++			proc_desc->request = req;
+ 			if (!desc_insert(&proc_res->alloc_desc_tree, proc_desc))
+ 				err_code = -1;
+ 		} else { /* remove requested descriptor from descriptors list */
+-			if (!desc_delete(&proc_res->alloc_desc_tree, desc))
++			if (!desc_delete(&proc_res->alloc_desc_tree, req))
+ 				err_code = -1;
+ 		}
+ 	}
+@@ -341,37 +350,42 @@ static int update_descriptor_status(struct sls_process_manager *mgr,
+ }
+ 
+ static int register_descriptor(struct sls_process_manager *mgr,
+-			       uint64_t desc)
++			       struct sls_memory_alloc_request req)
+ {
+-	return update_descriptor_status(mgr, desc, true);
++	return update_descriptor_status(mgr, req, true);
+ }
+ 
+ static int unregister_descriptor(struct sls_process_manager *mgr,
+-				 uint64_t desc)
++				 struct sls_memory_alloc_request req)
+ {
+-	return update_descriptor_status(mgr, desc, false);
++	return update_descriptor_status(mgr, req, false);
+ }
+ 
+ int sls_proc_register_alloc(struct sls_process_manager *mgr,
+-			       uint64_t desc)
++			    struct sls_memory_alloc_request req)
+ {
+-	SLS_DBG("Registering allocation, desc[%lld], pid: %d, tid: %d\n",
+-		   desc, get_current_process_id(), current->pid);
+-	if (register_descriptor(mgr, desc)) {
+-		SLS_ERR("Fail to register desc: %lld, pid: %d, tid: %d\n",
+-			   desc, get_current_process_id(), current->pid);
++	SLS_DBG("Registering allocation, desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
++		req.rank, req.rank_offset, get_current_process_id(),
++		current->pid);
++	if (register_descriptor(mgr, req)) {
++		SLS_ERR("Fail to register rank: %u, rank_offset: %llu, pid: %d, tid: %d\n",
++			req.rank, req.rank_offset, get_current_process_id(),
++			current->pid);
+ 		return -1;
+ 	}
+ 	return 0;
+ }
+ 
+-int sls_proc_remove_alloc(struct sls_process_manager *mgr, uint64_t desc)
++int sls_proc_remove_alloc(struct sls_process_manager *mgr,
++			  struct sls_memory_alloc_request req)
+ {
+-	SLS_DBG("Removing allocation, desc[%lld], pid: %d, tid: %d\n", desc,
+-		   get_current_process_id(), current->pid);
+-	if (unregister_descriptor(mgr, desc)) {
+-		SLS_ERR("Fail to remove desc: %lld, pid: %d, tid: %d\n",
+-			   desc, get_current_process_id(), current->pid);
++	SLS_DBG("Removing allocation, desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
++		req.rank, req.rank_offset, get_current_process_id(),
++		current->pid);
++	if (unregister_descriptor(mgr, req)) {
++		SLS_ERR("Fail to remove rank: %u, rank_offset: %llu, pid: %d, tid: %d\n",
++			req.rank, req.rank_offset, get_current_process_id(),
++			current->pid);
+ 		return -1;
+ 	}
+ 	return 0;
+@@ -393,12 +407,11 @@ int register_sls_process(struct sls_process_manager *mgr)
+ 		if (proc_res)
+ 			goto inc_ref_count;
+ 
+-		proc_res = kzalloc(sizeof(struct sls_proc_resources),
+-				   GFP_KERNEL);
++		proc_res =
++			kzalloc(sizeof(struct sls_proc_resources), GFP_KERNEL);
+ 
+ 		if (!proc_res) {
+-			SLS_ERR(
+-				"Failed to register process, pid: %d, tid: %d\n",
++			SLS_ERR("Failed to register process, pid: %d, tid: %d\n",
+ 				pid, current->pid);
+ 			err_code = -ENOMEM;
+ 			goto out;
+@@ -408,7 +421,7 @@ int register_sls_process(struct sls_process_manager *mgr)
+ 		proc_res->alloc_desc_tree = RB_ROOT;
+ 		list_add(&proc_res->list, &mgr->active_process_list);
+ 		SLS_DBG("Registered process, pid: %d, tid: %d\n", pid,
+-			   current->pid);
++			current->pid);
+ 
+ inc_ref_count:
+ 		proc_res->ref_cnt++;
+@@ -419,8 +432,8 @@ int register_sls_process(struct sls_process_manager *mgr)
+ }
+ 
+ int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+-				   struct sls_allocator *alloc,
+-				   struct sls_rank_scheduler *rank_sched)
++				struct sls_allocator *alloc,
++				struct sls_rank_scheduler *rank_sched)
+ {
+ 	struct sls_proc_resources *proc_res_tmp;
+ 	struct sls_proc_resources *proc_res;
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.h b/drivers/pnm/sls_resource/sls_process_manager.h
+index cccf70ca1..53b9671a3 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.h
++++ b/drivers/pnm/sls_resource/sls_process_manager.h
+@@ -11,8 +11,11 @@
+ #include <linux/list.h>
+ #include <linux/rbtree.h>
+ 
++// [TODO: @e-kutovoi MCS23-1260] Rename desc -> req, since there are no
++// "descriptors" anymore
++
+ struct sls_proc_desc {
+-	uint64_t alloc_desc;
++	struct sls_memory_alloc_request request;
+ 	struct rb_node node;
+ };
+ 
+@@ -57,23 +60,24 @@ void reset_sls_process_manager(struct sls_process_manager *mgr);
+ int register_sls_process(struct sls_process_manager *mgr);
+ /* function for handling 'release' file operation */
+ int release_sls_process(struct sls_process_manager *mgr,
+-			   struct sls_allocator *alloc,
+-			   struct sls_rank_scheduler *rank_sched);
++			struct sls_allocator *alloc,
++			struct sls_rank_scheduler *rank_sched);
+ 
+ /* functions for adding allocation/ranks into process's resources data structure*/
+ int sls_proc_register_alloc(struct sls_process_manager *mgr,
+-			       uint64_t desc);
++			    struct sls_memory_alloc_request req);
+ int sls_proc_register_rank(struct sls_process_manager *mgr, int rank,
+-			      unsigned int cmd);
++			   unsigned int cmd);
+ 
+ /* function for removing allocation/ranks from process's resources data structure*/
+-int sls_proc_remove_alloc(struct sls_process_manager *mgr, uint64_t desc);
++int sls_proc_remove_alloc(struct sls_process_manager *mgr,
++			  struct sls_memory_alloc_request req);
+ int sls_proc_remove_rank(struct sls_process_manager *mgr, int rank,
+-			    unsigned int cmd);
++			 unsigned int cmd);
+ 
+ int sls_proc_manager_cleanup_on(struct sls_process_manager *mgr,
+-				   struct sls_allocator *alloc,
+-				   struct sls_rank_scheduler *rank_sched);
++				struct sls_allocator *alloc,
++				struct sls_rank_scheduler *rank_sched);
+ void sls_proc_manager_cleanup_off(struct sls_process_manager *mgr);
+ 
+ #endif /* __SLS_PROCESS_MANAGER_H__ */
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 61d1b6ff7..87b79af4d 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -161,6 +161,8 @@ enum sls_mem_blocks_e {
+ 	SLS_BLOCK_MAX = 5
+ };
+ 
++// [TODO @e-kutovoi MCS23-1260]: Put these in userspace
++
+ /* The enumeration of table allocation preferences */
+ enum sls_user_preferences {
+ 	SLS_ALLOC_AUTO = 0,
+@@ -183,35 +185,13 @@ enum sls_user_preferences {
+ #define GET_ALLOC_SINGLE_RANK_PREFERENCE(preference) \
+ 	((preference & SLS_USER_RANK_MASK) >> SLS_USER_PREF_BITS)
+ 
+-struct sls_memory_object {
+-	uint8_t rank;
+-	/* Sometimes it's useful to know memory */
+-	/* object mapping to its origin in user space */
+-	uint64_t user_object_id;
+-	uint64_t offset;
+-	uint64_t length;
+-};
++#define SLS_ALLOC_ANY_RANK 0xffffffffU
+ 
+ #pragma pack(push, 1)
+-/* Tables allocation parameters */
+ struct sls_memory_alloc_request {
+-	uint64_t descriptor;
+-	uint64_t *user_objects_sizes;
+-	uint64_t num_user_objects;
+-	enum sls_user_preferences preference;
+-};
+-
+-/* Get memory objects by descriptor */
+-struct sls_memory_alloc {
+-	uint64_t descriptor;
+-	uint64_t num_objects;
+-	struct sls_memory_object *objects;
+-};
+-
+-/* Get memory objects number by descriptor */
+-struct sls_num_objects_request {
+-	uint64_t descriptor;
+-	uint64_t num_objects;
++	uint32_t rank;
++	uint64_t rank_offset;
++	uint64_t size;
+ };
+ #pragma pack(pop)
+ 
+@@ -221,16 +201,13 @@ struct sls_num_objects_request {
+ #define SET_FIRST_BUFFER _IO(SLS_IOC_MAGIC, 1)
+ #define SET_SECOND_BUFFER _IO(SLS_IOC_MAGIC, 2)
+ #define WHICH_BUFFER _IOR(SLS_IOC_MAGIC, 3, int)
+-#define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 4, struct sls_memory_alloc_request)
+-#define GET_MEMORY_OBJECTS_NUM \
+-	_IOWR(SLS_IOC_MAGIC, 5, struct sls_num_objects_request)
+-#define GET_MEMORY_ALLOCATION _IOWR(SLS_IOC_MAGIC, 6, struct sls_memory_alloc)
+-#define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 7, uint64_t)
+-#define GET_RANK_FOR_WRITE _IOW(SLS_IOC_MAGIC, 8, unsigned int)
+-#define GET_RANK_FOR_READ _IOW(SLS_IOC_MAGIC, 9, unsigned int)
+-#define RELEASE_WRITE_RANK _IOW(SLS_IOC_MAGIC, 10, unsigned int)
+-#define RELEASE_READ_RANK _IOW(SLS_IOC_MAGIC, 11, unsigned int)
+-
+-#define SLS_IOC_MAXNR (11)
++#define GET_RANK_FOR_WRITE _IOW(SLS_IOC_MAGIC, 4, unsigned int)
++#define GET_RANK_FOR_READ _IOW(SLS_IOC_MAGIC, 5, unsigned int)
++#define RELEASE_WRITE_RANK _IOW(SLS_IOC_MAGIC, 6, unsigned int)
++#define RELEASE_READ_RANK _IOW(SLS_IOC_MAGIC, 7, unsigned int)
++#define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 8, struct sls_memory_alloc_request)
++#define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 9, struct sls_memory_alloc_request)
++
++#define SLS_IOC_MAXNR (9)
+ 
+ #endif /* __SLS_RESOURCES_H__ */
+-- 
+2.34.1
+

@@ -1,0 +1,286 @@
+From a496b1848bd4bf33722ef18b41252feb73b98458 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Mon, 24 Oct 2022 17:08:39 +0300
+Subject: [PATCH 065/161] [drivers/dax/axdimm] Add sysfs entries for resource
+ manager
+
+Resolves: AXDIMM-450
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/dax/axdimm_process_manager.c | 94 +++++++++++++++++++++++++---
+ drivers/dax/axdimm_process_manager.h | 10 ++-
+ drivers/dax/axdimm_sysfs.c           | 38 +++++++++++
+ include/uapi/linux/libaxdimm.h       | 10 +++
+ 4 files changed, 141 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/dax/axdimm_process_manager.c b/drivers/dax/axdimm_process_manager.c
+index 61ade7454..c01849faa 100644
+--- a/drivers/dax/axdimm_process_manager.c
++++ b/drivers/dax/axdimm_process_manager.c
+@@ -48,13 +48,14 @@ static pid_t get_current_process_id(void)
+ 	return current->group_leader->pid;
+ }
+ 
++/* this function should be called with sync */
+ static struct axdimm_proc_resources *
+ find_current_proc_res(struct axdimm_process_manager *mgr)
+ {
+ 	struct axdimm_proc_resources *proc_res;
+ 	pid_t pid = get_current_process_id();
+ 
+-	list_for_each_entry (proc_res, &mgr->process_list, list) {
++	list_for_each_entry (proc_res, &mgr->active_process_list, list) {
+ 		if (proc_res->pid == pid) {
+ 			return proc_res;
+ 		}
+@@ -63,6 +64,31 @@ find_current_proc_res(struct axdimm_process_manager *mgr)
+ 	return NULL;
+ }
+ 
++static bool has_resources_leaked(struct axdimm_proc_resources *proc_res)
++{
++	return proc_res->rank_write_mask || proc_res->rank_read_mask ||
++	       !list_empty(&proc_res->alloc_desc_list);
++}
++
++static void track_leaked_resources(struct axdimm_process_manager *mgr,
++				   struct axdimm_proc_resources *proc_res)
++{
++	struct axdimm_proc_desc *proc_desc;
++
++	atomic64_inc(&mgr->leaked);
++	list_move(&proc_res->list, &mgr->leaked_process_list);
++
++	AXDIMM_DBG("Tracked leakage by pid: %d, tid: %d; rank_rw_mask: %d,"
++		   " rank_rd_mask: %d\n",
++		   get_current_process_id(), current->pid,
++		   proc_res->rank_write_mask, proc_res->rank_read_mask);
++
++	list_for_each_entry (proc_desc, &proc_res->alloc_desc_list, list) {
++		AXDIMM_DBG("Leaked memory under desc[%lld]\n",
++			   proc_desc->alloc_desc);
++	}
++}
++
+ static int release_process_resources(struct axdimm_proc_resources *proc_res,
+ 				     struct axdimm_allocator *alloc,
+ 				     struct axdimm_rank_scheduler *rank_sched)
+@@ -113,8 +139,9 @@ int release_axdimm_process(struct axdimm_process_manager *mgr,
+ 			   struct axdimm_allocator *alloc,
+ 			   struct axdimm_rank_scheduler *rank_sched)
+ {
+-	int err_code = -1;
++	int err_code = 0;
+ 	struct axdimm_proc_resources *proc_res = NULL;
++	bool res_leaked;
+ 
+ 	mutex_lock(&mgr->proc_list_lock);
+ 	proc_res = find_current_proc_res(mgr);
+@@ -139,12 +166,23 @@ int release_axdimm_process(struct axdimm_process_manager *mgr,
+ 			   current->exit_state, current->exit_code,
+ 			   current->exit_signal, current->flags);
+ 
+-		err_code =
+-			release_process_resources(proc_res, alloc, rank_sched);
+-		list_del(&proc_res->list);
+-		kfree(proc_res);
++		res_leaked = has_resources_leaked(proc_res);
++		if (!res_leaked)
++			goto free_proc_res;
++
++		if (atomic64_read(&mgr->enable_cleanup)) {
++			err_code = release_process_resources(proc_res, alloc,
++							     rank_sched);
++		} else {
++			track_leaked_resources(mgr, proc_res);
++			goto release_process_unlock;
++		}
+ 	}
+ 
++free_proc_res:
++	list_del(&proc_res->list);
++	kfree(proc_res);
++
+ release_process_unlock:
+ 	mutex_unlock(&mgr->proc_list_lock);
+ 
+@@ -321,7 +359,7 @@ int register_axdimm_process(struct axdimm_process_manager *mgr)
+ 
+ 	proc_res->pid = pid;
+ 	INIT_LIST_HEAD(&proc_res->alloc_desc_list);
+-	list_add(&proc_res->list, &mgr->process_list);
++	list_add(&proc_res->list, &mgr->active_process_list);
+ 	AXDIMM_DBG("Registered process, pid: %d, tid: %d\n", pid, current->pid);
+ 
+ inc_ref_count:
+@@ -331,14 +369,47 @@ int register_axdimm_process(struct axdimm_process_manager *mgr)
+ 	return err_code;
+ }
+ 
++int axdimm_proc_manager_cleanup_on(struct axdimm_process_manager *mgr,
++				   struct axdimm_allocator *alloc,
++				   struct axdimm_rank_scheduler *rank_sched)
++{
++	struct axdimm_proc_resources *proc_res_tmp;
++	struct axdimm_proc_resources *proc_res;
++	int err_code = 0;
++
++	AXDIMM_DBG("Enabling cleanup\n");
++
++	atomic64_set(&mgr->enable_cleanup, 1);
++
++	/* cleanup leaked_process_list */
++	mutex_lock(&mgr->proc_list_lock);
++	list_for_each_entry_safe (proc_res, proc_res_tmp,
++				  &mgr->leaked_process_list, list) {
++		err_code |=
++			release_process_resources(proc_res, alloc, rank_sched);
++		list_del(&proc_res->list);
++		kfree(proc_res);
++	}
++	atomic64_set(&mgr->leaked, 0);
++	mutex_unlock(&mgr->proc_list_lock);
++
++	return err_code ? -1 : 0;
++}
++
++void axdimm_proc_manager_cleanup_off(struct axdimm_process_manager *mgr)
++{
++	AXDIMM_DBG("Disabling cleanup\n");
++	atomic64_set(&mgr->enable_cleanup, 0);
++}
++
+ void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr)
+ {
+ 	struct axdimm_proc_resources *proc_res_tmp;
+ 	struct axdimm_proc_resources *proc_res;
+ 
+ 	mutex_lock(&mgr->proc_list_lock);
+-	list_for_each_entry_safe (proc_res, proc_res_tmp, &mgr->process_list,
+-				  list) {
++	list_for_each_entry_safe (proc_res, proc_res_tmp,
++				  &mgr->active_process_list, list) {
+ 		list_del(&proc_res->list);
+ 		kfree(proc_res);
+ 	}
+@@ -347,6 +418,9 @@ void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr)
+ 
+ void init_axdimm_process_manager(struct axdimm_process_manager *mgr)
+ {
+-	INIT_LIST_HEAD(&mgr->process_list);
++	INIT_LIST_HEAD(&mgr->active_process_list);
++	INIT_LIST_HEAD(&mgr->leaked_process_list);
+ 	mutex_init(&mgr->proc_list_lock);
++	atomic64_set(&mgr->enable_cleanup, 0);
++	atomic64_set(&mgr->leaked, 0);
+ }
+diff --git a/drivers/dax/axdimm_process_manager.h b/drivers/dax/axdimm_process_manager.h
+index ae2a9849f..57bd1c2ee 100644
+--- a/drivers/dax/axdimm_process_manager.h
++++ b/drivers/dax/axdimm_process_manager.h
+@@ -40,7 +40,10 @@ struct axdimm_proc_resources {
+ struct axdimm_process_manager {
+ 	/* [TODO:] need to checkout performance impact of using just list,
+ 	 * maybe some more advanced data structure is required (rb_tree)  */
+-	struct list_head process_list;
++	atomic64_t enable_cleanup;
++	struct list_head active_process_list;
++	struct list_head leaked_process_list;
++	atomic64_t leaked;
+ 	/* mutex for accessing process_list concurrently */
+ 	struct mutex proc_list_lock;
+ };
+@@ -68,4 +71,9 @@ int axdimm_proc_remove_alloc(struct axdimm_process_manager *mgr, uint64_t desc);
+ int axdimm_proc_remove_rank(struct axdimm_process_manager *mgr, int rank,
+ 			    unsigned int cmd);
+ 
++int axdimm_proc_manager_cleanup_on(struct axdimm_process_manager *mgr,
++				   struct axdimm_allocator *alloc,
++				   struct axdimm_rank_scheduler *rank_sched);
++void axdimm_proc_manager_cleanup_off(struct axdimm_process_manager *mgr);
++
+ #endif /* __AXDIMM_PROCESS_MANAGER_H__ */
+diff --git a/drivers/dax/axdimm_sysfs.c b/drivers/dax/axdimm_sysfs.c
+index 6d11139a1..c5c257ee0 100644
+--- a/drivers/dax/axdimm_sysfs.c
++++ b/drivers/dax/axdimm_sysfs.c
+@@ -22,9 +22,45 @@
+ extern struct axdimm_dev axdimm_device;
+ extern struct axdimm_allocator axdimm_allocator;
+ extern struct axdimm_rank_scheduler axdimm_rank_sched;
++extern struct axdimm_process_manager axdimm_proc_mgr;
+ 
+ static struct kobject *ranks_kobj;
+ 
++static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
++			   char *buf)
++{
++	return sprintf(buf, "%llu\n", atomic64_read(&axdimm_proc_mgr.leaked));
++}
++static DEVICE_ATTR_RO(leaked);
++
++static ssize_t cleanup_show(struct device *device,
++			    struct device_attribute *attr, char *buf)
++{
++	return sprintf(buf, "%llu\n",
++		       atomic64_read(&axdimm_proc_mgr.enable_cleanup));
++}
++
++static ssize_t cleanup_store(struct device *device,
++			     struct device_attribute *attr, const char *buf,
++			     size_t count)
++{
++	if (sysfs_streq(buf, "1")) {
++		if (axdimm_proc_manager_cleanup_on(&axdimm_proc_mgr,
++						   &axdimm_allocator,
++						   &axdimm_rank_sched))
++			AXDIMM_ERR("Failed to enable resource manager\n");
++	} else if (sysfs_streq(buf, "0")) {
++		axdimm_proc_manager_cleanup_off(&axdimm_proc_mgr);
++	} else {
++		AXDIMM_DBG(
++			"Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
++			buf);
++	}
++
++	return count;
++}
++static DEVICE_ATTR_RW(cleanup);
++
+ static ssize_t acq_timeout_show(struct device *device,
+ 				struct device_attribute *attr, char *buf)
+ {
+@@ -72,6 +108,8 @@ static DEVICE_ATTR_WO(reset);
+ static struct attribute *dev_attrs[] = {
+ 	&dev_attr_acq_timeout.attr,
+ 	&dev_attr_reset.attr,
++	&dev_attr_leaked.attr,
++	&dev_attr_cleanup.attr,
+ 	NULL,
+ };
+ 
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index f7e7dd90d..aa161931f 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -89,6 +89,16 @@
+ #define DEVICE_RESET_PATH "reset"
+ /* O_RDWR Path to acquisition timeout, measured in ns */
+ #define DEVICE_ACQUISITION_TIMEOUT_PATH "acq_timeout"
++/*
++ * O_RDWR Path to enabling/disabling cleanup of leaked resources by
++ * resource manager, write "1" to enable and "0" to disable
++ */
++#define DEVICE_RESOURCE_CLEANUP_PATH "cleanup"
++/*
++ * O_RDONLY Path to read resource leakage status, holds number of processes
++ * failed to free resources before exit
++ */
++#define DEVICE_LEAKED_PATH "leaked"
+ 
+ // Block of sysfs paths for ranks info, all O_RDONLY
+ // DAX_SYSFS_ROOT"/dax%d.%d/ranks/%d
+-- 
+2.34.1
+

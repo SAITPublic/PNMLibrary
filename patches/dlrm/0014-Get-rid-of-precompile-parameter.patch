@@ -1,0 +1,72 @@
+From 622aeffd7618eb19172c1d3fd085f0c53c7fb5d1 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 24 Nov 2022 11:35:15 +0300
+Subject: [PATCH 14/23] Get rid of precompile parameter
+
+Remove precompile option from demo app to fit the latest api.
+
+Related to: AXDIMM-480
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ axdimm_utils.py   | 8 ++++----
+ test_axdimm_op.py | 4 +---
+ 2 files changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/axdimm_utils.py b/axdimm_utils.py
+index 51fcbc9..40d55af 100644
+--- a/axdimm_utils.py
++++ b/axdimm_utils.py
+@@ -35,16 +35,16 @@ def get_enum(enum_class, name):
+ 
+     return val
+ 
+-def create_axdimm_tensor_from_file(tensor_type, path, scalar_type, rows, num_tables, sp_size, precompile = True, alloc_pref = AxdimmAllocPreference.distribute):
++def create_axdimm_tensor_from_file(tensor_type, path, scalar_type, rows, num_tables, sp_size, alloc_pref = AxdimmAllocPreference.distribute):
+     with_tag = True if "tagged" in str(tensor_type) else False
+     tensor_type = to_internal_type.get(get_enum(AxdimmTensorType, tensor_type).name)
+     alloc_pref_val = get_enum(AxdimmAllocPreference, alloc_pref).value
+ 
+-    return torch.ops.axdimm.create_tensor(tensor_type, path, scalar_type, rows, num_tables, sp_size, alloc_pref_val, precompile, with_tag)
++    return torch.ops.axdimm.create_tensor(tensor_type, path, scalar_type, rows, num_tables, sp_size, alloc_pref_val, with_tag)
+ 
+-def create_axdimm_tensor(tensor_type, weights, precompile = True, alloc_pref = AxdimmAllocPreference.distribute):
++def create_axdimm_tensor(tensor_type, weights, alloc_pref = AxdimmAllocPreference.distribute):
+     with_tag = True if "tagged" in str(tensor_type) else False
+     tensor_type = to_internal_type.get(get_enum(AxdimmTensorType, tensor_type).name)
+     alloc_pref_val = get_enum(AxdimmAllocPreference, alloc_pref).value
+ 
+-    return torch.ops.axdimm.create_tensor(tensor_type, weights, weights.size(0), weights.size(1), weights.size(2), alloc_pref_val, precompile, with_tag)
++    return torch.ops.axdimm.create_tensor(tensor_type, weights, weights.size(0), weights.size(1), weights.size(2), alloc_pref_val, with_tag)
+diff --git a/test_axdimm_op.py b/test_axdimm_op.py
+index 70ffcfc..38e3665 100644
+--- a/test_axdimm_op.py
++++ b/test_axdimm_op.py
+@@ -50,7 +50,6 @@ class AxdimmEmbeddingsTest:
+         self.random_lookups = args.randomize_lookups_len
+         self.fixed_lookups_len = args.fixed_lookups_len
+         self.result_tolerance = args.result_tolerance
+-        self.precompile = args.precompile
+         self.gen_test_data()
+     
+     def gen_indices(self):
+@@ -126,7 +125,7 @@ class AxdimmEmbeddingsTest:
+         offsets_tensor = torch.tensor(self.offsets, dtype=torch.int32)
+         for tensor_type in self.tensor_types:
+             log.info("Loading weights for tensor type: %s" % tensor_type)
+-            op = EmbeddingBagAxdimm(create_axdimm_tensor(tensor_type, self.tables, self.precompile))
++            op = EmbeddingBagAxdimm(create_axdimm_tensor(tensor_type, self.tables))
+             log.info("Running AXDIMM...")
+             with profiler.profile(with_stack=True, profile_memory=True) as axdimm_prof:
+                 axdimm_res = op(indices_tensor, offsets_tensor)
+@@ -189,7 +188,6 @@ if __name__ == "__main__":
+     parser.add_argument("--result-tolerance", type=float, default=0.001, help="Result precision tolerance, must be > 0")
+     parser.add_argument("--tensor-types", nargs='+', default=[x.name for x in AxdimmTensorType], choices=[x.name for x in AxdimmTensorType],
+                         help="Axdimm tensor types")
+-    parser.add_argument("--precompile", default=True, action="store_true", help="Precompile AXDIMM operation")
+     args = parser.parse_args()
+     if not validate_args(args):
+         log.info("Arguments validation failed")
+-- 
+2.34.1
+

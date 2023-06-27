@@ -1,0 +1,137 @@
+From 02a7fae8c206093ef0b4ee8dfad392e94080c3b1 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 2 Jun 2022 16:57:02 +0900
+Subject: [PATCH 05/33] Support shared tables layout in DLRM
+
+With shared tables layout one need to:
+
+1) Create it in parent process, get the handle.
+2) Pass it to 'SparseLengthsSumVec' operator as a parameter in
+   children.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ DeepRecSys.py            | 7 +++++--
+ inferenceEngine.py       | 5 +++--
+ models/dlrm_s_caffe2.py  | 9 ++++++---
+ run_DeepRecSys_axdimm.sh | 2 +-
+ 4 files changed, 15 insertions(+), 8 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index 6264ef3..b1524a2 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -44,8 +44,11 @@ def DeepRecSys():
+ 
+     # [AXDIMM caffe2 backend] Initialize AXDIMM for parent process
+     status = 0
++    shared_tables_uuid = "None"
+     if args.use_axdimm_caffe2_backend:
+-        status = workspace.AxdimmStarter(args.table_weight_path)
++        ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
++        shared_tables_uuid = workspace.AxdimmStarter(args.table_weight_path, ln_emb,
++                                                     args.arch_sparse_feature_size)
+ 
+     if (status != 0):
+         print("(axdimm) axd_starter didn't operate properly.")
+@@ -76,7 +79,7 @@ def DeepRecSys():
+                    )
+       else:
+         p = Process( target = inferenceEngine,
+-                     args   = (args, requestQueue, i, responseQueues[i], inferenceEngineReadyQueue)
++                     args   = (args, requestQueue, i, responseQueues[i], inferenceEngineReadyQueue, shared_tables_uuid)
+                    )
+       p.daemon = True
+       DeepRecEngines.append(p)
+diff --git a/inferenceEngine.py b/inferenceEngine.py
+index c91c54d..e733c03 100644
+--- a/inferenceEngine.py
++++ b/inferenceEngine.py
+@@ -101,7 +101,8 @@ def inferenceEngine(args,
+                     requestQueue=None,
+                     engine_id=None,
+                     responseQueue=None,
+-                    inferenceEngineReadyQueue=None):
++                    inferenceEngineReadyQueue=None,
++                    shared_tables_uuid="None"):
+ 
+   q_inference_logging = Queue()
+   q_inference_done    = Queue()
+@@ -126,7 +127,7 @@ def inferenceEngine(args,
+ 
+     # construct the neural network specified by command line arguments ###
+ 
+-    model = DLRM_Wrapper( args )
++    model = DLRM_Wrapper( args, shared_tables_uuid )
+     model.create(lX[0], lS_l[0], lS_i[0], lT[0])
+ 
+   elif args.model_type == "wnd":
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index 3afa357..541b4ec 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -88,6 +88,7 @@ class DLRM_Wrapper(object):
+     def __init__(
+         self,
+         cli_args,
++        shared_tables_uuid,
+         model=None,
+         tag=None,
+         enable_prof=False,
+@@ -141,13 +142,13 @@ class DLRM_Wrapper(object):
+ 
+         if self.args.queue:
+             with core.DeviceScope(device_opt):
+-                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof,
++                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, shared_tables_uuid,
+                                      id_qs = self.id_qs,
+                                      len_qs = self.len_qs,
+                                      fc_q   = self.fc_q)
+         else:
+             with core.DeviceScope(device_opt):
+-                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof)
++                self.dlrm = DLRM_Net(cli_args, model, tag, enable_prof, shared_tables_uuid)
+ 
+ 
+     def create(self, X, S_lengths, S_indices, T):
+@@ -346,7 +347,7 @@ class DLRM_Net(object):
+         if self.use_axdimm_caffe2_backend:
+             with core.DeviceScope(core.DeviceOption(caffe2_pb2.AXDIMM, 0)):
+                 EE = model.net.SparseLengthsSumVec([*tbl_s_combined, *ind_s_combined, *len_s_combined],
+-                                                   [sls_s_combined])
++                                                   [sls_s_combined], shared_tables_uuid=self.shared_tables_uuid)
+             emb_l.append(EE)
+ 
+         return emb_l, weights_l
+@@ -417,6 +418,7 @@ class DLRM_Net(object):
+         model=None,
+         tag=None,
+         enable_prof=False,
++        shared_tables_uuid="None",
+         id_qs = None,
+         len_qs = None,
+         fc_q  = None
+@@ -439,6 +441,7 @@ class DLRM_Net(object):
+         # setup AXDIMM device
+         # ##########################
+         self.use_axdimm_caffe2_backend = cli_args.use_axdimm_caffe2_backend
++        self.shared_tables_uuid = shared_tables_uuid
+ 
+         if cli_args.arch_interaction_op == "dot":
+             # approach 1: all
+diff --git a/run_DeepRecSys_axdimm.sh b/run_DeepRecSys_axdimm.sh
+index ee766a6..15cb165 100755
+--- a/run_DeepRecSys_axdimm.sh
++++ b/run_DeepRecSys_axdimm.sh
+@@ -73,7 +73,7 @@ accel_configs="96-128-192-256-384-512"
+ # accel_args="--accel_configs $accel_configs --model_accel"
+ accel_args=""
+ 
+-axdimm_args="--use_axdimm_caffe2_backend --table_weight_path /home/maxim.o/axdimm/axdimm_poc_fb/axdimm/deeprecsys_new/data/real"
++axdimm_args="--use_axdimm_caffe2_backend --table_weight_path /home/maxim.o/tables/table_emb_cs.0.weight.pt"
+ # axdimm_args=""
+ 
+ avg_arrival_rate=1
+-- 
+2.34.1
+

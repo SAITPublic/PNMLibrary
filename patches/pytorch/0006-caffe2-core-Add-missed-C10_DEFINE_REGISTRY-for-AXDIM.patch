@@ -1,0 +1,34 @@
+From e9e724dcb6d017b975f6b245622ba076adbc5fd7 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 16:53:23 +0900
+Subject: [PATCH 006/128] [caffe2/core] Add missed C10_DEFINE_REGISTRY for
+ AXDIMMOperatorRegistry
+
+Add missed AXDIMMOperatorRegistry definition.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/operator.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/caffe2/core/operator.cc b/caffe2/core/operator.cc
+index a978cfd1..57736ad8 100644
+--- a/caffe2/core/operator.cc
++++ b/caffe2/core/operator.cc
+@@ -408,6 +408,13 @@ C10_DEFINE_REGISTRY(
+     Workspace*);
+ CAFFE_REGISTER_DEVICE_TYPE(HIP, HIPOperatorRegistry);
+ 
++C10_DEFINE_REGISTRY(
++    AXDIMMOperatorRegistry,
++    OperatorBase,
++    const OperatorDef&,
++    Workspace*);
++CAFFE_REGISTER_DEVICE_TYPE(AXDIMM, AXDIMMOperatorRegistry);
++
+ C10_DEFINE_REGISTRY(
+     GradientRegistry,
+     GradientMakerBase,
+-- 
+2.34.1
+

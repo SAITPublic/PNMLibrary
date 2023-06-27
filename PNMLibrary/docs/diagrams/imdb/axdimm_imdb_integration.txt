@@ -1,0 +1,97 @@
+@startuml
+
+set namespaceSeparator ::
+
+interface PNMContext #lightblue
+class CXLContext implements PNMContext{
+}
+class SlsAxdimmContext implements PNMContext{
+}
+
+PNMContext o-- MemorySubsystem::Allocators::PNMMemAlloc
+
+namespace MemorySubsystem{
+
+    namespace Allocators{
+        interface PNMMemAlloc #lightblue{
+            + allocate()
+            + deallocate()
+        }
+        class CXLMemAlloc implements PNMMemAlloc{
+        }
+        class AxdimmMemAlloc implements PNMMemAlloc{
+        }
+    }
+
+    class MemoryBuffer #lightblue{
+    }
+
+    interface PNMMemory{
+    }
+
+    MemoryBuffer - ::PNMContext: Use to get allocator\nand device type
+
+    MemoryBuffer o-- PNMMemory
+
+    class AxdimmMemory implements PNMMemory{
+    }
+    
+    class CXLMemory implements PNMMemory{
+    }
+
+
+    class AxdimmTablesLayout #lightgreen
+    AxdimmTablesLayout o-- MemoryBuffer : aggregation of multiple object\nSLS Operation only
+}
+
+namespace Operators{
+ interface PNMOperator #lightblue{
+ }
+
+ class SLSOperator #lightgreen implements PNMOperator{
+ }
+
+ SLSOperator o-- MemorySubsystem::AxdimmTablesLayout: input
+ SLSOperator o-- MemorySubsystem::MemoryBuffer: output
+
+ class ScanBaseOperator implements PNMOperator{
+ }
+
+ ScanBaseOperator o-- MemorySubsystem::MemoryBuffer: input/output
+
+ ScanBaseOperator <|-- InRangeScan
+ ScanBaseOperator <|-- InListScan
+}
+
+namespace Device{
+    interface PNMDevice #lightblue{
+    }
+
+    interface AxdimmBaseDevice #lightgreen implements PNMDevice{
+    }
+    class AxdimmHardwareDevice #lightgreen
+    AxdimmBaseDevice <|-- AxdimmHardwareDevice
+
+    class AxdimmSimulatorDevice #lightgreen
+    AxdimmBaseDevice <|-- AxdimmSimulatorDevice
+
+    interface CXLBaseDevice implements PNMDevice{
+    }
+    CXLBaseDevice <|-- ImdbHardwareDevice
+    CXLBaseDevice <|-- ImdbSimulatorDevice
+}
+
+PNMContext o-- Device::PNMDevice
+
+namespace Execution{
+    interface PNMRunner  #lightblue
+
+    class AxdimmRunner implements PNMRunner
+    class CXLRunner implements PNMRunner
+}
+
+PNMContext o-- Execution::PNMRunner
+Execution::PNMRunner - Operators::PNMOperator: define operation
+Execution::PNMRunner - Device::PNMDevice: run operation/get result
+
+@enduml

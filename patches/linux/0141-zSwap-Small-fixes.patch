@@ -1,0 +1,91 @@
+From ab024d2ef1efbd169e7b052304a97f2aec21292f Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 20 Jul 2023 01:27:23 -0400
+Subject: [PATCH 141/161] [zSwap] Small fixes
+
+- Update PNM_HOW_TO_BUILD.md
+- Currently PNM_ZSWAP can be built like only builtin module,
+  so replace tristate option to bool
+- Set enabling logging by default
+- Fix demo application compilation
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md                                         | 4 ++++
+ drivers/pnm/Kconfig                                         | 2 +-
+ .../pnm/zswap/qemu/{cpp/mmadvice.cpp => demo/mmadvice.c}    | 6 +++---
+ scripts/pnm/zswap/qemu/pnm_sim_mode.sh                      | 2 +-
+ 4 files changed, 9 insertions(+), 5 deletions(-)
+ rename scripts/pnm/zswap/qemu/{cpp/mmadvice.cpp => demo/mmadvice.c} (88%)
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 52b29a9e4..6a4c52ebf 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -22,6 +22,10 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+       2. CXL (DEV_SLS_CXL) (NEW)
+     choice[1-2?]: -> choose between AXDIMM and CXL SLS
+ 
++CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y
++  Modify allocation policy in zbud allocator (PNM_ZSWAP_MODIFY_ZBUD) [Y/n/?] (NEW) y
++    A NUMA node index (PNM_ZSWAP_NUMA_NODE) [1] (NEW) 1
++
+ *
+ * IMDB Resource Manager
+ *
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 332ba5391..191cb4de4 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -10,7 +10,7 @@ config SLS_RESOURCE
+ 	  using sysfs interface.
+ 
+ config PNM_ZSWAP
+-    tristate "CXL-zSwap Devices Support"
++    bool "CXL-zSwap Devices Support"
+     default n
+ 	help
+ 	  Option to enable CXL-zSwap device
+diff --git a/scripts/pnm/zswap/qemu/cpp/mmadvice.cpp b/scripts/pnm/zswap/qemu/demo/mmadvice.c
+similarity index 88%
+rename from scripts/pnm/zswap/qemu/cpp/mmadvice.cpp
+rename to scripts/pnm/zswap/qemu/demo/mmadvice.c
+index ee4f1d2e1..5c741e92d 100644
+--- a/scripts/pnm/zswap/qemu/cpp/mmadvice.cpp
++++ b/scripts/pnm/zswap/qemu/demo/mmadvice.c
+@@ -24,8 +24,8 @@ int main(int argc, char **argv)
+ 	printf("Allocating %d pages to swap in/out\n", nr_pages);
+ 
+ 	/* allocate pages */
+-	addr = mmap(NULL, nr_pages * PG_SZ, PROT_READ | PROT_WRITE,
+-		    MAP_SHARED | MAP_ANONYMOUS, 0, 0);
++	addr = (char *)mmap(NULL, nr_pages * PG_SZ, PROT_READ | PROT_WRITE,
++			    MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+ 	*addr = 1;
+ 
+ 	/* initialize data in page to all '*' chars */
+@@ -51,7 +51,7 @@ int main(int argc, char **argv)
+ 
+ 				dump_ptr = (int64_t *)a;
+ 				for (int j = 0; j < 100; j++) {
+-					printf("  page %d data: %#llx\n", i,
++					printf("  page %d data: %#lx\n", i,
+ 					       *dump_ptr);
+ 					dump_ptr++;
+ 				}
+diff --git a/scripts/pnm/zswap/qemu/pnm_sim_mode.sh b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+index fc960420c..f88ce513e 100755
+--- a/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
++++ b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+@@ -14,7 +14,7 @@ function set_pnm_sim() {
+ 
+   # for logging
+   echo Y > /sys/module/pnm_sim/parameters/log_enabled
+-  #echo Y > /sys/module/compress_unit/parameters/log_enabled
++  echo Y > /sys/module/compress_unit/parameters/log_enabled
+ 
+   echo Y > /sys/module/pnm_sim/parameters/enabled
+ 
+-- 
+2.34.1
+

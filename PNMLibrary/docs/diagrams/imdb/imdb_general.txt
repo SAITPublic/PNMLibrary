@@ -1,0 +1,135 @@
+@startuml
+participant "API User" as User
+participant "IMDB Device API" as IMDBDev
+participant "IMDB Request Manager" as IMDBReq
+participant "Linux OS" as Linux
+participant "IMDB Device" as Device
+
+group Initialization
+User -> IMDBDev ++: Init Device
+    note over IMDBDev
+    MMAP device control registers
+    MMAP device memory
+    end note
+
+    IMDBDev -> Linux ++: mmap(..., open("/dev/mem", ...), BAR4_OFFSET)
+    return CXL_ADDR_BASE
+
+    IMDBDev -> IMDBDev: Init SFR CSRs
+
+    IMDBDev -> Linux ++: mmap(..., open("/dev/dax*", ...), 0)
+    return DAX_ADDR_BASE
+
+    IMDBDev -> IMDBReq: Init Request Manager
+    activate IMDBReq
+    IMDBDev -> IMDBReq: Create Request offload threads
+    IMDBDev -> IMDBReq: Create Request Monitor
+IMDBDev --> User --: Success or Fail
+end group
+
+group "DB Offload"
+User -> IMDBDev ++: Compressed DB Offload
+    IMDBDev -> IMDBDev ++: Allocate memory for DB\nstart from DAX_ADDR_BASE
+    return DAX_MEM_PTR
+    IMDBDev -> Linux++: memcpy(DAX_MEM_PTR, CompressedDB , ...)
+        Linux -> Device++: write via CXL.mem
+        return
+    return
+return Success or Fail
+end group
+
+group "InRange scan request"
+User -> IMDBDev ++: Scan in range [from, to]
+
+IMDBDev -> IMDBDev ++: Allocate result buffer
+    IMDBDev -> Linux ++: Allocate region in /dev/dax*
+    return IV_BV_buffer
+return IV_BV_Buffer
+
+IMDBDev -> IMDBReq : InRange Scan Request\n[from, to]
+
+IMDBReq -> IMDBReq ++: Fetch Request from queue
+    IMDBReq -> Linux ++: Configure CSRs registers
+        Linux -> Device ++: write via CXL.io
+        return
+    return
+
+    IMDBReq -> Linux ++: Start scan
+        Linux -> Device ++: write via CLX.io
+        return
+    return
+
+    loop While engine state not DONE
+        IMDBReq -> IMDBReq ++: Read CRSs registers
+            Linux -> Device ++: read via CLX.io
+            return
+        return
+    end loop
+
+return Result is ready
+
+IMDBDev -> IMDBReq ++: Wait for result
+return
+
+IMDBDev -> Linux ++: Read result from IV_BV_Buffer\nmemcpy(Result, IV_BV_Buffer)
+    Linux -> Device ++: read via CXL.mem
+    return
+return
+
+return Result (IV or BV)
+end group
+
+group "InList scan request"
+User -> IMDBDev ++: Scan in Predictor
+
+IMDBDev -> IMDBDev ++: Allocate result buffer
+    IMDBDev -> Linux ++: Allocate region in /dev/dax*
+    return IV_BV_buffer
+return IV_BV_Buffer
+
+IMDBDev -> IMDBDev ++: Allocate predictor buffer
+    IMDBDev -> Linux ++: Allocate region in /dev/dax*
+    return predictor_mem
+return predictor_mem
+
+IMDBDev -> Linux ++: memcpy(predictor_mem, Predictor)
+    Linux -> Device ++: write via CXL.mem
+    return
+return
+
+IMDBDev -> IMDBReq : InList Scan Request\npredictor_mem
+
+IMDBReq -> IMDBReq ++: Fetch Request from queue
+    IMDBReq -> Linux ++: Configure CSRs registers
+        Linux -> Device ++: write via CXL.io
+        return
+    return
+
+    IMDBReq -> Linux ++: Start scan
+        Linux -> Device ++: write via CLX.io
+        return
+    return
+
+    loop While engine state not DONE
+        IMDBReq -> IMDBReq ++: Read CRSs registers
+            Linux -> Device ++: read via CLX.io
+            return
+        return
+    end loop
+
+return Result is ready
+
+IMDBDev -> IMDBReq ++: Wait for result
+return
+
+IMDBDev -> Linux ++: Read result from IV_BV_Buffer\nmemcpy(Result, IV_BV_Buffer)
+    Linux -> Device ++: read via CXL.mem
+    return
+return
+
+return Result (IV or BV)
+end group
+
+deactivate IMDBReq
+
+@enduml

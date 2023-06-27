@@ -1,0 +1,47 @@
+From 98872f5b384df6ab7bde36546bf8dccdb5f9916b Mon Sep 17 00:00:00 2001
+From: Valentin Iliushin <v.iliushin@partner.samsung.com>
+Date: Thu, 3 Aug 2023 13:20:14 +0000
+Subject: [PATCH 156/161] [hotfix] Fix checkpatch
+
+Fix checkpatch problems from PR#133
+
+Signed-off-by: Valentin Iliushin <v.iliushin@partner.samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index abcadcd21..b8beab2f7 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -381,11 +381,10 @@ int pnm_compress_unit(void *p)
+ 			commit_out->offset = unit->inst.offset;
+ 
+ 			/* update the state of pnm unit */
+-			if (status == 0) {
++			if (status == 0)
+ 				WRITE_ONCE(commit_out->status, CXL_PNM_SUCCESS);
+-			} else {
++			else
+ 				WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
+-			}
+ 
+ 			WRITE_ONCE(unit->state, DONE);
+ 			WRITE_ONCE(unit->done, true);
+@@ -517,11 +516,10 @@ int pnm_decompress_unit(void *p)
+ 			commit_out->offset = unit->inst.offset;
+ 
+ 			/* update the state of pnm unit */
+-			if (status == 0) {
++			if (status == 0)
+ 				WRITE_ONCE(commit_out->status, CXL_PNM_SUCCESS);
+-			} else {
++			else
+ 				WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
+-			}
+ 
+ 			WRITE_ONCE(unit->state, DONE);
+ 			WRITE_ONCE(unit->done, true);
+-- 
+2.34.1
+

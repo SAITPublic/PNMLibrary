@@ -1,0 +1,45 @@
+From cc8bf4f37a837f38ccaefc4face46f54d4f483c0 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Tue, 28 Jun 2022 18:51:42 +0300
+Subject: [PATCH 051/128] [secure] Fix secure library calls (#5)
+
+Make `init` call compatible with new api.
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_sec_axdimm.cc | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+index 2469382d..eaa71246 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_axdimm.cc
+@@ -9,13 +9,11 @@
+ #include "ai/api/axdimm.h"
+ 
+ #include "secure/plain/axdimm_secure.h"
++#include "secure/plain/devices/trivial_cpu.h"
+ 
+ #include <fcntl.h>
+ #include <sys/mman.h>
+ 
+-#include <algorithm>
+-#include <vector>
+-
+ namespace caffe2 {
+ 
+ // Compile type helper to resolve types for sls operator
+@@ -164,7 +162,9 @@ class AXDIMMSecureSparseLengthsReductionOpVec : public Operator<Context> {
+       uint64_t sparse_feature_size,
+       axdimm::common_view<const uint64_t> rows,
+       axdimm::common_view<const secure_core_value_type> data) {
+-    runner_.init(rows, sparse_feature_size);
++    axdimm::secure::DeviceArguments args(axdimm::secure::TrivialCPUArgs{
++        .rows = rows, .sparse_feature_size = sparse_feature_size});
++    runner_.init(&args);
+     runner_.load_tables(data.begin(), rows, sparse_feature_size, false);
+   }
+ 
+-- 
+2.34.1
+

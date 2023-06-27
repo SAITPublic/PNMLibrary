@@ -1,0 +1,309 @@
+From 6ab488bd197002bc2a40f335ae45fddae83d556c Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Wed, 2 Nov 2022 16:22:36 +0300
+Subject: [PATCH 10/23] Add tests for secure pytorch aximm tensors
+
+Tests don't perform exact comparison
+and use precision tolerance threshold,
+since secure operators can lose precision
+in a process of converting to integer values
+and that error can accumulate during SLS process
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ axdimm_utils.py   |  50 +++++++++++++++
+ test_axdimm_op.py | 151 ++++++++++++++++++++++++++++++----------------
+ 2 files changed, 148 insertions(+), 53 deletions(-)
+ create mode 100644 axdimm_utils.py
+
+diff --git a/axdimm_utils.py b/axdimm_utils.py
+new file mode 100644
+index 0000000..51fcbc9
+--- /dev/null
++++ b/axdimm_utils.py
+@@ -0,0 +1,50 @@
++import torch
++
++import enum
++
++class AxdimmTensorType(enum.Enum):
++    simple = enum.auto()
++    secure = enum.auto()
++    secure_tagged = enum.auto()
++    secure_sgx = enum.auto()
++    secure_sgx_tagged = enum.auto()
++    
++    def __str__(self):
++        return self.name
++
++to_internal_type = {
++    AxdimmTensorType.simple.name: AxdimmTensorType.simple.name,
++    AxdimmTensorType.simple.secure.name: AxdimmTensorType.simple.secure.name,
++    AxdimmTensorType.simple.secure_tagged.name: AxdimmTensorType.simple.secure.name,
++    AxdimmTensorType.simple.secure_sgx.name: AxdimmTensorType.simple.secure_sgx.name,
++    AxdimmTensorType.simple.secure_sgx_tagged.name: AxdimmTensorType.simple.secure_sgx.name
++}
++    
++class AxdimmAllocPreference(enum.Enum):
++    auto = 0
++    replicate = 1
++    distribute = 2
++
++    def __str__(self):
++        return self.name
++
++def get_enum(enum_class, name):
++    val = getattr(enum_class, str(name), None)
++    if val is None:
++        raise ValueError("Failed to convert {} to enum of type {}".format(name, enum_class.__name__))
++
++    return val
++
++def create_axdimm_tensor_from_file(tensor_type, path, scalar_type, rows, num_tables, sp_size, precompile = True, alloc_pref = AxdimmAllocPreference.distribute):
++    with_tag = True if "tagged" in str(tensor_type) else False
++    tensor_type = to_internal_type.get(get_enum(AxdimmTensorType, tensor_type).name)
++    alloc_pref_val = get_enum(AxdimmAllocPreference, alloc_pref).value
++
++    return torch.ops.axdimm.create_tensor(tensor_type, path, scalar_type, rows, num_tables, sp_size, alloc_pref_val, precompile, with_tag)
++
++def create_axdimm_tensor(tensor_type, weights, precompile = True, alloc_pref = AxdimmAllocPreference.distribute):
++    with_tag = True if "tagged" in str(tensor_type) else False
++    tensor_type = to_internal_type.get(get_enum(AxdimmTensorType, tensor_type).name)
++    alloc_pref_val = get_enum(AxdimmAllocPreference, alloc_pref).value
++
++    return torch.ops.axdimm.create_tensor(tensor_type, weights, weights.size(0), weights.size(1), weights.size(2), alloc_pref_val, precompile, with_tag)
+diff --git a/test_axdimm_op.py b/test_axdimm_op.py
+index 7488518..70ffcfc 100644
+--- a/test_axdimm_op.py
++++ b/test_axdimm_op.py
+@@ -1,5 +1,9 @@
+ import argparse
++from enum import Enum
++import logging
++import math
+ import numpy as np
++import os
+ import torch
+ import sys
+ import torch.autograd.profiler as profiler
+@@ -7,7 +11,19 @@ import torch.autograd.profiler as profiler
+ from torch.nn import EmbeddingBag, EmbeddingBagAxdimm
+ from random import randint
+ 
++from axdimm_utils import *
++
++log = logging.getLogger()
++log.setLevel(logging.INFO)
++handler = logging.StreamHandler(sys.stdout)
++formatter = logging.Formatter('[%(asctime)s]:%(process)s %(pathname)s:%(lineno)d %(levelname)s: %(message)s','%m-%d %H:%M:%S')
++handler.setFormatter(formatter)
++log.addHandler(handler)
++
++torch.set_printoptions(precision=10)
++
+ class AxdimmEmbeddingsTest:
++    tensor_types: set # set of tensor names to test
+     tables_num: int # Numer of tables
+     table_len: int # Number of features in single table
+     sparse_feature_size: int # Number of elements in 1 feature
+@@ -18,19 +34,35 @@ class AxdimmEmbeddingsTest:
+     tables: list # 2d list of tables
+     indices: list # 2d list of indices per table
+     offsets: list # 2d list of offsets per table
++    random_lookups: bool # Each lookup length in batch will be random
++    fixed_lookups_len: int # Length of fixed lookup (ignored if random_lookups is True)
++    result_tolerance: float # Tolerable deviation of result values
+ 
+-    def __init__(self, tables_num, table_len, sp_size, mb_size, i_min, i_max, i_len):
+-        self.tables_num = tables_num
+-        self.table_len = table_len
+-        self.sparse_feature_size = sp_size
+-        self.minibatch_size = mb_size
+-        self.i_min = i_min
+-        self.i_max = i_max
+-        self.i_len = i_len
++    def __init__(self, args):
++        self.tensor_types = set(args.tensor_types) # only unique values
++        self.tables_num = args.tables_num
++        self.table_len = args.table_len
++        self.sparse_feature_size = args.sparse_feature_size
++        self.minibatch_size = args.minibatch_size
++        self.i_min = args.index_min
++        self.i_max = args.index_max
++        self.i_len = args.max_index_len
++        self.random_lookups = args.randomize_lookups_len
++        self.fixed_lookups_len = args.fixed_lookups_len
++        self.result_tolerance = args.result_tolerance
++        self.precompile = args.precompile
+         self.gen_test_data()
+     
+     def gen_indices(self):
+-        return [randint(self.i_min, self.i_max) for x in range(0, randint(self.minibatch_size, self.i_len))]
++        indices = []
++        if self.random_lookups:
++            indices_per_batch_gen = lambda: randint(1, self.i_len)
++        else:
++            indices_per_batch_gen = lambda: self.fixed_lookups_len
++        for i in range(self.minibatch_size):
++            for j in range(indices_per_batch_gen()):
++                indices.append(randint(self.i_min, self.i_max))
++        return indices
+ 
+     def gen_offsets(self):
+         # offsets are repsresented like set of distances i.e. [0, 20, 60, 90] -> [20, 40, 30] - lenghts
+@@ -54,7 +86,7 @@ class AxdimmEmbeddingsTest:
+ 
+     def gen_tables(self):
+         return [np.random.uniform(
+-            low=-np.sqrt(1 / 100), high=np.sqrt(1 / 100), size=(self.table_len, self.sparse_feature_size)
++            low=0.5, high=1.0, size=(self.table_len, self.sparse_feature_size)
+         ).astype(np.float32) for x in range(0, self.tables_num)]
+ 
+     def gen_test_data(self):
+@@ -63,74 +95,81 @@ class AxdimmEmbeddingsTest:
+         self.offsets = self.gen_offsets()
+ 
+     def check_results(self, cpu_res, axdimm_res):
+-        print("Validating results...")
++        log.info("Validating results...")
+         for table_idx in range(0, self.tables_num):
+             for batch_idx in range(0, self.minibatch_size):
+-                # Tensor with comparison results of each element i.e. [ True, True, False, True ]
+-                comp_res = cpu_res[table_idx][batch_idx] == axdimm_res[table_idx][batch_idx]
+-                # If at least one element is not equal - test failed
+-                if False in comp_res:
+-                    print("Test failed. CPU and AXDIMM results are not equal")
+-                    print("CPU result:\n", cpu_res[table_idx][batch_idx])
+-                    print("AXDIMM result:\n", axdimm_res[table_idx][batch_idx])
+-                    return False
++                for cpu_val, axdimm_val in zip(cpu_res[table_idx][batch_idx], axdimm_res[table_idx][batch_idx]):
++                    # If at least one element is not close enough - test failed
++                    if not math.isclose(cpu_val.item(), axdimm_val.item(), rel_tol=self.result_tolerance):
++                        log.info("Test failed. CPU and AXDIMM results are not equal")
++                        log.info("CPU result:\n", cpu_res[table_idx][batch_idx])
++                        log.info("AXDIMM result:\n", axdimm_res[table_idx][batch_idx])
++                        return False
+         return True
+ 
+ 
+     def run_test(self):
+-        print("Running EmbeddingBag calculations")
++        log.info("Running EmbeddingBag calculations")
+         cpu_ops = [EmbeddingBag.from_pretrained(torch.tensor(self.tables[i], dtype=torch.float32), mode='sum') for i in range(0, self.tables_num)]
+         # CPU version doesn't require last offset, since it knows size of index bag
+         # AXDIMM requires it because indices must be flat 2D list of all indices bags
+         # So size of each bag can't be determined from indices bags list
+         with profiler.profile(with_stack=True, profile_memory=True) as cpu_prof:
+             cpu_res = [cpu_ops[i](torch.tensor(self.indices[i], dtype=torch.int32), torch.tensor(self.offsets[i][:-1], dtype=torch.int32)) for i in range(0, self.tables_num)]
+-        print("Running EmbeddingBagAxdimm calculations")
+-        print("Preparing data...")
+-        op = EmbeddingBagAxdimm(torch.tensor(self.tables, dtype=torch.float32, device="axdimm"))
++        log.info("CPU profiling results:" + os.linesep + cpu_prof.key_averages(group_by_stack_n=10).table(sort_by='self_cpu_time_total', row_limit=10))
++        log.info("Running EmbeddingBagAxdimm calculations")
++        log.info("Preparing data...")
+         axdimm_indices = []
+         for i_bag in self.indices:
+             axdimm_indices.extend(i_bag)
+-        print("Running AXDIMM...")
+-        with profiler.profile(with_stack=True, profile_memory=True) as axdimm_prof:
+-            axdimm_res = op(torch.tensor(axdimm_indices, dtype=torch.int32), torch.tensor(self.offsets, dtype=torch.int32))
+-
+-        print("CPU profling results:")
+-        print(cpu_prof.key_averages(group_by_stack_n=10).table(sort_by='self_cpu_time_total', row_limit=10))
+-        print("AXDIMM  profling results:")
+-        print(axdimm_prof.key_averages(group_by_stack_n=10).table(sort_by='self_cpu_time_total', row_limit=10))
+-
+-        if self.check_results(cpu_res, axdimm_res):
+-            print("Test completed successfully")
+-            return True
+-        else:
+-            print("Test failed")
+-            return False
++        indices_tensor = torch.tensor(axdimm_indices, dtype=torch.int32)
++        offsets_tensor = torch.tensor(self.offsets, dtype=torch.int32)
++        for tensor_type in self.tensor_types:
++            log.info("Loading weights for tensor type: %s" % tensor_type)
++            op = EmbeddingBagAxdimm(create_axdimm_tensor(tensor_type, self.tables, self.precompile))
++            log.info("Running AXDIMM...")
++            with profiler.profile(with_stack=True, profile_memory=True) as axdimm_prof:
++                axdimm_res = op(indices_tensor, offsets_tensor)
++                del op
++
++            log.info("AXDIMM %s profiling results:" % tensor_type + os.linesep + axdimm_prof.key_averages(group_by_stack_n=10).table(sort_by='self_cpu_time_total', row_limit=10))
++
++            if self.check_results(cpu_res, axdimm_res):
++                log.info("Test completed successfully")
++            else:
++                log.info("Test failed")
++                return False
++        return True
+ 
+ def validate_args(args):
+     help_msg = "%s is invalid. See --help for details"
+     if args.sparse_feature_size < 16:
+-        print(help_msg % "sparse-feature-size")
++        log.info(help_msg % "sparse-feature-size")
+         return False
+-    elif args.minibatch_size < 0:
+-        print(help_msg % "minibatch-size")
++    elif args.minibatch_size <= 0:
++        log.info(help_msg % "minibatch-size")
+         return False
+-    elif args.tables_num < 0:
+-        print(help_msg % "tables-num")
++    elif args.tables_num <= 0:
++        log.info(help_msg % "tables-num")
+         return False
+-    elif args.table_len < 0:
+-        print(help_msg % "table-len")
++    elif args.table_len <= 0:
++        log.info(help_msg % "table-len")
+         return False
+     elif args.index_min < 0 or args.index_min > args.index_max:
+-        print(help_msg % "index-min")
++        log.info(help_msg % "index-min")
+         return False
+-    elif args.index_max < 0 or args.index_max >= args.table_len:
+-        print(help_msg % "index-max")
++    elif args.index_max <= 0 or args.index_max >= args.table_len:
++        log.info(help_msg % "index-max")
+         return False
+-    elif args.max_index_len < args.minibatch_size or args.max_index_len > args.table_len:
+-        print(help_msg % "max-index-len")
++    elif args.max_index_len <= args.minibatch_size or args.max_index_len > args.table_len:
++        log.info(help_msg % "max-index-len")
++        return False
++    elif args.fixed_lookups_len <= 0:
++        log.info(help_msg % "fixed-lookups-len")
++        return False
++    elif args.result_tolerance < 0:
++        log.info(help_msg % "result-tolerance")
+         return False
+-
+     return True
+ 
+     
+@@ -145,10 +184,16 @@ if __name__ == "__main__":
+     parser.add_argument("--index-min", type=int, default=1, help="Min index value, must be >= 0 and < index-max")
+     parser.add_argument("--index-max", type=int, default=499999, help="Max index value, must be > 0 and > index-min and < table-len")
+     parser.add_argument("--max-index-len", type=int, default=1000, help="Max index length per table, must be > minibatch_size and < table-len")
++    parser.add_argument("--randomize-lookups-len", default=False, action="store_true", help="Pick random lookup length for each table batch")
++    parser.add_argument("--fixed-lookups-len", type=int, default=40, help="Fixed length for not randomized lookups, must be > 0")
++    parser.add_argument("--result-tolerance", type=float, default=0.001, help="Result precision tolerance, must be > 0")
++    parser.add_argument("--tensor-types", nargs='+', default=[x.name for x in AxdimmTensorType], choices=[x.name for x in AxdimmTensorType],
++                        help="Axdimm tensor types")
++    parser.add_argument("--precompile", default=True, action="store_true", help="Precompile AXDIMM operation")
+     args = parser.parse_args()
+     if not validate_args(args):
+-        print("Arguments validation failed")
++        log.info("Arguments validation failed")
+         sys.exit(-1)
+-    test = AxdimmEmbeddingsTest(args.tables_num, args.table_len, args.sparse_feature_size, args.minibatch_size, args.index_min, args.index_max, args.max_index_len)
++    test = AxdimmEmbeddingsTest(args)
+     if not test.run_test():
+         sys.exit(-1)
+-- 
+2.34.1
+

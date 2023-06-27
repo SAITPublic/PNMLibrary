@@ -1,0 +1,20 @@
+*        text=auto
+
+*.c      text
+*.cc     text
+*.cmake  text
+*.cpp    text
+*.def    text
+*.groovy text
+*.h      text
+*.hpp    text
+*.inc    text
+*.json   text
+*.md     text
+*.patch  text
+*.py     text
+*.sh     text
+*.txt    text
+
+*.pdf    binary
+*.png    binary

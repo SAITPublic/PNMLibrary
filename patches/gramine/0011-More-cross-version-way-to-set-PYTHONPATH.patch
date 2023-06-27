@@ -1,0 +1,23 @@
+From 3b06efdff4bf319f7b431470ee34248b35017d22 Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Tue, 8 Nov 2022 14:02:23 +0000
+Subject: [PATCH 11/27] More cross-version way to set PYTHONPATH
+
+---
+ CI-Scripts/env.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/CI-Scripts/env.sh b/CI-Scripts/env.sh
+index fa14188d..300be650 100755
+--- a/CI-Scripts/env.sh
++++ b/CI-Scripts/env.sh
+@@ -5,5 +5,5 @@ ROOT_DIR=`realpath $SCRIPT_DIR/../`
+ BIN_DIR="$ROOT_DIR/gramine-bin"
+ 
+ export PATH=$PATH:"$BIN_DIR/bin"
+-export PYTHONPATH=$PYTHONPATH:"$BIN_DIR/lib/python3.8/site-packages"
++export PYTHONPATH=$PYTHONPATH:"$BIN_DIR/lib/`readlink /usr/bin/python3`/site-packages"
+ export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:"$BIN_DIR/lib/x86_64-linux-gnu/pkgconfig"
+-- 
+2.34.1
+

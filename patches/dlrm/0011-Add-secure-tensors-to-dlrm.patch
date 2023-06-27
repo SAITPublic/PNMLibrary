@@ -1,0 +1,196 @@
+From e93d0802480f396859343438248594cc70ab855a Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 12 Nov 2022 18:14:06 +0300
+Subject: [PATCH 11/23] Add secure tensors to dlrm
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ dlrm_s_pytorch.py | 61 ++++++++++++++++++++++++++++++++---------------
+ run_test.sh       | 23 ++++++++++++++++--
+ 2 files changed, 63 insertions(+), 21 deletions(-)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index f30ef17..7a35b3b 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -62,6 +62,8 @@ import json
+ import sys
+ import time
+ 
++from enum import Enum
++
+ # onnx
+ # The onnx import causes deprecation warnings every time workers
+ # are spawned during testing. So, we filter out those warnings.
+@@ -70,6 +72,8 @@ import warnings
+ # data generation
+ import dlrm_data_pytorch as dp
+ 
++from axdimm_utils import *
++
+ # For distributed run
+ import extend_distributed as ext_dist
+ import mlperf_logger
+@@ -235,28 +239,40 @@ class DLRM_Net(nn.Module):
+         return torch.nn.Sequential(*layers)
+ 
+     def create_axdimm_emb(self, m, ln):
++        print("Creating AXDIMM tensor of type:", self.axdimm_tensor_type)
++        from_file = True if self.axdimm_tensor_type == AxdimmTensorType.secure_tagged.name \
++        or self.axdimm_tensor_type == AxdimmTensorType.secure_sgx_tagged.name else False
+         axdimm_weights = []
+         v_W_l = []
+-        # accumulate all tables in single 3D tensor:
+-        # 1st dim - tables number
+-        # 2nd dim - features number per table
+-        # 3rd dim - sparse feature size
++        rows = []
+         for i in range(0, ln.size):
+             if ext_dist.my_size > 1:
+                 if i not in self.local_emb_indices:
+                     continue
+             n = ln[i]
+             v_W_l.append(None)
+-            W = np.random.uniform(
+-                low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
+-            ).astype(np.float32)
+-            axdimm_weights.append(W)
+-        torch_ten = torch.from_numpy(np.asarray(axdimm_weights))
+-        return EmbeddingBagAxdimm(torch.tensor(torch_ten, dtype=torch.float32, device="axdimm"),
+-                                               precompile=True), v_W_l
++            if from_file:
++                rows.append(ln[i])
++            else:
++                W = np.random.uniform(
++                    low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
++                ).astype(np.float32)
++                # accumulate all tables in single 3D tensor:
++                # 1st dim - tables number
++                # 2nd dim - features number per table
++                # 3rd dim - sparse feature size
++                axdimm_weights.append(W)
++
++        if from_file:
++            op = EmbeddingBagAxdimm(create_axdimm_tensor_from_file(self.axdimm_tensor_type, self.weights_path, torch.float32,
++                                                                   torch.tensor(rows, dtype=torch.int32), len(rows), m))
++        else:
++            torch_ten = torch.from_numpy(np.asarray(axdimm_weights))
++            op = EmbeddingBagAxdimm(create_axdimm_tensor(self.axdimm_tensor_type, torch_ten))
++        return op, v_W_l
+ 
+     def create_emb(self, m, ln, weighted_pooling=None):
+-        if self.use_axdimm:
++        if self.axdimm_tensor_type is not None:
+             if weighted_pooling:
+                 raise RuntimeError("Weighted pooling is not suported with AXDIMM device")
+             return self.create_axdimm_emb(m, ln)
+@@ -329,7 +345,8 @@ class DLRM_Net(nn.Module):
+         md_threshold=200,
+         weighted_pooling=None,
+         loss_function="bce",
+-        use_axdimm=False,
++        axdimm_tensor_type=None,
++        weights_path=None
+     ):
+         super(DLRM_Net, self).__init__()
+ 
+@@ -342,7 +359,8 @@ class DLRM_Net(nn.Module):
+         ):
+ 
+             # save arguments
+-            self.use_axdimm = use_axdimm
++            self.axdimm_tensor_type = axdimm_tensor_type
++            self.weights_path = weights_path
+             self.ndevices = ndevices
+             self.output_d = 0
+             self.parallel_model_batch_size = -1
+@@ -431,7 +449,7 @@ class DLRM_Net(nn.Module):
+         # 3. for a list of embedding tables there is a list of batched lookups
+ 
+         ly = []
+-        if self.use_axdimm:
++        if self.axdimm_tensor_type is not None:
+             # Run Axdimm SLS
+             axdimm_res = emb_l(lS_i, lS_o)
+             # offsets are repsresented like set of distances i.e. [0, 20, 60, 90] -> [20, 40, 30] - lenghts
+@@ -806,7 +824,7 @@ def inference(
+     # measurements.
+     test_loads = []
+     for i, testBatch in enumerate(test_ld):
+-        if dlrm.use_axdimm:
++        if dlrm.axdimm_tensor_type is not None:
+             axdimm_offsets = []
+             axdimm_indices = torch.as_tensor(torch.cat(testBatch[2]), dtype=torch.int32)
+             for sparse_offsets_group_batch, sparse_indices_group_batch in zip(testBatch[1], testBatch[2]):
+@@ -1068,7 +1086,11 @@ def run():
+     parser.add_argument("--lr-num-warmup-steps", type=int, default=0)
+     parser.add_argument("--lr-decay-start-step", type=int, default=0)
+     parser.add_argument("--lr-num-decay-steps", type=int, default=0)
+-    parser.add_argument("--use-axdimm", action="store_true", default=False)
++    parser.add_argument("--use-axdimm", required=False,
++                        choices=[x.name for x in AxdimmTensorType],
++                        help="Axdimm tensor type")
++    parser.add_argument("--weights-path", required=False,
++                        help="Embedding weights file path")
+ 
+     global args
+     global nbatches
+@@ -1121,7 +1143,7 @@ def run():
+ 
+     use_gpu = args.use_gpu and torch.cuda.is_available()
+     use_axdimm = False
+-    if args.use_axdimm:
++    if args.use_axdimm is not None:
+         if not torch.is_axdimm_available():
+             raise RuntimeError("AXDIMM requested, but PyTorch was compiled without AXDIMM support")
+         if not args.inference_only:
+@@ -1350,7 +1372,8 @@ def run():
+         md_threshold=args.md_threshold,
+         weighted_pooling=args.weighted_pooling,
+         loss_function=args.loss_function,
+-        use_axdimm=args.use_axdimm
++        axdimm_tensor_type=args.use_axdimm,
++        weights_path=args.weights_path
+     )
+ 
+     # test prints
+diff --git a/run_test.sh b/run_test.sh
+index 7a2c843..2a6b8ba 100755
+--- a/run_test.sh
++++ b/run_test.sh
+@@ -8,9 +8,28 @@ arch_mlp_top="256-64-1"
+ sparse_feature_size=16
+ mini_batch_size=256
+ num_indices_per_lookup=40
++num_indices_per_lookup_fixed=1
+ interaction_op="cat"
+ num_batches=100
++axdimm_tensor_type="simple"
++weights_path="/var/lib/jenkins/workspace/axdimm_ci/input/DLRM_FLOAT/embedded.bin"
++
++while [ "$#" -ne 0 ]
++do
++    case "$1" in
++    "--weights-path")
++        shift
++        weights_path=$1
++        ;;
++    "--use-axdimm")
++        shift
++        axdimm_tensor_type=$1
++        ;;
++esac
++    shift
++done
+ 
+ python3 ./dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
+-                            --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed=1 \
+-                            --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" --inference-only --use-axdimm
++                            --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed="$num_indices_per_lookup_fixed" \
++                            --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" \
++                            --use-axdimm "$axdimm_tensor_type" --weights-path "$weights_path" --inference-only
+-- 
+2.34.1
+

@@ -1,0 +1,290 @@
+From ed70c540ee91cc48b30358fd6ef9c502bd5c11ce Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 25 Jul 2023 21:26:56 -0400
+Subject: [PATCH 150/161] [zSwap] Make pnm_zswapsim a dynamic module
+
+- cleanup pnm_cxl_sim module,
+remove extra init/exit functions,
+remove extra license, authtors and description macros
+- Add KConfig flag for sim module
+- Add modprobe to initialization script
+- Fix module exit
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md                    |  1 +
+ drivers/pnm/Kconfig                    | 11 +++++++++
+ drivers/pnm/Makefile                   |  2 +-
+ drivers/pnm/zswap/Makefile             |  2 +-
+ drivers/pnm/zswap/compressor.c         |  4 ----
+ drivers/pnm/zswap/device.c             | 26 ++++++++++++++++++--
+ drivers/pnm/zswap/sim.c                | 18 +++-----------
+ drivers/pnm/zswap/sim.h                |  2 ++
+ lib/pnm/pnm_zswap_lib.c                |  2 ++
+ mm/pnm/pnm_zswap.c                     |  4 ++--
+ scripts/pnm/zswap/qemu/pnm_sim_mode.sh | 33 +++++++++++++++-----------
+ 11 files changed, 66 insertions(+), 39 deletions(-)
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 6a4c52ebf..ed80412c3 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -23,6 +23,7 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+     choice[1-2?]: -> choose between AXDIMM and CXL SLS
+ 
+ CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y
++  CXL-zSwap simulator (PNM_ZSWAP_SIM) [Y/n/m/?] (NEW) m
+   Modify allocation policy in zbud allocator (PNM_ZSWAP_MODIFY_ZBUD) [Y/n/?] (NEW) y
+     A NUMA node index (PNM_ZSWAP_NUMA_NODE) [1] (NEW) 1
+ 
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 48c1c25ba..40cbd56bb 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -19,6 +19,17 @@ config PNM_ZSWAP
+ 	  option allows to create zswap-related devices and enables build
+ 	  of kernel zswap-pnm library.
+ 
++config PNM_ZSWAP_SIM
++    tristate "CXL-zSwap simulator"
++    depends on PNM_ZSWAP
++    default y
++    help
++      Option to enable CXL-zSwap device simulator
++
++      This option enable CXL-zSwap device simulator module.
++      The simulator can be loaded dynamically as functional simulator
++      or performance simulator.
++
+ config PNM_ZSWAP_MODIFY_ZBUD
+     bool "Modify allocation policy in zbud allocator"
+     depends on PNM_ZSWAP
+diff --git a/drivers/pnm/Makefile b/drivers/pnm/Makefile
+index 0d2cd5252..2554cc453 100644
+--- a/drivers/pnm/Makefile
++++ b/drivers/pnm/Makefile
+@@ -2,4 +2,4 @@
+ 
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource/
+ obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource/
+-obj-$(CONFIG_PNM_ZSWAP) += zswap/
++obj-$(CONFIG_PNM_ZSWAP_SIM) += zswap/
+diff --git a/drivers/pnm/zswap/Makefile b/drivers/pnm/zswap/Makefile
+index 167bde9e7..6541f974f 100644
+--- a/drivers/pnm/zswap/Makefile
++++ b/drivers/pnm/zswap/Makefile
+@@ -1,6 +1,6 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+-obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap_sim.o
++obj-$(CONFIG_PNM_ZSWAP_SIM) += pnm_zswap_sim.o
+ 
+ pnm_zswap_sim-y := device.o
+ pnm_zswap_sim-y += sim.o
+diff --git a/drivers/pnm/zswap/compressor.c b/drivers/pnm/zswap/compressor.c
+index ac870f38a..cbac005aa 100644
+--- a/drivers/pnm/zswap/compressor.c
++++ b/drivers/pnm/zswap/compressor.c
+@@ -390,7 +390,3 @@ int pnm_decompress_sim(struct unit_info *unit, void __iomem *hidden_pool)
+ 
+ 	return 0;
+ }
+-
+-MODULE_AUTHOR("Samsung");
+-MODULE_LICENSE("GPL");
+-MODULE_DESCRIPTION("compression unit");
+diff --git a/drivers/pnm/zswap/device.c b/drivers/pnm/zswap/device.c
+index 175428540..874e7f8af 100644
+--- a/drivers/pnm/zswap/device.c
++++ b/drivers/pnm/zswap/device.c
+@@ -491,7 +491,23 @@ MODULE_ALIAS("zcxl-pnm");
+ 
+ static int cxl_pnm_drv_run(const char *val, const struct kernel_param *kp)
+ {
+-	int ret = 0;
++	const bool old_state = pnm_drv_enabled;
++	int ret = param_set_bool(val, kp);
++
++	if (ret) {
++		pr_info("[pnm_drv] wrong string value:  %s",
++			val ? val : "null");
++		return ret;
++	}
++
++	if (old_state == pnm_drv_enabled)
++		return 0;
++
++	//[TODO: s-motov] add logic for disabling sim
++	if (!pnm_drv_enabled) {
++		pnm_drv_enabled = old_state; // Restore previous value
++		return 0;
++	}
+ 
+ 	pr_info("[pnm_drv]: %s\n", __func__);
+ 
+@@ -510,7 +526,7 @@ static int cxl_pnm_drv_run(const char *val, const struct kernel_param *kp)
+ 		pr_err("[pnm_drv]: dma_request_chann failed\n");
+ #endif
+ 
+-	return param_set_bool(val, kp);
++	return 0;
+ }
+ 
+ static int __init pnm_drv_init(void)
+@@ -523,6 +539,12 @@ static int __init pnm_drv_init(void)
+ static void __exit pnm_drv_exit(void)
+ {
+ 	struct pnm_device *pnmdev = internal_dev;
++
++	if (!pnm_drv_enabled)
++		return;
++
++	cxl_pnm_sim_exit();
++
+ 	// unmap physical memory
+ 	iounmap(pnmdev->uncache_mem_base_addr);
+ 	iounmap(pnmdev->cache_mem_base_addr);
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 55807d7d4..3d9abbef4 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -512,12 +512,6 @@ int pnm_decompress_unit(void *p)
+ 	return 0;
+ }
+ 
+-static int __init cxl_pnm_sim_init(void)
+-{
+-	pr_info("[pnm_sim] simulator loaded!\n");
+-	return 0;
+-}
+-
+ static void cxl_pnm_sim_shutdown(void)
+ {
+ 	int i;
+@@ -532,10 +526,11 @@ static void cxl_pnm_sim_shutdown(void)
+ 	WRITE_ONCE(sim_is_active, false);
+ }
+ 
+-static void __exit cxl_pnm_sim_exit(void)
++void cxl_pnm_sim_exit(void)
+ {
+ 	pr_info("[pnm_sim] simulator exit!\n");
+-	cxl_pnm_sim_shutdown();
++	if (sim_is_active)
++		cxl_pnm_sim_shutdown();
+ }
+ 
+ /* initialization for queues in PNM
+@@ -714,10 +709,3 @@ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ 
+ 	return 0;
+ }
+-
+-module_init(cxl_pnm_sim_init);
+-module_exit(cxl_pnm_sim_exit);
+-
+-MODULE_AUTHOR("Samsung");
+-MODULE_LICENSE("GPL");
+-MODULE_DESCRIPTION("PNM zswap simulator");
+diff --git a/drivers/pnm/zswap/sim.h b/drivers/pnm/zswap/sim.h
+index 49c65fbed..2f9f07752 100644
+--- a/drivers/pnm/zswap/sim.h
++++ b/drivers/pnm/zswap/sim.h
+@@ -14,6 +14,8 @@ extern bool log_enabled;
+ /* for cxl sim perf API */
+ int cxl_pnm_offload(struct instruction *fetched_inst, size_t *out_len);
+ 
++void cxl_pnm_sim_exit(void);
++
+ #define MAX_UNIT 8
+ 
+ /* TODO: These parameters are set for qemu.
+diff --git a/lib/pnm/pnm_zswap_lib.c b/lib/pnm/pnm_zswap_lib.c
+index eab8d983a..1368ea4cf 100644
+--- a/lib/pnm/pnm_zswap_lib.c
++++ b/lib/pnm/pnm_zswap_lib.c
+@@ -262,3 +262,5 @@ int dma_copy_page(struct page *src_page, struct page *dst_page)
+ 	return ret;
+ }
+ #endif
++
++MODULE_LICENSE("GPL");
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index e8f5fc0f9..ec006a468 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1680,5 +1680,5 @@ static int __init init_cxl_zswap(void)
+ late_initcall(init_cxl_zswap);
+ 
+ MODULE_LICENSE("GPL");
+-MODULE_AUTHOR("Seth Jennings <sjennings@variantweb.net>");
+-MODULE_DESCRIPTION("Compressed cache for swap pages");
++MODULE_AUTHOR("Samsung");
++MODULE_DESCRIPTION("Accelerator module for compressed cache for swap pages");
+diff --git a/scripts/pnm/zswap/qemu/pnm_sim_mode.sh b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+index b1cb0a81a..1a03e4b34 100755
+--- a/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
++++ b/scripts/pnm/zswap/qemu/pnm_sim_mode.sh
+@@ -1,21 +1,26 @@
+ #!/bin/bash
+ # SPDX-License-Identifier: GPL-2.0
+ 
++PNM_ZSWAP_SIM=pnm_zswap_sim
++PNM_ZSWAP=pnm_zswap
++
+ # Set pnm simulator
+ function set_pnm_sim() {
+-  echo Y > /sys/module/pnm_zswap_sim/parameters/pnm_drv_enabled
++  modprobe $PNM_ZSWAP_SIM
++
++  echo Y > /sys/module/${PNM_ZSWAP_SIM}/parameters/pnm_drv_enabled
+ 
+   # the number of pnm units
+-  echo 4 > /sys/module/pnm_zswap_sim/parameters/num_comp_unit
+-  echo 4 > /sys/module/pnm_zswap_sim/parameters/num_dcomp_unit
++  echo 4 > /sys/module/${PNM_ZSWAP_SIM}/parameters/num_comp_unit
++  echo 4 > /sys/module/${PNM_ZSWAP_SIM}/parameters/num_dcomp_unit
+ 
+   # set core affinity of kthreads for pnm units
+-  echo 8 > /sys/module/pnm_zswap_sim/parameters/pnm_core
++  echo 8 > /sys/module/${PNM_ZSWAP_SIM}/parameters/pnm_core
+ 
+   # for logging
+-  echo Y > /sys/module/pnm_zswap_sim/parameters/log_enabled
++  echo Y > /sys/module/${PNM_ZSWAP_SIM}/parameters/log_enabled
+ 
+-  echo Y > /sys/module/pnm_zswap_sim/parameters/enabled
++  echo Y > /sys/module/${PNM_ZSWAP_SIM}/parameters/enabled
+ 
+   echo 300 > /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
+   echo 1 > /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress
+@@ -24,18 +29,18 @@ function set_pnm_sim() {
+ 
+ # Set cxl_zswap
+ function set_cxl_zswap() {
+-  echo 1 > /sys/module/pnm_zswap/parameters/cxl_mem_node
+-  echo pnm > /sys/module/pnm_zswap/parameters/pnm_accel
+-  echo 20 > /sys/module/pnm_zswap/parameters/max_pool_percent
+-  echo zbud > /sys/module/pnm_zswap/parameters/zpool
+-  echo 90 > /sys/module/pnm_zswap/parameters/accept_threshold_percent
++  echo 1 > /sys/module/${PNM_ZSWAP}/parameters/cxl_mem_node
++  echo pnm > /sys/module/${PNM_ZSWAP}/parameters/pnm_accel
++  echo 20 > /sys/module/${PNM_ZSWAP}/parameters/max_pool_percent
++  echo zbud > /sys/module/${PNM_ZSWAP}/parameters/zpool
++  echo 90 > /sys/module/${PNM_ZSWAP}/parameters/accept_threshold_percent
+ 
+-  echo Y > /sys/module/pnm_zswap/parameters/pnm_enabled
+-  echo Y > /sys/module/pnm_zswap/parameters/enabled
++  echo Y > /sys/module/${PNM_ZSWAP}/parameters/pnm_enabled
++  echo Y > /sys/module/${PNM_ZSWAP}/parameters/enabled
+ 
+   echo 100 > /proc/sys/vm/swappiness
+ 
+-  grep -R . /sys/kernel/debug/pnm_zswap
++  grep -R . /sys/kernel/debug/${PNM_ZSWAP}
+ }
+ 
+ # Set environment for profiling
+-- 
+2.34.1
+

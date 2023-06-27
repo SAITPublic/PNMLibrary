@@ -1,0 +1,55 @@
+From f6d3b2cfe7bc602df43b785c27e10b1e94316cf7 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Mon, 22 Aug 2022 19:58:32 +0300
+Subject: [PATCH 15/33] Support rank parallelization
+
+Implement rank parallelization within one AXDIMM process in case of
+AXDIMM_DISTRIBUTE_ALL memory policy.
+
+Introduce ExecutionPool that aggregates producer/consumer object and action
+queue to perform asynchronous sls run.
+
+Resolve: AXDIMM-360
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ utils/utils.py | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/utils/utils.py b/utils/utils.py
+index 6e7d82d..14452a3 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -133,6 +133,15 @@ def cli():
+     parser.add_argument('--use_axdimm_caffe2_backend', action="store_true", default=False)
+     parser.add_argument("--table_weight_path", type=str, default="./pretrained/real_0.5M_120table")
+ 
++    mem_help = "Set the memory preference for AXDIMM"
++
++    # Available memory preference (According to axd_user_preferences enum from libaxdimm.h):
++    # auto - AXDIMM_ALLOC_AUTO
++    # replicate - AXDIMM_ALLOC_REPLICATE_ALL
++    # distribute - AXDIMM_ALLOC_DISTRIBUTE_ALL
++    mem_pref_id = {"auto" : 0, "replicate" : 1, "distribute" : 2}
++    parser.add_argument("--mem_preference_str", type=str, choices=mem_pref_id.keys(), default=None, help=mem_help)
++
+     # =========================================================================================
+     # AXDIMM SecNDP configuration
+     # =========================================================================================
+@@ -144,6 +153,13 @@ def cli():
+ 
+     args = parser.parse_args()
+ 
++    # Memory preference wasn't set, so get it from number of inference engines
++    if not args.mem_preference_str:
++      args.mem_preference_str = "distribute" if args.inference_engines == 1 else "replicate"
++
++    # Convert memory preference to id
++    args.mem_preference = mem_pref_id[args.mem_preference_str]
++
+     if args.model_type == "din":
+       table_sizes = list(np.fromstring(args.arch_embedding_size, dtype=int, sep="-"))
+       user_profile_table = table_sizes[0]
+-- 
+2.34.1
+

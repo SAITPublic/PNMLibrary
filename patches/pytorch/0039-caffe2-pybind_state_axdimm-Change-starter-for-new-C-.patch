@@ -1,0 +1,78 @@
+From aa55042ecba24407a3c5a10e9dd2e3ada5208b86 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 28 Apr 2022 16:00:59 +0900
+Subject: [PATCH 039/128] [caffe2/pybind_state_axdimm] Change starter for new
+ C++ API
+
+Now `axdimm_starter' just creates shared state and tables loading
+is performed from memory by `axdimm_write_rank_data'.
+In favor of minimal changes in DLRM, `AxdimmStarter' still handles
+loading from file, the implementation just moved to pybind_state_axdimm
+from AXDIMM control library.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/python/pybind_state_axdimm.cc | 32 +++++++++++++++++++++++++---
+ 1 file changed, 29 insertions(+), 3 deletions(-)
+
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 1bd75b35..43e18e52 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -16,9 +16,32 @@
+ 
+ #include "api/axdimm.h"
+ 
++#include <fcntl.h>
++#include <unistd.h>
++#include <sys/mman.h>
++
+ namespace {
+ static axdimm::DeviceContext* device_context = nullptr;
++
++axd_status_e load_tables(
++    axdimm::DeviceContext& device_context,
++    const std::string& weight_file) {
++  int fd = ::open(weight_file.c_str(), O_RDONLY);
++
++  if (fd < 0) {
++    std::cerr << "Error opening " << weight_file << std::endl;
++    return AXDIMM_FAILURE;
++  }
++
++  auto file_size = lseek(fd, 0, SEEK_END);
++  void* addr =
++      mmap(nullptr, file_size, PROT_READ, MAP_FILE | MAP_SHARED, fd, 0);
++
++  axdimm::axdimm_write_rank_data(device_context, addr, file_size, 0xf);
++  munmap(addr, file_size);
++  return AXDIMM_SUCCESS;
+ }
++} // namespace
+ 
+ namespace caffe2 {
+ namespace python {
+@@ -36,14 +59,17 @@ REGISTER_BLOB_FEEDER(AXDIMM, TensorFeeder<AXDIMMContext>);
+ namespace py = pybind11;
+ 
+ void addAXDIMMGlobalMethods(py::module& m) {
+-  m.def("axdimm_starter", [](const std::string& weight_path) {
++  m.def("axdimm_starter", [](const std::string& weight_file) {
+     CAFFE_ENFORCE_EQ(
+         nullptr,
+         device_context,
+         "Multiple AXDIMM device contexts are not supported.");
+     device_context = axdimm::create_device_context();
+-    return static_cast<int>(
+-        axdimm::axdimm_starter(device_context, weight_path));
++    axd_status_e status = axdimm::axdimm_starter(device_context);
++    if (status != AXDIMM_SUCCESS) {
++      return static_cast<int>(status);
++    }
++    return static_cast<int>(load_tables(*device_context, weight_file));
+   });
+   m.def("axdimm_closer", []() {
+     int status = static_cast<int>(axdimm::axdimm_closer(device_context));
+-- 
+2.34.1
+

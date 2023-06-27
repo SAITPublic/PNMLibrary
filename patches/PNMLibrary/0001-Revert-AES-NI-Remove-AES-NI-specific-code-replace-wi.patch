@@ -1,0 +1,303 @@
+From d1668f5ed0aab50c1edc68b893b38f7ab505ee83 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 27 Sep 2023 00:14:10 +0000
+Subject: [PATCH] Revert "[AES-NI] Remove AES-NI specific code, replace with
+ exception"
+
+This reverts commit 4a8852f513681af19506cee82e2c3fd5e55e1c3a.
+---
+ secure/encryption/AES/key_exp128.h | 63 ++++++++++++++++++++---
+ secure/encryption/AES/key_exp192.h | 77 ++++++++++++++++++++++++----
+ secure/encryption/AES/key_exp256.h | 82 ++++++++++++++++++++++++++----
+ 3 files changed, 194 insertions(+), 28 deletions(-)
+
+diff --git a/secure/encryption/AES/key_exp128.h b/secure/encryption/AES/key_exp128.h
+index 94e83625..e7d5a11c 100644
+--- a/secure/encryption/AES/key_exp128.h
++++ b/secure/encryption/AES/key_exp128.h
+@@ -8,24 +8,71 @@
+  * electronic, mechanical, manual or otherwise, or disclosed to third parties
+  * without the express written permission of Samsung Electronics.
+  *
++ * This file is based on Apache powered software which levereges compiler
++ * intrinsics to generate Intel AES NI instructions for fast AES
++ * encryption/decryption.
+  */
+ 
+ #ifndef SLS_AES_KEY_EXP128_H
+ #define SLS_AES_KEY_EXP128_H
+ 
+-#include "common/make_error.h"
+-
+ #include <emmintrin.h>
+ #include <wmmintrin.h>
+ 
+-inline __m128i AES_128_ASSIST([[maybe_unused]] __m128i temp1,
+-                              [[maybe_unused]] __m128i temp2) {
+-  throw pnm::error::make_not_sup("AES-NI is not supported!");
++// Legacy from INTEL white papers.
++// Intel® Advanced Encryption Standard (AES) New Instructions Set
++// https://www.intel.com/content/dam/doc/white-paper/advanced-encryption-standard-new-instructions-set-paper.pdf
++
++inline __m128i AES_128_ASSIST(__m128i temp1, __m128i temp2) {
++  __m128i temp3;
++  temp2 = _mm_shuffle_epi32(temp2, 0xff);
++  temp3 = _mm_slli_si128(temp1, 0x4);
++  temp1 = _mm_xor_si128(temp1, temp3);
++  temp3 = _mm_slli_si128(temp3, 0x4);
++  temp1 = _mm_xor_si128(temp1, temp3);
++  temp3 = _mm_slli_si128(temp3, 0x4);
++  temp1 = _mm_xor_si128(temp1, temp3);
++  temp1 = _mm_xor_si128(temp1, temp2);
++  return temp1;
+ }
+ 
+-inline void AES_128_Key_Expansion([[maybe_unused]] const unsigned char *userkey,
+-                                  [[maybe_unused]] unsigned char *key) {
+-  throw pnm::error::make_not_sup("AES-NI is not supported!");
++inline void AES_128_Key_Expansion(const unsigned char *userkey,
++                                  unsigned char *key) {
++  __m128i temp1, temp2;
++  auto *Key_Schedule = (__m128i *)key;
++
++  temp1 = _mm_loadu_si128((__m128i *)userkey);
++  Key_Schedule[0] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x1);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[1] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x2);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[2] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x4);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[3] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x8);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[4] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x10);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[5] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x20);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[6] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x40);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[7] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x80);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[8] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x1b);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[9] = temp1;
++  temp2 = _mm_aeskeygenassist_si128(temp1, 0x36);
++  temp1 = AES_128_ASSIST(temp1, temp2);
++  Key_Schedule[10] = temp1;
+ }
+ 
+ #endif // SLS_AES_KEY_EXP128_H
+diff --git a/secure/encryption/AES/key_exp192.h b/secure/encryption/AES/key_exp192.h
+index b7dbee36..52c98385 100644
+--- a/secure/encryption/AES/key_exp192.h
++++ b/secure/encryption/AES/key_exp192.h
+@@ -8,25 +8,84 @@
+  * electronic, mechanical, manual or otherwise, or disclosed to third parties
+  * without the express written permission of Samsung Electronics.
+  *
++ * This file is based on Apache powered software which levereges compiler
++ * intrinsics to generate Intel AES NI instructions for fast AES
++ * encryption/decryption.
+  */
+ 
+ #ifndef SLS_AES_KEY_EXP192_H
+ #define SLS_AES_KEY_EXP192_H
+ 
+-#include "common/make_error.h"
+-
+ #include <emmintrin.h>
+ #include <wmmintrin.h>
+ 
+-inline void KEY_192_ASSIST([[maybe_unused]] __m128i *temp1,
+-                           [[maybe_unused]] __m128i *temp2,
+-                           [[maybe_unused]] __m128i *temp3) {
+-  throw pnm::error::make_not_sup("AES-NI is not supported!");
++// Legacy from INTEL white papers.
++// Intel® Advanced Encryption Standard (AES) New Instructions Set
++// https://www.intel.com/content/dam/doc/white-paper/advanced-encryption-standard-new-instructions-set-paper.pdf
++
++inline void KEY_192_ASSIST(__m128i *temp1, __m128i *temp2, __m128i *temp3) {
++  __m128i temp4;
++  *temp2 = _mm_shuffle_epi32(*temp2, 0x55);
++  temp4 = _mm_slli_si128(*temp1, 0x4);
++  *temp1 = _mm_xor_si128(*temp1, temp4);
++  temp4 = _mm_slli_si128(temp4, 0x4);
++  *temp1 = _mm_xor_si128(*temp1, temp4);
++  temp4 = _mm_slli_si128(temp4, 0x4);
++  *temp1 = _mm_xor_si128(*temp1, temp4);
++  *temp1 = _mm_xor_si128(*temp1, *temp2);
++  *temp2 = _mm_shuffle_epi32(*temp1, 0xff);
++  temp4 = _mm_slli_si128(*temp3, 0x4);
++  *temp3 = _mm_xor_si128(*temp3, temp4);
++  *temp3 = _mm_xor_si128(*temp3, *temp2);
+ }
+ 
+-inline void AES_192_Key_Expansion([[maybe_unused]] const unsigned char *userkey,
+-                                  [[maybe_unused]] unsigned char *key) {
+-  throw pnm::error::make_not_sup("AES-NI is not supported!");
++inline void AES_192_Key_Expansion(const unsigned char *userkey,
++                                  unsigned char *key) {
++  __m128i temp1, temp2, temp3;
++  [[maybe_unused]] __m128i
++      temp4; // From Intel white paper. Remove in future if it's safe
++  auto *Key_Schedule = (__m128i *)key;
++
++  temp1 = _mm_loadu_si128((__m128i *)userkey);
++  temp3 = _mm_loadu_si64((__m128i *)(userkey + 16));
++
++  Key_Schedule[0] = temp1;
++  Key_Schedule[1] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x1);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[1] =
++      (__m128i)_mm_shuffle_pd((__m128d)Key_Schedule[1], (__m128d)temp1, 0);
++  Key_Schedule[2] = (__m128i)_mm_shuffle_pd((__m128d)temp1, (__m128d)temp3, 1);
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x2);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[3] = temp1;
++  Key_Schedule[4] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x4);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[4] =
++      (__m128i)_mm_shuffle_pd((__m128d)Key_Schedule[4], (__m128d)temp1, 0);
++  Key_Schedule[5] = (__m128i)_mm_shuffle_pd((__m128d)temp1, (__m128d)temp3, 1);
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x8);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[6] = temp1;
++  Key_Schedule[7] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x10);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[7] =
++      (__m128i)_mm_shuffle_pd((__m128d)Key_Schedule[7], (__m128d)temp1, 0);
++  Key_Schedule[8] = (__m128i)_mm_shuffle_pd((__m128d)temp1, (__m128d)temp3, 1);
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x20);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[9] = temp1;
++  Key_Schedule[10] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x40);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[10] =
++      (__m128i)_mm_shuffle_pd((__m128d)Key_Schedule[10], (__m128d)temp1, 0);
++  Key_Schedule[11] = (__m128i)_mm_shuffle_pd((__m128d)temp1, (__m128d)temp3, 1);
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x80);
++  KEY_192_ASSIST(&temp1, &temp2, &temp3);
++  Key_Schedule[12] = temp1;
+ }
+ 
+ #endif // SLS_AES_KEY_EXP192_H
+diff --git a/secure/encryption/AES/key_exp256.h b/secure/encryption/AES/key_exp256.h
+index 1a0a158f..216b7f0a 100644
+--- a/secure/encryption/AES/key_exp256.h
++++ b/secure/encryption/AES/key_exp256.h
+@@ -8,29 +8,89 @@
+  * electronic, mechanical, manual or otherwise, or disclosed to third parties
+  * without the express written permission of Samsung Electronics.
+  *
++ * This file is based on Apache powered software which levereges compiler
++ * intrinsics to generate Intel AES NI instructions for fast AES
++ * encryption/decryption.
+  */
+ 
+ #ifndef SLS_AES_KEY_EXP256_H
+ #define SLS_AES_KEY_EXP256_H
+ 
+-#include "common/make_error.h"
+-
+ #include <emmintrin.h>
+ #include <wmmintrin.h>
+ 
+-inline void KEY_256_ASSIST_1([[maybe_unused]] __m128i *temp1,
+-                             [[maybe_unused]] __m128i *temp2) {
+-  throw pnm::error::make_not_sup("AES-NI is not supported!");
++// Legacy from INTEL white papers.
++// Intel® Advanced Encryption Standard (AES) New Instructions Set
++// https://www.intel.com/content/dam/doc/white-paper/advanced-encryption-standard-new-instructions-set-paper.pdf
++
++inline void KEY_256_ASSIST_1(__m128i *temp1, __m128i *temp2) {
++  __m128i temp4;
++  *temp2 = _mm_shuffle_epi32(*temp2, 0xff);
++  temp4 = _mm_slli_si128(*temp1, 0x4);
++  *temp1 = _mm_xor_si128(*temp1, temp4);
++  temp4 = _mm_slli_si128(temp4, 0x4);
++  *temp1 = _mm_xor_si128(*temp1, temp4);
++  temp4 = _mm_slli_si128(temp4, 0x4);
++  *temp1 = _mm_xor_si128(*temp1, temp4);
++  *temp1 = _mm_xor_si128(*temp1, *temp2);
+ }
+ 
+-inline void KEY_256_ASSIST_2([[maybe_unused]] __m128i *temp1,
+-                             [[maybe_unused]] __m128i *temp3) {
+-  throw pnm::error::make_not_sup("AES-NI is not supported!");
++inline void KEY_256_ASSIST_2(__m128i *temp1, __m128i *temp3) {
++  __m128i temp2, temp4;
++  temp4 = _mm_aeskeygenassist_si128(*temp1, 0x0);
++  temp2 = _mm_shuffle_epi32(temp4, 0xaa);
++  temp4 = _mm_slli_si128(*temp3, 0x4);
++  *temp3 = _mm_xor_si128(*temp3, temp4);
++  temp4 = _mm_slli_si128(temp4, 0x4);
++  *temp3 = _mm_xor_si128(*temp3, temp4);
++  temp4 = _mm_slli_si128(temp4, 0x4);
++  *temp3 = _mm_xor_si128(*temp3, temp4);
++  *temp3 = _mm_xor_si128(*temp3, temp2);
+ }
+ 
+-inline void AES_256_Key_Expansion([[maybe_unused]] const unsigned char *userkey,
+-                                  [[maybe_unused]] unsigned char *key) {
+-  throw pnm::error::make_not_sup("AES-NI is not supported!");
++inline void AES_256_Key_Expansion(const unsigned char *userkey,
++                                  unsigned char *key) {
++  __m128i temp1, temp2, temp3;
++  auto *Key_Schedule = (__m128i *)key;
++
++  temp1 = _mm_loadu_si128((__m128i *)userkey);
++  temp3 = _mm_loadu_si128((__m128i *)(userkey + 16));
++  Key_Schedule[0] = temp1;
++  Key_Schedule[1] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x01);
++  KEY_256_ASSIST_1(&temp1, &temp2);
++
++  Key_Schedule[2] = temp1;
++  KEY_256_ASSIST_2(&temp1, &temp3);
++  Key_Schedule[3] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x02);
++  KEY_256_ASSIST_1(&temp1, &temp2);
++  Key_Schedule[4] = temp1;
++  KEY_256_ASSIST_2(&temp1, &temp3);
++  Key_Schedule[5] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x04);
++  KEY_256_ASSIST_1(&temp1, &temp2);
++  Key_Schedule[6] = temp1;
++  KEY_256_ASSIST_2(&temp1, &temp3);
++  Key_Schedule[7] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x08);
++  KEY_256_ASSIST_1(&temp1, &temp2);
++  Key_Schedule[8] = temp1;
++  KEY_256_ASSIST_2(&temp1, &temp3);
++  Key_Schedule[9] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x10);
++  KEY_256_ASSIST_1(&temp1, &temp2);
++  Key_Schedule[10] = temp1;
++  KEY_256_ASSIST_2(&temp1, &temp3);
++  Key_Schedule[11] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x20);
++  KEY_256_ASSIST_1(&temp1, &temp2);
++  Key_Schedule[12] = temp1;
++  KEY_256_ASSIST_2(&temp1, &temp3);
++  Key_Schedule[13] = temp3;
++  temp2 = _mm_aeskeygenassist_si128(temp3, 0x40);
++  KEY_256_ASSIST_1(&temp1, &temp2);
++  Key_Schedule[14] = temp1;
+ }
+ 
+ #endif // SLS_AES_KEY_EXP256_H
+-- 
+2.34.1
+

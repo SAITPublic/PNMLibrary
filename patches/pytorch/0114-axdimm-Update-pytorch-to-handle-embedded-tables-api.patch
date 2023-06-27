@@ -1,0 +1,485 @@
+From 8872460aa84f84357545dc5d7302a04205867462 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Tue, 21 Mar 2023 12:17:05 +0300
+Subject: [PATCH 114/128] [axdimm] Update pytorch to handle embedded tables'
+ api
+
+Update axdimm operator to fit the new API with embedded tables.
+
+Resolve: MCS23-640
+---
+ CMakeLists.txt                                |  4 +-
+ .../src/ATen/native/axdimm/AxdimmBaseTensor.h |  4 +
+ .../native/axdimm/AxdimmDeviceContext.cpp     | 14 +---
+ .../ATen/native/axdimm/AxdimmDeviceContext.h  |  4 +-
+ aten/src/ATen/native/axdimm/AxdimmTensor.cpp  | 36 +++------
+ aten/src/ATen/native/axdimm/AxdimmTensor.h    | 42 ++---------
+ caffe2/CMakeLists.txt                         |  3 +
+ .../operators/lengths_reducer_ops_axdimm.cc   | 52 ++++++-------
+ caffe2/python/pybind_state_axdimm.cc          | 75 ++++++++-----------
+ 9 files changed, 87 insertions(+), 147 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7c73d2b9..75bf43a3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -316,8 +316,10 @@ cmake_dependent_option(
+     "USE_UCC" OFF)
+ cmake_dependent_option(
+     USE_C10D_UCC "USE C10D UCC" ON "USE_DISTRIBUTED;USE_UCC" OFF)
++# temporary linkage error fix until update to pytorch 2.0
++# [TODO @y-lavrinenko MCS23-749]: Upstream pytorch to version 2.0
+ cmake_dependent_option(
+-    USE_GLOO "Use Gloo. Only available if USE_DISTRIBUTED is on." ON
++    USE_GLOO "Use Gloo. Only available if USE_DISTRIBUTED is on." OFF
+     "USE_DISTRIBUTED" OFF)
+ cmake_dependent_option(
+   USE_GLOO_WITH_OPENSSL "Use Gloo with OpenSSL. Only available if USE_GLOO is on." OFF
+diff --git a/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+index 6f7e47ec..2b3bcb39 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmBaseTensor.h
+@@ -126,6 +126,10 @@ class AxdimmBaseTensor {
+     return AxdimmDeviceContext::device();
+   }
+ 
++  pnm::ContextHandler& get_pnm_context() const {
++    return AxdimmDeviceContext::context();
++  }
++
+  private:
+   void check_params() const {
+     TORCH_CHECK(
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+index b58f0dec..f3b4f0e7 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.cpp
+@@ -2,9 +2,6 @@
+ 
+ #include <ATen/native/axdimm/AxdimmDeviceContext.h>
+ 
+-#include <functional>
+-#include <memory>
+-
+ namespace at {
+ namespace native {
+ namespace axdimm {
+@@ -14,14 +11,9 @@ Device& AxdimmDeviceContext::device() {
+   return static_device;
+ }
+ 
+-void AxdimmDeviceContext::write_rank_data(
+-    const void* data,
+-    uint64_t layout_handle) {
+-  const auto* layout =
+-      axdimm_get_tables_layout(device().internal(), layout_handle);
+-  TORCH_CHECK(
+-      layout, "Failed to get AXDIMM layout for handle: ", layout_handle);
+-  axdimm_write_rank_data(device().internal(), data, layout);
++pnm::ContextHandler& AxdimmDeviceContext::context() {
++  static auto context = pnm::make_context(pnm::ContextType::AXDIMM);
++  return context;
+ }
+ 
+ } // namespace axdimm
+diff --git a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+index 78941b2c..0dacb64a 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
++++ b/aten/src/ATen/native/axdimm/AxdimmDeviceContext.h
+@@ -2,6 +2,7 @@
+ #define __AXDIMM_DEVICE_CONTEXT__
+ 
+ #include <pnmlib/core/axdimm_device.h>
++#include <pnmlib/core/context.h>
+ 
+ #include <c10/util/Exception.h>
+ 
+@@ -15,8 +16,9 @@ using Device = AxdimmDevice;
+ 
+ class AxdimmDeviceContext {
+  public:
+-  static void write_rank_data(const void* data, uint64_t layout_handle);
+   static Device& device();
++
++  static pnm::ContextHandler& context();
+ };
+ 
+ } // namespace axdimm
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+index d9f8b324..7a00865d 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.cpp
+@@ -71,32 +71,20 @@ AxdimmTensor::AxdimmTensor(
+   load(mmap_weights_file());
+ }
+ 
+-AxdimmLayoutWrapper::~AxdimmLayoutWrapper() {
+-  try {
+-    axdimm_deallocate_tables(device_.internal(), layout_handle_);
+-  } catch (pnm::error::Base& e) {
+-    LOG(ERROR) << "Failed to deallocate tables for handle: " << layout_handle_
+-               << ". Got error: " << e.what();
+-  }
+-
+-  if (layout_) {
+-    axdimm_destroy_tables_layout(layout_);
+-  }
+-}
+-
+ void AxdimmTensor::load(const void* weights_data) {
+   sls_type_ = ::get_sls_type(scalar_type_);
+-  layout_ = std::make_shared<AxdimmLayoutWrapper>(
+-      get_device(),
+-      axdimm_allocate_tables(
+-          get_device().internal(),
+-          tables_rows_num_.data(),
+-          num_tables_,
+-          sparse_feature_size_ *
+-              c10::scalarTypeToTypeMeta(scalar_type_).itemsize(),
+-          preference_));
+-  AxdimmDeviceContext::write_rank_data(
+-      weights_data, layout_->get_layout_handle());
++
++  auto tables_size =
++      std::accumulate(tables_rows_num_.begin(), tables_rows_num_.end(), 0ULL);
++  tables_size *=
++      sparse_feature_size_ * c10::scalarTypeToTypeMeta(scalar_type_).itemsize();
++
++  tables_ = pnm::memory::EmbeddedTables::create(
++      pnm::make_view(static_cast<const uint8_t*>(weights_data), tables_size),
++      tables_rows_num_,
++      sparse_feature_size_ * c10::scalarTypeToTypeMeta(scalar_type_).itemsize(),
++      get_pnm_context(),
++      preference_);
+ }
+ 
+ } // namespace axdimm
+diff --git a/aten/src/ATen/native/axdimm/AxdimmTensor.h b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+index 8ed1ef12..c37720ca 100644
+--- a/aten/src/ATen/native/axdimm/AxdimmTensor.h
++++ b/aten/src/ATen/native/axdimm/AxdimmTensor.h
+@@ -2,6 +2,8 @@
+ #define __AXDIMM_TENSOR__
+ 
+ #include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/embedded_tables.h>
++#include <pnmlib/ai/sls_type.h>
+ #include <pnmlib/core/axdimm_device.h>
+ 
+ #include <ATen/ATen.h>
+@@ -18,38 +20,6 @@ namespace axdimm {
+ 
+ void verify(const at::TensorOptions& options);
+ 
+-/*! Used as encapsulated handle for AxdimmOpaqueTensor, which implements
+- * OpaqueTensor interface. Encapsulates device specific data and operations
+- */
+-class AxdimmLayoutWrapper {
+- public:
+-  AxdimmLayoutWrapper(AxdimmDevice& device, uint64_t layout_handle)
+-      : device_(device),
+-        layout_handle_(layout_handle),
+-        layout_(axdimm_get_tables_layout(device_.internal(), layout_handle_)) {
+-    TORCH_CHECK(
+-        layout_,
+-        "Failed to get AXDIMM tables layout for handle: ",
+-        layout_handle)
+-  }
+-
+-  ~AxdimmLayoutWrapper();
+-
+-  const AxdimmTablesLayout* get_tables_layout() const {
+-    TORCH_INTERNAL_ASSERT(layout_);
+-    return layout_;
+-  }
+-
+-  uint64_t get_layout_handle() const {
+-    return layout_handle_;
+-  }
+-
+- private:
+-  AxdimmDevice& device_;
+-  uint64_t layout_handle_;
+-  AxdimmTablesLayout* layout_;
+-};
+-
+ //! This class represents internal at::Tensor handle, for device specific logic
+ //! implementation
+ class AxdimmTensor : public AxdimmBaseTensor {
+@@ -73,8 +43,8 @@ class AxdimmTensor : public AxdimmBaseTensor {
+       uint32_t sparse_feature_size,
+       axd_user_preferences preference = AXDIMM_ALLOC_DISTRIBUTE_ALL);
+ 
+-  const AxdimmTablesLayout* get_tables_layout() const {
+-    return layout_->get_tables_layout();
++  const pnm::memory::EmbeddedTables* get_tables_layout() const {
++    return tables_.get();
+   }
+ 
+   SLSType get_sls_type() const {
+@@ -84,9 +54,7 @@ class AxdimmTensor : public AxdimmBaseTensor {
+  private:
+   void load(const void* weights_data);
+ 
+-  // shared_ptr to be able to copy this tensor as many times as required and
+-  // deallocate tables when last tensor is destroyed
+-  std::shared_ptr<AxdimmLayoutWrapper> layout_;
++  pnm::memory::EmbeddedTablesHandler tables_;
+   SLSType sls_type_{};
+ };
+ 
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 152a9b1a..7b04bab0 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -984,6 +984,7 @@ elseif(USE_CUDA)
+ elseif(USE_AXDIMM)
+   add_library(torch_axdimm ${Caffe2_AXDIMM_SRCS})
+   set_property(TARGET torch_axdimm PROPERTY CXX_STANDARD 17)
++  set_property(TARGET torch_cpu PROPERTY CXX_STANDARD 17)
+ endif()
+ 
+ if(NOT MSVC AND USE_XNNPACK)
+@@ -1986,6 +1987,8 @@ if(BUILD_PYTHON)
+ 
+   if(USE_AXDIMM)
+     add_library(caffe2_pybind11_state_axdimm MODULE ${Caffe2_AXDIMM_PYTHON_SRCS})
++    set_property(TARGET caffe2_pybind11_state_axdimm PROPERTY CXX_STANDARD 17)
++
+     if(USE_NUMPY)
+       target_compile_options(caffe2_pybind11_state_axdimm PRIVATE "-DUSE_NUMPY")
+       target_link_libraries(caffe2_pybind11_state_axdimm PRIVATE numpy::numpy)
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index b1754050..90014464 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -6,6 +6,7 @@
+ #include "caffe2/utils/math.h"
+ 
+ #include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/embedded_tables.h>
+ #include <pnmlib/ai/sls_operation.h>
+ #include <pnmlib/ai/sls_runner.h>
+ #include <pnmlib/common/error.h>
+@@ -148,16 +149,16 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     indices_vec_start_idx_ = tables_vec_start_idx_ + block_size_;
+     lengths_vec_start_idx_ = indices_vec_start_idx_ + block_size_;
+ 
+-    tables_descriptor_ = this->template GetSingleArgument<uint64_t>(
++    auto tables_descr = this->template GetSingleArgument<uint64_t>(
+         "tables_layout_descriptor", 0);
+ 
+-    private_tables_ = tables_descriptor_ == 0;
++    private_tables_ = tables_descr == 0;
+ 
+     if (private_tables_) {
+       LoadTables();
+     } else {
+-      tables_layout_ =
+-          axdimm_get_tables_layout(device_.internal(), tables_descriptor_);
++      tables_.reset(
++          reinterpret_cast<pnm::memory::EmbeddedTables*>(tables_descr));
+     }
+   }
+ 
+@@ -167,15 +168,9 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     indices_blocked_ = nullptr;
+     lengths_blocked_ = nullptr;
+ 
+-    axdimm_destroy_tables_layout(tables_layout_);
+-
+-    if (private_tables_) {
+-      axdimm_deallocate_tables(device_.internal(), tables_descriptor_);
+-      LOG(INFO) << "Deallocated private tables with descriptor: "
+-                << tables_descriptor_;
++    if (!private_tables_) {
++      tables_.release();
+     }
+-
+-    tables_layout_ = nullptr;
+   }
+ 
+   // Currently, we support float and at::Half inputs for input data type, and
+@@ -292,7 +287,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     PNMSLSOperation sls_op{
+         sparse_feature_size,
+         pnm::make_const_view(tables_sizes_),
+-        tables_layout_,
++        tables_.get(),
+         SLSType::Float};
+ 
+     // NOTE: After the procedure above the _offset_ variables contain the actual
+@@ -360,23 +355,17 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         mmap(nullptr, tables_size * sizeof(T), PROT_READ, MAP_PRIVATE, fd, 0);
+     CAFFE_ENFORCE_NE(data, MAP_FAILED, "Fail to map embedded tables file");
+ 
+-    auto memory_preference = this->template GetSingleArgument<int>(
+-        "mem_preference", AXDIMM_ALLOC_AUTO);
++    auto memory_preference =
++        static_cast<axd_user_preferences>(this->template GetSingleArgument<int>(
++            "mem_preference", AXDIMM_ALLOC_AUTO));
+ 
+-    tables_descriptor_ = axdimm_allocate_tables(
+-        device_.internal(),
+-        rows.data(),
+-        block_size_,
++    tables_ = pnm::memory::EmbeddedTables::create(
++        pnm::make_view<const uint8_t>(
++            static_cast<const uint8_t*>(data), tables_size * sizeof(T)),
++        rows,
+         sparse_feature_size * sizeof(T),
+-        static_cast<axd_user_preferences>(memory_preference));
+-
+-    LOG(INFO) << "Allocated private tables with descriptor: "
+-              << tables_descriptor_;
+-
+-    tables_layout_ =
+-        axdimm_get_tables_layout(device_.internal(), tables_descriptor_);
+-
+-    axdimm_write_rank_data(device_.internal(), data, tables_layout_);
++        pnm_ctx_,
++        memory_preference);
+ 
+     CAFFE_ENFORCE_EQ(
+         munmap(data, tables_size * sizeof(T)), 0, "Fail to unmap file");
+@@ -390,7 +379,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+ 
+   int block_size_; // Number of tables/indices/lengths to be blocked
+   std::vector<uint32_t> tables_sizes_; // Sizes of all tables that are used in
+-                                       // operations. Uninitialized at first
++  // operations. Uninitialized at first
+ 
+   int tables_vec_start_idx_; // Starting input index for tables blobs
+   int indices_vec_start_idx_; // Starting input index for indices blobs
+@@ -402,10 +391,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+       0; // Size of currently allocated blocked lengths buffer
+   AxdimmDevice device_ =
+       AxdimmDevice::make(); // AXDIMM device. TODO: move into AXDIMMContext
+-  AxdimmTablesLayout* tables_layout_ = nullptr;
++  pnm::memory::EmbeddedTablesHandler tables_ = nullptr;
++
++  pnm::ContextHandler pnm_ctx_ = pnm::make_context(pnm::ContextType::AXDIMM);
+ 
+   bool private_tables_ = false;
+-  uint64_t tables_descriptor_ = 0;
+ };
+ 
+ using SparseLengthsSumOp =
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 4aeea2b1..21124ccf 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -15,6 +15,7 @@
+ #include "caffe2/python/pybind_state_registry.h"
+ 
+ #include <pnmlib/ai/axdimm.h>
++#include <pnmlib/ai/embedded_tables.h>
+ #include <pnmlib/core/axdimm_device.h>
+ 
+ #include <fcntl.h>
+@@ -23,31 +24,9 @@
+ 
+ namespace {
+ 
+-static AxdimmDevice base_device;
+-static uint64_t descriptor = 0;
++static pnm::ContextHandler pnm_ctx;
++static pnm::memory::EmbeddedTablesHandler tables;
+ 
+-void load_tables(
+-    AxdimmDevice& device,
+-    const std::string& weight_file,
+-    uint64_t descr) {
+-  int fd = ::open(weight_file.c_str(), O_RDONLY);
+-
+-  if (fd < 0) {
+-    std::cerr << "Error opening " << weight_file << std::endl;
+-    exit(1);
+-  }
+-
+-  auto file_size = lseek(fd, 0, SEEK_END);
+-
+-  void* addr =
+-      mmap(nullptr, file_size, PROT_READ, MAP_FILE | MAP_SHARED, fd, 0);
+-
+-  auto* layout = axdimm_get_tables_layout(device.internal(), descr);
+-
+-  axdimm_write_rank_data(device.internal(), addr, layout);
+-
+-  axdimm_destroy_tables_layout(layout);
+-}
+ } // namespace
+ 
+ namespace caffe2 {
+@@ -70,38 +49,50 @@ void addAXDIMMGlobalMethods(py::module& m) {
+          const std::vector<uint32_t>& table_entry,
+          uint32_t row_size_in_bytes,
+          uint32_t mem_preference,
+-         bool use_shared_tables) {
++         bool use_shared_tables) -> uintptr_t {
+         // might throw
+-        base_device.open();
++        pnm_ctx = pnm::make_context(pnm::ContextType::AXDIMM);
+ 
+         if (use_shared_tables) {
+           LOG(INFO) << "Allocated shared tables with memory preference id: "
+                     << mem_preference;
+ 
+-          descriptor = axdimm_allocate_tables(
+-              base_device.internal(),
+-              table_entry.data(),
+-              table_entry.size(),
++          int fd = ::open(weight_file.c_str(), O_RDONLY);
++
++          if (fd < 0) {
++            LOG(ERROR) << "Error opening " << weight_file;
++            throw std::runtime_error("Fail to open file with embedded tables.");
++          }
++
++          auto file_size = lseek(fd, 0, SEEK_END);
++
++          auto* addr = static_cast<const uint8_t*>(mmap(
++              nullptr, file_size, PROT_READ, MAP_FILE | MAP_SHARED, fd, 0));
++          if (addr == MAP_FAILED){
++            LOG(ERROR) << "Fail to mmap embedded tables' source";
++            throw std::runtime_error("Fail to mmap embedded tables' source");
++          }
++
++          tables = pnm::memory::EmbeddedTables::create(
++              pnm::make_view(addr, file_size),
++              table_entry,
+               row_size_in_bytes,
++              pnm_ctx,
+               static_cast<axd_user_preferences>(mem_preference));
+ 
+-          load_tables(base_device, weight_file, descriptor);
+-        } else {
+-          descriptor = 0;
++          munmap(const_cast<uint8_t*>(addr), file_size);
++          ::close(fd);
+ 
++          return reinterpret_cast<uintptr_t>(tables.get());
++        } else {
+           LOG(INFO) << "Running in private tables mode";
++          return 0;
+         }
+-
+-        return descriptor;
+       });
+-  m.def("axdimm_closer", []() {
+-    if (descriptor != 0) {
+-      axdimm_deallocate_tables(base_device.internal(), descriptor);
+-      LOG(INFO) << "Deallocated shared tables";
+-    }
+-    // otherwise we are not using shared tables
+ 
+-    base_device.close();
++  m.def("axdimm_closer", []() {
++    tables.reset();
++    pnm_ctx.reset();
+     return 0;
+   });
+ }
+-- 
+2.34.1
+

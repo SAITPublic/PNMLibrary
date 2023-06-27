@@ -1,0 +1,244 @@
+From 787bcb3df55dcfc831984e36e96685a6bdeded1e Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Fri, 29 Jul 2022 21:36:11 +0300
+Subject: [PATCH 030/161] [drivers/dax/axdimm] Add AXDIMM_ALLOC_DISTRIBUTE_ALL
+ memory policy
+
+* using rough even distribution across memory ranks
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/dax/axdimm_allocator.c | 183 +++++++++++++++++++++------------
+ 1 file changed, 118 insertions(+), 65 deletions(-)
+
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 8ba162129..42fc01504 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -3,6 +3,7 @@
+ 
+ #include "axdimm_allocator.h"
+ 
++#include <linux/math.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+@@ -78,51 +79,91 @@ static void save_new_allocation(struct axdimm_allocator *alloc,
+ 		num_objects;
+ }
+ 
+-static int replicate_all(struct axdimm_allocator *alloc,
+-		  struct axd_memory_alloc_request *request,
+-		  uint64_t *descriptor)
++static inline uint64_t get_num_objects(uint64_t num_user_objects,
++				       axd_user_preferences pref)
+ {
+-	int err_code;
+-	uint8_t rank;
+-	size_t allocation;
+-	uint64_t new_ranks_offsets[NUM_OF_RANK];
+-	uint64_t num_objects;
+-	struct axd_memory_object *objects = NULL;
++	if (likely(pref != AXDIMM_ALLOC_DISTRIBUTE_ALL))
++		return num_user_objects * NUM_OF_RANK;
+ 
+-	err_code = 0;
+-	num_objects = request->num_user_objects * NUM_OF_RANK;
+-	/* [TODO: s-koval] check for num_objects param sanity */
+-	objects = kmalloc_array(num_objects,
+-				sizeof(struct axd_memory_object), GFP_KERNEL);
+-	if (!objects) {
+-		err_code = -ENOMEM;
+-		goto out;
++	return num_user_objects;
++}
++
++static inline uint64_t get_rank_num_objects(uint64_t num_user_objects,
++					    axd_user_preferences pref)
++{
++	if (likely(pref != AXDIMM_ALLOC_DISTRIBUTE_ALL))
++		return num_user_objects;
++
++	/* [TODO: @p.bred] Not perfectly even distribution for a small number of objects */
++	return DIV_ROUND_UP(num_user_objects, NUM_OF_RANK);
++}
++
++static inline uint64_t get_user_object_idx(uint64_t global_idx, uint8_t rank,
++					   uint64_t rank_num_objects,
++					   axd_user_preferences pref)
++{
++	if (likely(pref != AXDIMM_ALLOC_DISTRIBUTE_ALL))
++		return global_idx - rank * rank_num_objects;
++
++	return global_idx;
++}
++
++static int rank_insert_mem_obj(uint64_t global_idx, uint64_t rank,
++			       uint64_t rank_num_objects,
++			       struct axd_memory_object *objects,
++			       struct axd_memory_alloc_request *request,
++			       uint64_t *free_size, uint64_t *offset)
++{
++	int err_code = 0;
++	const uint64_t user_object_idx = get_user_object_idx(
++		global_idx, rank, rank_num_objects, request->preference);
++	const uint64_t user_object_length =
++		request->user_objects_sizes[user_object_idx];
++
++	if (user_object_length > *free_size) {
++		err_code = -ENOSPC;
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] No free space at rank %d, user_object_length = %llu, user_object_id = %llu\n",
++		       (int)rank, user_object_length, user_object_idx);
++		goto insert_out;
+ 	}
+ 
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
+-		uint64_t size = alloc->ranks_mem_tracker[rank].length;
+-		uint64_t offset = alloc->ranks_mem_tracker[rank].offset;
+-		uint64_t free_size = size - offset;
+-		size_t user_object;
+-		size_t object_idx;
+-
+-		for (user_object = 0; user_object < request->num_user_objects; ++user_object) {
+-			uint64_t user_object_length =
+-				request->user_objects_sizes[user_object];
+-			if (user_object_length > free_size) {
+-				kfree(objects);
+-				err_code = -ENOSPC;
+-				goto out;
+-			}
++	objects[global_idx].rank = rank;
++	objects[global_idx].user_object_id = user_object_idx;
++	objects[global_idx].offset = *offset;
++	objects[global_idx].length = user_object_length;
+ 
+-			object_idx = request->num_user_objects * rank + user_object;
+-			objects[object_idx].rank = rank,
+-			objects[object_idx].user_object_id = user_object,
+-			objects[object_idx].offset = offset,
+-			objects[object_idx].length = user_object_length,
++	*offset += user_object_length;
++	*free_size -= user_object_length;
+ 
+-			offset += user_object_length;
+-			free_size -= user_object_length;
++insert_out:
++	return err_code;
++}
++
++static int allocate_in_ranks(uint64_t num_objects,
++			     struct axdimm_allocator *alloc,
++			     struct axd_memory_object *objects,
++			     struct axd_memory_alloc_request *request)
++{
++	uint8_t rank;
++	int err_code = 0;
++	uint64_t idx, next_rank_idx, offset, free_size,
++		new_ranks_offsets[NUM_OF_RANK] = {};
++	const uint64_t rank_num_objects = get_rank_num_objects(
++		request->num_user_objects, request->preference);
++
++	for (rank = 0, idx = 0; rank < NUM_OF_RANK && idx < num_objects;
++	     ++rank) {
++		offset = alloc->ranks_mem_tracker[rank].offset;
++		free_size = alloc->ranks_mem_tracker[rank].length - offset;
++		next_rank_idx = idx + rank_num_objects;
++		for (; idx < next_rank_idx && idx < num_objects; ++idx) {
++			err_code =
++				rank_insert_mem_obj(idx, rank, rank_num_objects,
++						    objects, request,
++						    &free_size, &offset);
++			if (err_code)
++				goto alloc_ranks_out;
+ 		}
+ 
+ 		new_ranks_offsets[rank] = offset;
+@@ -132,16 +173,49 @@ static int replicate_all(struct axdimm_allocator *alloc,
+ 	for (rank = 0; rank < NUM_OF_RANK; ++rank)
+ 		alloc->ranks_mem_tracker[rank].offset = new_ranks_offsets[rank];
+ 
++alloc_ranks_out:
++	return err_code;
++}
++
++static int allocate_memory(struct axdimm_allocator *alloc,
++			   struct axd_memory_alloc_request *request,
++			   uint64_t *descriptor)
++{
++	uint64_t idx;
++	int err_code = 0;
++	struct axd_memory_object *objects = NULL;
++	const uint64_t num_objects =
++		get_num_objects(request->num_user_objects, request->preference);
++
++	mutex_lock(&alloc->memory_mutex);
++
++	/* [TODO: s-koval] check for num_objects param sanity */
++	objects = kmalloc_array(num_objects, sizeof(struct axd_memory_object),
++				GFP_KERNEL);
++	if (!objects) {
++		printk(KERN_ERR
++		       "[DAX_AXDIMM_DD] No free space for memory objects, num_objects = %llu\n",
++		       num_objects);
++		err_code = -ENOMEM;
++		goto alloc_out;
++	}
++
++	err_code = allocate_in_ranks(num_objects, alloc, objects, request);
++	if (err_code) {
++		kfree(objects);
++		goto alloc_out;
++	}
++
+ 	save_new_allocation(alloc, objects, num_objects);
+ 
+ 	/* Return new descriptor to user space */
+ 	*descriptor = alloc->allocation_counter;
+ 
+ 	/* Acquire a free cell for the next allocation */
+-	for (allocation = 0; allocation < AXDIMM_ALLOCATION_MAX; ++allocation) {
+-		if (alloc->allocations[allocation].descriptor == 0) {
+-			alloc->available_allocation_idx = allocation;
+-			goto out;
++	for (idx = 0; idx < AXDIMM_ALLOCATION_MAX; ++idx) {
++		if (alloc->allocations[idx].descriptor == 0) {
++			alloc->available_allocation_idx = idx;
++			goto alloc_out;
+ 		}
+ 	}
+ 
+@@ -153,29 +227,8 @@ static int replicate_all(struct axdimm_allocator *alloc,
+ 	       "[DAX_AXDIMM_DD] Next allocation won't be performed because of allocation storage capacity. Need to reset device.\n");
+ 	err_code = -EBUSY;
+ 
+-out:
+-	return err_code;
+-}
+-
+-static int allocate_memory(struct axdimm_allocator *alloc,
+-		    struct axd_memory_alloc_request *request,
+-		    uint64_t *descriptor)
+-{
+-	int err_code;
+-
+-	err_code = 0;
+-	mutex_lock(&alloc->memory_mutex);
+-	if (request->preference == AXDIMM_ALLOC_AUTO ||
+-		request->preference == AXDIMM_ALLOC_REPLICATE_ALL) {
+-		err_code = replicate_all(alloc, request, descriptor);
+-	} else {
+-		printk(KERN_ERR
+-		       "[DAX_AXDIMM_DD] Allocation preference [%u] is not supported yet.\n",
+-		       request->preference);
+-		err_code = -EPERM;
+-	}
++alloc_out:
+ 	mutex_unlock(&alloc->memory_mutex);
+-
+ 	return err_code;
+ }
+ 
+-- 
+2.34.1
+

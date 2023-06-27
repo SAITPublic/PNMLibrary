@@ -1,0 +1,119 @@
+From aff8e2061d55b1ad8d73c99a9966e0bb76a4a5a2 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Tue, 14 Mar 2023 11:48:52 +0300
+Subject: [PATCH 087/161] [axdimm] Introduce rank selection for single alloc
+
+Introduce several macros and functional to specify rank for
+AXDIMM_ALLOC_SINGLE policy.
+
+Related to: AXDIMM-640
+---
+ drivers/dax/axdimm_allocator.c | 30 ++++++++++++++++++++----------
+ include/uapi/linux/libaxdimm.h | 14 ++++++++++++++
+ 2 files changed, 34 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index e9782c733..95e641660 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -252,7 +252,7 @@ static int add_obj_pack(struct axdimm_allocator *alloc,
+ static inline uint64_t gen_num_obj(uint64_t num_user_obj,
+ 				   axd_user_preferences pref)
+ {
+-	switch (pref) {
++	switch (GET_ALLOC_POLICY(pref)) {
+ 	case AXDIMM_ALLOC_AUTO:
+ 	case AXDIMM_ALLOC_REPLICATE_ALL:
+ 		return num_user_obj * NUM_OF_RANK;
+@@ -271,7 +271,7 @@ static inline uint64_t gen_num_obj(uint64_t num_user_obj,
+ static inline uint64_t gen_rank_num_obj(uint64_t num_user_obj,
+ 					axd_user_preferences pref)
+ {
+-	switch (pref) {
++	switch (GET_ALLOC_POLICY(pref)) {
+ 	case AXDIMM_ALLOC_AUTO:
+ 	case AXDIMM_ALLOC_REPLICATE_ALL:
+ 		return num_user_obj;
+@@ -293,7 +293,7 @@ static inline uint64_t get_user_obj_idx(uint64_t obj_idx, uint8_t rank,
+ 					uint64_t rank_num_obj,
+ 					axd_user_preferences pref)
+ {
+-	switch (pref) {
++	switch (GET_ALLOC_POLICY(pref)) {
+ 	case AXDIMM_ALLOC_AUTO:
+ 	case AXDIMM_ALLOC_REPLICATE_ALL:
+ 		return obj_idx - rank * rank_num_obj;
+@@ -378,13 +378,8 @@ static int deallocate_objects(struct axdimm_allocator *alloc,
+ 	return err_code;
+ }
+ 
+-static int allocate_single_object(struct axdimm_allocator *alloc,
+-			     struct axd_memory_object *objects,
+-			     struct axd_memory_alloc_request *request,
+-			     uint64_t *actual_num)
+-{
++static uint8_t select_optimal_rank(struct axdimm_allocator *alloc){
+ 	uint8_t rank;
+-	int err_code = 0;
+ 	uint8_t optimal_rank = 0;
+ 	size_t max_free_space = gen_pool_avail(alloc->mem_pools[0]);
+ 
+@@ -395,6 +390,21 @@ static int allocate_single_object(struct axdimm_allocator *alloc,
+ 			optimal_rank = rank;
+ 		}
+ 	}
++	return optimal_rank;
++}
++
++static int allocate_single_object(struct axdimm_allocator *alloc,
++			     struct axd_memory_object *objects,
++			     struct axd_memory_alloc_request *request,
++			     uint64_t *actual_num)
++{
++	int err_code = 0;
++	int optimal_rank = GET_ALLOC_SINGLE_RANK_PREFERENCE(request->preference);
++
++	if (optimal_rank == 0)
++		optimal_rank = select_optimal_rank(alloc);
++	else 
++		optimal_rank -= 1;
+ 
+ 	err_code = pool_alloc_mem_obj(alloc, 0, optimal_rank, 1, objects, request);
+ 	*actual_num = (err_code == 0);
+@@ -412,7 +422,7 @@ static int allocate_in_ranks(uint64_t num_obj, struct axdimm_allocator *alloc,
+ 	uint64_t idx, max_idx_in_rank;
+ 	uint64_t rank_num_obj;
+ 
+-	if (request->preference == AXDIMM_ALLOC_SINGLE) {
++	if (GET_ALLOC_POLICY(request->preference) == AXDIMM_ALLOC_SINGLE) {
+ 		err_code =
+ 			allocate_single_object(alloc, objects, request, &idx);
+ 	} else {
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index 1289dcf10..dcdb6c5e4 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -147,6 +147,20 @@ typedef enum _axd_user_preferences {
+ 	AXDIMM_ALLOC_SINGLE
+ } axd_user_preferences;
+ 
++#define AXD_USER_PREF_BITS 8
++#define AXD_USER_RANK_BITS 8
++
++#define AXD_USER_PREF_MASK ((1U << AXD_USER_PREF_BITS) - 1)
++#define AXD_USER_RANK_MASK \
++	(((1U << AXD_USER_RANK_BITS) - 1) << AXD_USER_PREF_BITS)
++
++#define AXDIMM_ALLOC_SINGLE_RANK(rank) \
++	(AXDIMM_ALLOC_SINGLE | ((rank + 1) << AXD_USER_PREF_BITS))
++
++#define GET_ALLOC_POLICY(preference) (preference & AXD_USER_PREF_MASK)
++#define GET_ALLOC_SINGLE_RANK_PREFERENCE(preference) \
++	((preference & AXD_USER_RANK_MASK) >> AXD_USER_PREF_BITS)
++
+ struct axd_memory_object {
+ 	uint8_t rank;
+ 	/* Sometimes it's useful to know memory */
+-- 
+2.34.1
+

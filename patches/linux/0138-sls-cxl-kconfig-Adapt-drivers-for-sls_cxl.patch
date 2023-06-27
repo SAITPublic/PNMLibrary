@@ -1,0 +1,534 @@
+From bf7651befec16bc58dd949d82433b84aedd28876 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 12 Jul 2023 20:49:38 -0400
+Subject: [PATCH 138/161] [sls][cxl][kconfig] Adapt drivers for sls_cxl
+
+- Add choice for sls cxl/axdimm bus
+- Adapt get_memory_info for cxl, now we have two contiguous regions,
+so all sizes in mem_info divided by two for cxl hardware
+- Add device parameter in sls_resource
+- Adapt sls_resource's allocator for using two memory pools
+- Adapt sls_resource's region size for sls_cxl
+- Add device type parameter to sls_resource for simulator mode
+
+Resolves: MCS32-1300
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md                           |  5 ++
+ drivers/dax/Kconfig                           | 40 ++++++++++++++
+ drivers/pnm/sls_resource/sls.c                | 35 +++++++++++--
+ drivers/pnm/sls_resource/sls_allocator.c      | 52 +++++++++++++------
+ drivers/pnm/sls_resource/sls_allocator.h      |  7 +--
+ drivers/pnm/sls_resource/sls_sysfs.c          | 24 ++++++---
+ drivers/pnm/sls_resource/sls_sysfs.h          |  4 +-
+ .../pnm/sls_resource/sls_topology_export.c    | 12 ++++-
+ include/linux/pnm_sls_set_mem_info.h          | 12 +++++
+ include/linux/sls_common.h                    | 12 +++++
+ include/uapi/linux/pnm_sls_mem_topology.h     |  2 +
+ include/uapi/linux/sls_resources.h            |  2 +-
+ 12 files changed, 176 insertions(+), 31 deletions(-)
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 76a3e6b0c..52b29a9e4 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -17,6 +17,11 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+   KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+     A base physical address of SLS range in gigabytes (SLS_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
+     A scale of SLS memory range (SLS_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 1 for simulation 32GB range, 0 for FPGA)
++    Choose PNM SLS device type
++    > 1. AXDIMM (DEV_SLS_AXDIMM) (NEW)
++      2. CXL (DEV_SLS_CXL) (NEW)
++    choice[1-2?]: -> choose between AXDIMM and CXL SLS
++
+ *
+ * IMDB Resource Manager
+ *
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 5d6bc87ab..ad7a68340 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -106,6 +106,46 @@ config DEV_SLS_MEMORY_SCALE
+ 	  for the real memory size is total_size = 64 / (2^scale) gigabytes.
+ 	  By default scale = 1, and so the default total_size = 32 gigabytes
+ 
++
++choice
++	prompt "Choose PNM SLS type"
++	depends on DEV_SLS
++	default DEV_SLS_AXDIMM
++	help
++        Choose SLS accelerator device type. Currently both AXDIMM and CXL
++        SLS accelerators exclude each other, so you should choose only one.
++        The main differences between AXDIMM and CXL accelerator is the bus type,
++        total memory and accelerators core count.
++
++config DEV_SLS_AXDIMM
++	bool "AXDIMM"
++	select BUS_AXDIMM
++	help
++	  Axdimm SLS accelerator is placed in DIMM slot and uses
++	  RDIMM interface. It has 2 channels and 2 interleaved rank
++	  per chip select. One rank has 16GB, so AXDIMM totally
++	  has 64GB of memory. Every rank has one SLS compute unit,
++	  so AXDIMM has 4 accelerator cores, which can access only its own rank.
++
++config DEV_SLS_CXL
++	bool "CXL"
++	select BUS_CXL
++	help
++	  CXL SLS accelerator placed in CXL slot. It has 2 channels
++	  and 2 rank in each channel. One rank has 16GB of memory, but
++	  only first rank in each channel accessible, so SLS cxl can
++	  use only 32GB of memory. Every channel has one SLS compute unit,
++	  which can access only their own channel.
++
++endchoice
++
++config DEV_SLS_BUS
++       int
++       depends on DEV_SLS
++       default 1 if DEV_SLS_AXDIMM
++       default 2 if DEV_SLS_CXL
++       default 0
++
+ endif
+ 
+ endif
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index dc64532c7..9fdbcd0a1 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -36,6 +36,24 @@ static struct device *sls_resource_device;
+ static struct cdev sls_resource_cdev;
+ static dev_t sls_resource_device_number;
+ 
++static enum sls_device_type sls_device_type = CONFIG_DEV_SLS_BUS;
++
++static char *sls_device_name;
++module_param_named(device, sls_device_name, charp, 0444);
++
++static enum sls_device_type get_device_type(char *device_name)
++{
++	if (strcmp("AXDIMM", device_name) == 0)
++		return SLS_AXDIMM;
++
++	if (strcmp("CXL", device_name) == 0)
++		return SLS_CXL;
++
++	SLS_ERR("Unknown device name: %s\n", device_name);
++
++	return SLS_UNDEFINED;
++}
++
+ int sls_release(struct inode *node, struct file *f)
+ {
+ 	return release_sls_process();
+@@ -78,7 +96,7 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+ 		reset_sls_rank_scheduler();
+-		retval = reset_sls_allocator(&mem_info);
++		retval = reset_sls_allocator(&mem_info, sls_device_type);
+ 		reset_sls_process_manager();
+ 		break;
+ 	case ALLOCATE_MEMORY:
+@@ -188,6 +206,17 @@ int init_sls_device(void)
+ 
+ 	SLS_INF("Initializing SLS device\n");
+ 
++	if (sls_device_type <= SLS_UNDEFINED || sls_device_type >= SLS_MAX) {
++		SLS_ERR("Invalid device type: %d\n", sls_device_type);
++		return -EINVAL;
++	}
++
++	if (sls_device_name)
++		sls_device_type = get_device_type(sls_device_name);
++
++	if (sls_device_type == SLS_UNDEFINED)
++		goto resource_device_fail;
++
+ 	/* Initialize sls_resource device */
+ 	err = init_sls_resource_dev();
+ 	if (err)
+@@ -197,7 +226,7 @@ int init_sls_device(void)
+ 	sls_set_mem_info(&mem_info);
+ 
+ 	/* Initialize memory allocator */
+-	err = init_sls_allocator(&mem_info);
++	err = init_sls_allocator(&mem_info, sls_device_type);
+ 	if (err)
+ 		goto allocator_fail;
+ 
+@@ -205,7 +234,7 @@ int init_sls_device(void)
+ 	init_sls_rank_scheduler();
+ 
+ 	/* Create sysfs subsystem for the device */
+-	err = build_sls_sysfs(&mem_info, sls_resource_device);
++	err = build_sls_sysfs(&mem_info, sls_resource_device, sls_device_type);
+ 	if (err)
+ 		goto build_sysfs_fail;
+ 
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/sls_allocator.c
+index 10cf2d7c7..bc698159e 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/sls_allocator.c
+@@ -24,6 +24,8 @@ struct sls_allocator {
+ 	 * Range: [reserved_indent == PAGE_SIZE, rank_size - reserved_indent]
+ 	 */
+ 	struct gen_pool *mem_pools[NUM_OF_RANK];
++	enum sls_device_type devtype;
++	uint8_t pool_count;
+ } static allocator;
+ 
+ DEFINE_MUTEX(memory_mutex);
+@@ -87,7 +89,7 @@ static void cleanup_memory_pools(struct sls_allocator *alloc)
+ 	uint8_t rank;
+ 	struct gen_pool *pool;
+ 
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++	for (rank = 0; rank < alloc->pool_count; ++rank) {
+ 		pool = alloc->mem_pools[rank];
+ 		if (unlikely(!pool)) {
+ 			SLS_WRN("Trying to cleanup memory rank pool[%hhu] that was not created\n",
+@@ -115,10 +117,14 @@ static void cleanup_memory_pools(struct sls_allocator *alloc)
+ }
+ 
+ static inline uint64_t get_rank_size(struct sls_mem_info *mem_info,
+-				     uint8_t rank)
++				     enum sls_device_type devtype, uint8_t rank)
+ {
+-	return mem_info->mem_size[rank % NUM_OF_CS][SLS_BLOCK_BASE] /
+-	       NUM_RANKS_PER_CS;
++	uint64_t size = mem_info->mem_size[rank % NUM_OF_CS][SLS_BLOCK_BASE];
++
++	if (devtype == SLS_AXDIMM)
++		size /= NUM_RANKS_PER_CS;
++
++	return size;
+ }
+ 
+ static int init_memory_pools(struct sls_allocator *alloc,
+@@ -134,7 +140,7 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 	}
+ 
+ 	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++	for (rank = 0; rank < alloc->pool_count; ++rank) {
+ 		/*
+ 		 * reserve PAGE_SIZE size from start to eliminate allocator
+ 		 * ambiguity, technically we could back off by just 1 byte,
+@@ -143,7 +149,8 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 		 * the real allocation, and we'll not be able to distinguish
+ 		 * the result from the allocator fail.
+ 		 */
+-		rank_size = get_rank_size(mem_info, rank) - PAGE_SIZE;
++		rank_size = get_rank_size(mem_info, alloc->devtype, rank) -
++			    PAGE_SIZE;
+ 		err_code = init_rank_pool(alloc, rank, rank_size);
+ 		if (unlikely(err_code)) {
+ 			cleanup_memory_pools(alloc);
+@@ -156,28 +163,43 @@ static int init_memory_pools(struct sls_allocator *alloc,
+ 
+ /* General preinitializing allocator part, reset/init independent */
+ static int preinit_sls_allocator(struct sls_allocator *alloc,
+-				 struct sls_mem_info *mem_info)
++				 struct sls_mem_info *mem_info,
++				 enum sls_device_type devtype)
+ {
++	alloc->devtype = devtype;
++	alloc->pool_count = NUM_OF_CH;
++
++	if (alloc->devtype == SLS_AXDIMM)
++		alloc->pool_count *= NUM_RANKS_PER_CS;
++
+ 	alloc->gran = PAGE_SIZE; // [TODO: @p.bred] make configurable
+ 	memset(alloc->mem_pools, 0, ARRAY_SIZE(alloc->mem_pools));
+ 	return mem_info ? init_memory_pools(alloc, mem_info) : 0;
+ }
+ 
+-int init_sls_allocator(struct sls_mem_info *mem_info)
++int init_sls_allocator(struct sls_mem_info *mem_info,
++		       enum sls_device_type devtype)
+ {
+ 	int err_code;
+ 
++	if (devtype == SLS_UNDEFINED)
++		return -EINVAL;
++
+ 	SLS_DBG("Initializing SLS allocator\n");
+ 
+-	err_code = preinit_sls_allocator(&allocator, mem_info);
++	err_code = preinit_sls_allocator(&allocator, mem_info, devtype);
+ 	if (unlikely(err_code))
+ 		return err_code;
+ 
+ 	return 0;
+ }
+ 
+-int reset_sls_allocator(struct sls_mem_info *mem_info)
++int reset_sls_allocator(struct sls_mem_info *mem_info,
++			enum sls_device_type devtype)
+ {
++	if (devtype == SLS_UNDEFINED)
++		return -EINVAL;
++
+ 	SLS_DBG("Resetting SLS allocator\n");
+ 
+ 	if (unlikely(allocator_is_locked())) {
+@@ -187,13 +209,13 @@ int reset_sls_allocator(struct sls_mem_info *mem_info)
+ 
+ 	cleanup_memory_pools(&allocator);
+ 
+-	return preinit_sls_allocator(&allocator, mem_info);
++	return preinit_sls_allocator(&allocator, mem_info, devtype);
+ }
+ 
+ void cleanup_sls_allocator(void)
+ {
+ 	SLS_DBG("Cleaning up SLS allocator\n");
+-	reset_sls_allocator(NULL);
++	reset_sls_allocator(NULL, SLS_UNDEFINED);
+ 	mutex_destroy(&memory_mutex);
+ }
+ 
+@@ -203,7 +225,7 @@ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ 	uint8_t optimal_rank = 0;
+ 	size_t max_free_space = gen_pool_avail(alloc->mem_pools[0]);
+ 
+-	for (rank = 1; rank < NUM_OF_RANK; ++rank) {
++	for (rank = 1; rank < alloc->pool_count; ++rank) {
+ 		size_t rank_free_space = gen_pool_avail(alloc->mem_pools[rank]);
+ 
+ 		if (max_free_space < rank_free_space) {
+@@ -218,7 +240,7 @@ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ static int allocate_memory_unsafe(struct sls_allocator *alloc,
+ 				  struct sls_memory_alloc_request *req)
+ {
+-	if (req->rank != SLS_ALLOC_ANY_RANK && req->rank >= NUM_OF_RANK) {
++	if (req->rank != SLS_ALLOC_ANY_RANK && req->rank >= alloc->pool_count) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req->rank);
+ 		return -EINVAL;
+ 	}
+@@ -292,7 +314,7 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ // Call only when holding allocator lock
+ int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ {
+-	if (req.rank >= NUM_OF_RANK) {
++	if (req.rank >= allocator.pool_count) {
+ 		SLS_ERR("Rank %u doesn't exist.\n", req.rank);
+ 		return -EINVAL;
+ 	}
+diff --git a/drivers/pnm/sls_resource/sls_allocator.h b/drivers/pnm/sls_resource/sls_allocator.h
+index 87932e726..184aab785 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.h
++++ b/drivers/pnm/sls_resource/sls_allocator.h
+@@ -8,17 +8,18 @@
+ #include <linux/list.h>
+ #include <linux/types.h>
+ 
+-//[TODO: s-motov] encapsulate meminfo
++//[TODO: s-motov] make common sls_dev structure
+ struct sls_mem_info;
++enum sls_device_type;
+ 
+-int init_sls_allocator(struct sls_mem_info *mem_info);
++int init_sls_allocator(struct sls_mem_info *mem_info, enum sls_device_type devtype);
+ /*
+  * Not proccess(thread)-safe.
+  * `mem_info` might be NULL, if it is
+  * then just reset allocator, if it's not
+  * then reset with memory pools initialization.
+  */
+-int reset_sls_allocator(struct sls_mem_info *mem_info);
++int reset_sls_allocator(struct sls_mem_info *mem_info, enum sls_device_type devtype);
+ void cleanup_sls_allocator(void);
+ int mem_process_ioctl(unsigned int cmd, unsigned long __user arg);
+ int deallocate_memory_unsafe(struct sls_memory_alloc_request req);
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.c b/drivers/pnm/sls_resource/sls_sysfs.c
+index 2fcca6c84..5440acbc9 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.c
++++ b/drivers/pnm/sls_resource/sls_sysfs.c
+@@ -24,6 +24,7 @@
+ 
+ static struct sls_mem_info *mem_info;
+ static struct kobject *ranks_kobj;
++static enum sls_device_type sls_device_type = SLS_UNDEFINED;
+ 
+ static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+ 			   char *buf)
+@@ -214,11 +215,16 @@ static const char *const region_attr_name[] = {
+ 
+ static ssize_t region_show(struct region_attribute *attr, char *buf)
+ {
+-	if (strcmp(attr->attr.name, region_attr_name[0]) == 0)
+-		return sysfs_emit(buf, "%llu\n",
+-				  mem_info->mem_size[attr->rank % NUM_OF_CS]
+-						    [attr->region] /
+-					  NUM_RANKS_PER_CS);
++	uint64_t size;
++
++	if (strcmp(attr->attr.name, region_attr_name[0]) == 0) {
++		size = mem_info->mem_size[attr->rank % NUM_OF_CS][attr->region];
++
++		if (sls_device_type == SLS_AXDIMM)
++			size /= NUM_RANKS_PER_CS;
++
++		return sysfs_emit(buf, "%llu\n", size);
++	}
+ 
+ 	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+ 		return sysfs_emit(buf, "%llu\n",
+@@ -376,11 +382,17 @@ static int build_rank_sysfs(struct kobject *kobj, uint8_t rank)
+ 	return err;
+ }
+ 
+-int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev)
++int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev,
++		    enum sls_device_type devtype)
+ {
+ 	int rank;
+ 	int err = 0;
+ 
++	if (devtype == SLS_UNDEFINED)
++		return -EINVAL;
++
++	sls_device_type = devtype;
++
+ 	mem_info = meminfo;
+ 
+ 	SLS_DBG("Building SLS sysfs\n");
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.h b/drivers/pnm/sls_resource/sls_sysfs.h
+index 990fd15ba..399264536 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.h
++++ b/drivers/pnm/sls_resource/sls_sysfs.h
+@@ -7,8 +7,10 @@
+ #include <linux/device.h>
+ 
+ struct sls_mem_info;
++enum sls_device_type;
+ 
+-int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev);
++int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev,
++		    enum sls_device_type);
+ void destroy_sls_sysfs(void);
+ 
+ #endif /* __SLS_SYSFS__ */
+diff --git a/drivers/pnm/sls_resource/sls_topology_export.c b/drivers/pnm/sls_resource/sls_topology_export.c
+index 11795f80b..4da267262 100644
+--- a/drivers/pnm/sls_resource/sls_topology_export.c
++++ b/drivers/pnm/sls_resource/sls_topology_export.c
+@@ -1,15 +1,23 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "sls_topology_export.h"
++#include "sls_private.h"
+ #include "sls_log.h"
++#include "sls_topology_export.h"
+ 
+-#include <linux/sls_resources.h>
+ #include <linux/pnm_sls_mem_topology.h>
++#include <linux/sls_resources.h>
+ 
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+ 
++//[TODO: s-motov] move to common header when
++// sls_mem_topology.h removed from exported headers
++#if CONFIG_DEV_SLS_BUS == SLS_TYPE_CXL
++#undef REG_POLLING
++#define REG_POLLING 0x440
++#endif
++
+ #define SINGLE_VALUE_ATTR(name, value)                                       \
+ 	static ssize_t name##_show(struct device *device,                    \
+ 				   struct device_attribute *attr, char *buf) \
+diff --git a/include/linux/pnm_sls_set_mem_info.h b/include/linux/pnm_sls_set_mem_info.h
+index 9b58867d0..c8cbe6c77 100644
+--- a/include/linux/pnm_sls_set_mem_info.h
++++ b/include/linux/pnm_sls_set_mem_info.h
+@@ -14,6 +14,7 @@
+ #include <linux/sls_common.h>
+ #include <linux/types.h>
+ 
++//[TODO: MCS23-1373] replace this function onto constants
+ static uint64_t sls_make_address(int channel, int rank, int bankgroup, int bank,
+ 				 int row, int column)
+ {
+@@ -87,6 +88,7 @@ static uint64_t sls_make_address(int channel, int rank, int bankgroup, int bank,
+ static void sls_set_mem_info(struct sls_mem_info *mem_info)
+ {
+ 	int cs;
++	int block __maybe_unused;
+ 
+ 	/* Calculate system addr & size */
+ 	for (cs = 0; cs < NUM_OF_CS; cs++) {
+@@ -123,6 +125,16 @@ static void sls_set_mem_info(struct sls_mem_info *mem_info)
+ 				[0]
+ 				[SLS_BLOCK_PSUM]; // Assume that all psum sizes are the same
+ 	}
++
++#if CONFIG_DEV_SLS_BUS == SLS_TYPE_CXL
++	for (cs = 0; cs < NUM_OF_CS; cs++) {
++		for (block = 0; block < SLS_BLOCK_MAX; ++block) {
++			mem_info->mem_offset[cs][block] /= NUM_RANKS_PER_CS;
++			mem_info->mem_size[cs][block] /= NUM_RANKS_PER_CS;
++		}
++	}
++
++#endif
+ }
+ 
+ #endif /* __SLS_SET_MEM_INFO_H__ */
+diff --git a/include/linux/sls_common.h b/include/linux/sls_common.h
+index 4d7d25ead..a6cde47cb 100644
+--- a/include/linux/sls_common.h
++++ b/include/linux/sls_common.h
+@@ -42,4 +42,16 @@ enum sls_mem_regions_e {
+ 	NUM_OF_MEM_REGION = 6 /* Number of index for memory mapping region */
+ };
+ 
++#define SLS_TYPE_UNDEFINED 0
++#define SLS_TYPE_AXDIMM 1
++#define SLS_TYPE_CXL 2
++#define SLS_TYPE_MAX 3
++
++enum sls_device_type {
++	SLS_UNDEFINED = SLS_TYPE_UNDEFINED,
++	SLS_AXDIMM = SLS_TYPE_AXDIMM,
++	SLS_CXL = SLS_TYPE_CXL,
++	SLS_MAX = SLS_TYPE_MAX,
++};
++
+ #endif /* __SLS_COMMON_H__ */
+diff --git a/include/uapi/linux/pnm_sls_mem_topology.h b/include/uapi/linux/pnm_sls_mem_topology.h
+index f004a51d2..fbb3bcdd2 100644
+--- a/include/uapi/linux/pnm_sls_mem_topology.h
++++ b/include/uapi/linux/pnm_sls_mem_topology.h
+@@ -12,6 +12,8 @@
+ #ifndef __PNM_SLS_MEM_TOPOLOGY_H__
+ #define __PNM_SLS_MEM_TOPOLOGY_H__
+ 
++//[TODO: MCS23-1373] move to kernelspace includes
++
+ #ifdef __KERNEL__
+ #include <linux/types.h>
+ #else
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 87b79af4d..155f1c78c 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -40,7 +40,7 @@
+ #define DATA_SIZE 4
+ 
+ /* Instruction, Psum & Tags Buffers Size (Bytes) */
+-#define HW_BUF_SIZE (256 * 1024)
++#define HW_BUF_SIZE (256 * 1024 - 64) //[TODO: MCS23-1373] revert this changes
+ 
+ #define INST_BUF_SIZE HW_BUF_SIZE
+ #define PSUM_BUF_SIZE HW_BUF_SIZE
+-- 
+2.34.1
+

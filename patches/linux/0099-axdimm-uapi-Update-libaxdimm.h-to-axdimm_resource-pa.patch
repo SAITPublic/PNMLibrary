@@ -1,0 +1,47 @@
+From f1208e027d73de465038eecfec65fcc1d54b27a0 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Wed, 5 Apr 2023 16:41:35 +0300
+Subject: [PATCH 099/161] [axdimm, uapi] Update libaxdimm.h to axdimm_resource
+ paths.
+
+References: MCS23-693
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ include/uapi/linux/libaxdimm.h | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/include/uapi/linux/libaxdimm.h b/include/uapi/linux/libaxdimm.h
+index dcdb6c5e4..9d37c7620 100644
+--- a/include/uapi/linux/libaxdimm.h
++++ b/include/uapi/linux/libaxdimm.h
+@@ -73,14 +73,21 @@
+ /* Rank interleaving unit size (Bytes) */
+ #define RANK_INTERLEAVING_SIZE 0x80
+ 
+-/* Path of device driver */
+-#define DRV_PATH "/dev/axdimm_device0"
++/* Path to AXDIMM resource manager device within /dev */
++#define AXDIMM_RESOURCE_PATH_INTERNAL "pnm/axdimm_resource"
+ 
+-/* Path of DAX device */
++/* Path to AXDIMM resource manager device */
++#define AXDIMM_RESOURCE_PATH "/dev/" AXDIMM_RESOURCE_PATH_INTERNAL
++
++/* Path to AXDIMM memory device */
++#define AXDIMM_MEMDEV_PATH "/dev/axdimm_device"
++
++/* Path to DAX device */
+ #define DAX_PATH "/dev/dax0.0"
+ 
+-/* Path to dax sysfs root */
+-#define DAX_SYSFS_ROOT "/sys/bus/dax/drivers/device_dax"
++/* Path to axdimm_resource sysfs root */
++/* [TODO: @a.korzun] Rename this to AXDIMM_SYSFS_ROOT or a similar name. */
++#define DAX_SYSFS_ROOT "/sys/class/axdimm_resource"
+ 
+ // Block of sysfs relative paths for device
+ // DAX_SYSFS_ROOT"/dax%d.%d/ranks"
+-- 
+2.34.1
+

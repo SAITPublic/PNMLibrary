@@ -1,0 +1,36 @@
+From 86f4d583712f6651d6589a3f53d35c14333f61c4 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 02:04:33 +0300
+Subject: [PATCH 090/128] [aten] Make copy operator use shared_ptr opaque
+ handle
+
+Shared_ptr is used to be able to work with
+base tensor class in polymophic way.
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ aten/src/ATen/native/axdimm/ops/Copy.cpp | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/ops/Copy.cpp b/aten/src/ATen/native/axdimm/ops/Copy.cpp
+index 7eabab23..850ea075 100644
+--- a/aten/src/ATen/native/axdimm/ops/Copy.cpp
++++ b/aten/src/ATen/native/axdimm/ops/Copy.cpp
+@@ -14,10 +14,8 @@ at::Tensor& copy_axdimm_(
+     bool non_blocking) {
+   TORCH_INTERNAL_ASSERT(self.is_axdimm());
+   TORCH_CHECK(src.is_cpu(), "Only CPU tensors can be copied to AXDIMM device");
+-  at::native::axdimm::AxdimmTensor ten(src);
+-  auto impl = static_cast<at::native::axdimm::AxdimmTensorImpl*>(
+-      self.unsafeGetTensorImpl());
+-  impl->unsafe_opaque_handle() = ten;
++  auto impl = static_cast<AxdimmTensorImpl*>(self.unsafeGetTensorImpl());
++  impl->unsafe_opaque_handle() = std::make_shared<AxdimmTensor>(src);
+   return self;
+ }
+ 
+-- 
+2.34.1
+

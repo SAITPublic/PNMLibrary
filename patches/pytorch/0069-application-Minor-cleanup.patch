@@ -1,0 +1,42 @@
+From 2d7f6a040f6fe6f7b853a7c8c31b0b94fb3cacb2 Mon Sep 17 00:00:00 2001
+From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
+Date: Mon, 19 Sep 2022 18:17:02 +0300
+Subject: [PATCH 069/128] [application] Minor cleanup
+
+Related to: AXDIMM-319
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index c006f922..a26ad76a 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -145,11 +145,11 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+         "tables_layout_descriptor", 0);
+     device_ = axdimm_create_base_device();
+ 
+-    if (!tables_descriptor_) {
+-      private_tables_ = true;
++    private_tables_ = !tables_descriptor_;
++
++    if (private_tables_) {
+       LoadTables();
+     } else {
+-      private_tables_ = false;
+       tables_layout_ = axdimm_get_tables_layout(device_, tables_descriptor_);
+     }
+   }
+@@ -350,8 +350,7 @@ class AXDIMMSparseLengthsReductionOpVec : public Operator<AXDIMMContext> {
+     auto rows_64 = this->template GetRepeatedArgument<uint64_t>("rows", {});
+     CAFFE_ENFORCE_NE(rows_64.size(), 0, "Empty rows array");
+ 
+-    std::vector<uint32_t> rows;
+-    rows.insert(rows.end(), rows_64.begin(), rows_64.end());
++    std::vector<uint32_t> rows(rows_64.begin(), rows_64.end());
+ 
+     auto fd = open(path.c_str(), O_RDONLY);
+     CAFFE_ENFORCE_NE(fd, -1, "Fail to open embedded tables file");
+-- 
+2.34.1
+

@@ -1,0 +1,83 @@
+From c51e15aa0caadd64816a2214e9ffe6b8ed50573a Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 24 Jan 2023 18:32:51 +0300
+Subject: [PATCH 079/161] [rank scheduler] add kcsan exclusive access asserts
+
+Add asserts for accessing to axd_rank_stats array
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/dax/axdimm_rank_scheduler.c | 33 ++++++++++++++++++-----------
+ 1 file changed, 21 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/dax/axdimm_rank_scheduler.c b/drivers/dax/axdimm_rank_scheduler.c
+index 021a36b9d..cd5be5d4e 100644
+--- a/drivers/dax/axdimm_rank_scheduler.c
++++ b/drivers/dax/axdimm_rank_scheduler.c
+@@ -98,13 +98,15 @@ static int get_rank_write(struct axdimm_rank_scheduler *rank_sched,
+ 	}
+ 
+ 	mutex_lock(&rank_sched->rank_stat_lock);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		find_free_ranks(rank_sched, msk, &rw_mask, &wo_mask);
+ 
+-	find_free_ranks(rank_sched, msk, &rw_mask, &wo_mask);
+-
+-	if (rw_mask || wo_mask) {
+-		ret = acquire_free_rank_for_write(rank_sched, rw_mask, wo_mask);
++		if (rw_mask || wo_mask) {
++			ret = acquire_free_rank_for_write(rank_sched, rw_mask,
++							  wo_mask);
++		}
+ 	}
+-
+ 	mutex_unlock(&rank_sched->rank_stat_lock);
+ 
+ 	if (ret < 0)
+@@ -129,12 +131,13 @@ static int get_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	}
+ 
+ 	mutex_lock(&rank_sched->rank_stat_lock);
+-
+-	if (axd_rs[rank_id].rd_stat == IDLE_STATE) {
+-		ret = rank_id;
+-		axd_rs[rank_id].rd_stat = BUSY_STATE;
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		if (axd_rs[rank_id].rd_stat == IDLE_STATE) {
++			ret = rank_id;
++			axd_rs[rank_id].rd_stat = BUSY_STATE;
++		}
+ 	}
+-
+ 	mutex_unlock(&rank_sched->rank_stat_lock);
+ 
+ 	if (ret < 0)
+@@ -159,7 +162,10 @@ int release_rank_write(struct axdimm_rank_scheduler *rank_sched,
+ 	}
+ 
+ 	mutex_lock(&rank_sched->rank_stat_lock);
+-	axd_rs[rank_id].wr_stat = IDLE_STATE;
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		axd_rs[rank_id].wr_stat = IDLE_STATE;
++	}
+ 	mutex_unlock(&rank_sched->rank_stat_lock);
+ 
+ 	return ret;
+@@ -179,7 +185,10 @@ int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	}
+ 
+ 	mutex_lock(&rank_sched->rank_stat_lock);
+-	axd_rs[rank_id].rd_stat = IDLE_STATE;
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->axd_rank_stats);
++		axd_rs[rank_id].rd_stat = IDLE_STATE;
++	}
+ 	mutex_unlock(&rank_sched->rank_stat_lock);
+ 	return ret;
+ }
+-- 
+2.34.1
+

@@ -1,0 +1,214 @@
+From 922f8503be472dcd94de9c8817fa9213130d1669 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Sat, 29 Oct 2022 02:03:31 +0300
+Subject: [PATCH 089/128] [aten] Factory functions for simple, secure and sgx
+ tensors
+
+Resolves: AXDIMM-337
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ aten/src/ATen/native/axdimm/ops/Factory.cpp | 155 ++++++++++++++++----
+ 1 file changed, 127 insertions(+), 28 deletions(-)
+
+diff --git a/aten/src/ATen/native/axdimm/ops/Factory.cpp b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+index c3e0ab77..aedbde7a 100644
+--- a/aten/src/ATen/native/axdimm/ops/Factory.cpp
++++ b/aten/src/ATen/native/axdimm/ops/Factory.cpp
+@@ -1,9 +1,13 @@
+ #include <ATen/native/axdimm/AxdimmOpaqueTensor.h>
++#include <ATen/native/axdimm/AxdimmSecureTensor.h>
+ #include <ATen/native/axdimm/AxdimmTensor.h>
+ #include <c10/core/ScalarTypeToTypeMeta.h>
+ 
++#include <fmt/format.h>
+ #include <torch/library.h>
+ 
++#include <unordered_map>
++
+ namespace at {
+ namespace native {
+ namespace axdimm {
+@@ -23,15 +27,11 @@ at::Tensor empty_strided_axdimm(
+                   .pinned_memory(pin_memory)
+                   .memory_format(c10::MemoryFormat::Contiguous);
+   verify(opts);
+-  const at::native::axdimm::AxdimmTensor ten =
+-      at::native::axdimm::AxdimmTensor();
+-
+-  return at::detail::make_tensor<
+-      at::AxdimmOpaqueTensorImpl<at::native::axdimm::AxdimmTensor>>(
++  return at::detail::make_tensor<at::native::axdimm::AxdimmTensorImpl>(
+       at::DispatchKeySet(at::DispatchKey::AXDIMM),
+       opts.dtype(),
+       at::Device(at::kAXDIMM),
+-      ten,
++      nullptr,
+       size,
+       stride);
+ }
+@@ -42,40 +42,139 @@ TORCH_LIBRARY_IMPL(aten, AXDIMM, m) {
+       TORCH_FN(empty_strided_axdimm));
+ }
+ 
+-//! Exposes all parameters for axdimm tensor creation. Available in python via:
+-//! torch.ops.axdimm.create_tensor
+-at::Tensor create_tensor(
+-    at::Tensor weights,
++const std::string gkSimpleTensor = "simple";
++const std::string gkSecureTensor = "secure";
++const std::string gkSecureSgxTensor = "secure_sgx";
++
++std::unordered_map<std::string, AxdimmTensorType> gkAxdimmTensorTypeMap{
++    {gkSimpleTensor, AxdimmTensorType::AXDIMM_SIMPLE},
++    {gkSecureTensor, AxdimmTensorType::AXDIMM_SECURE},
++    {gkSecureSgxTensor, AxdimmTensorType::AXDIMM_SECURE_SGX}};
++
++at::Tensor create_tensor_helper(
++    std::shared_ptr<AxdimmBaseTensor>&& tensor,
++    const caffe2::TypeMeta& dtype,
++    at::IntArrayRef sizes,
++    at::IntArrayRef strides) {
++  return at::detail::make_tensor<AxdimmTensorImpl>(
++      at::DispatchKeySet(at::DispatchKey::AXDIMM),
++      dtype,
++      at::Device(at::kAXDIMM),
++      std::move(tensor),
++      sizes,
++      strides);
++}
++
++AxdimmTensorType get_tensor_type(const c10::string_view& tensor_type_name) {
++  const auto& it = gkAxdimmTensorTypeMap.find(tensor_type_name.data());
++  TORCH_CHECK(
++      it != std::end(gkAxdimmTensorTypeMap),
++      fmt::format("Wrong tensor type: {}", tensor_type_name.data()));
++  return it->second;
++}
++
++/*! Factory function for axdimm tensor creation from cpu tensor.
++ *  Available in python using: torch.ops.axdimm.create_tensor
++ */
++at::Tensor create_tensor_from_weights(
++    c10::string_view tensor_type_name,
++    const at::Tensor& weights,
+     int64_t num_tables,
+     int64_t features_per_table,
+     int64_t sparse_feature_size,
+     int64_t allocation_preference,
+-    c10::optional<at::ScalarType> dtype = {}) {
+-  const at::native::axdimm::AxdimmTensor ten = at::native::axdimm::AxdimmTensor(
+-      weights,
+-      num_tables,
+-      features_per_table,
+-      sparse_feature_size,
+-      static_cast<axd_user_preferences>(allocation_preference));
+-  return at::detail::make_tensor<
+-      at::AxdimmOpaqueTensorImpl<at::native::axdimm::AxdimmTensor>>(
+-      at::DispatchKeySet(at::DispatchKey::AXDIMM),
+-      dtype ? c10::scalarTypeToTypeMeta(*dtype)
+-            : caffe2::TypeMeta::Make<float>(),
+-      at::Device(at::kAXDIMM),
+-      ten,
+-      weights.sizes(),
+-      weights.strides());
++    c10::optional<bool> precompile = true,
++    c10::optional<bool> with_tag = {}) {
++  std::shared_ptr<AxdimmBaseTensor> tensor;
++  const auto tensor_type = get_tensor_type(tensor_type_name);
++  switch (tensor_type) {
++    case AxdimmTensorType::AXDIMM_SIMPLE:
++      tensor = std::make_shared<AxdimmTensor>(
++          weights,
++          num_tables,
++          features_per_table,
++          sparse_feature_size,
++          static_cast<axd_user_preferences>(allocation_preference));
++      break;
++    case AxdimmTensorType::AXDIMM_SECURE:
++    case AxdimmTensorType::AXDIMM_SECURE_SGX:
++      tensor = std::make_shared<AxdimmSecureTensor>(
++          weights,
++          tensor_type,
++          num_tables,
++          features_per_table,
++          sparse_feature_size,
++          static_cast<axd_user_preferences>(allocation_preference),
++          *precompile,
++          *with_tag);
++      break;
++  }
++
++  return create_tensor_helper(
++      std::move(tensor), weights.dtype(), weights.sizes(), weights.strides());
++}
++
++/*! Factory function for axdimm tensor creation from cpu tensor.
++ *  Available in python using: torch.ops.axdimm.create_tensor
++ */
++at::Tensor create_tensor_from_file(
++    c10::string_view tensor_type_name,
++    c10::string_view weights_file_path,
++    const c10::ScalarType& scalar_type,
++    const at::Tensor& tables_rows_num,
++    int64_t num_tables,
++    int64_t sparse_feature_size,
++    int64_t allocation_preference,
++    c10::optional<bool> precompile = true,
++    c10::optional<bool> with_tag = {}) {
++  std::shared_ptr<AxdimmBaseTensor> tensor;
++  const auto tensor_type = get_tensor_type(tensor_type_name);
++  switch (tensor_type) {
++    case AxdimmTensorType::AXDIMM_SIMPLE:
++      tensor = std::make_shared<AxdimmTensor>(
++          weights_file_path.data(),
++          scalar_type,
++          tables_rows_num,
++          num_tables,
++          sparse_feature_size,
++          static_cast<axd_user_preferences>(allocation_preference));
++      break;
++    case AxdimmTensorType::AXDIMM_SECURE:
++    case AxdimmTensorType::AXDIMM_SECURE_SGX:
++      tensor = std::make_shared<AxdimmSecureTensor>(
++          weights_file_path.data(),
++          scalar_type,
++          tables_rows_num,
++          tensor_type,
++          num_tables,
++          sparse_feature_size,
++          static_cast<axd_user_preferences>(allocation_preference),
++          *precompile,
++          *with_tag);
++      break;
++  }
++
++  return create_tensor_helper(
++      std::move(tensor), c10::scalarTypeToTypeMeta(scalar_type), {}, {});
+ }
+ 
+ TORCH_LIBRARY(axdimm, m) {
+   m.def(TORCH_SELECTIVE_SCHEMA(
+-      "axdimm::create_tensor(Tensor weights, int num_tables, int features_per_table, int sparse_feature_size, int allocation_preference, ScalarType?  dtype) -> Tensor"));
++      "axdimm::create_tensor.from_weights(str tensor_type_name, Tensor weights, int num_tables, int features_per_table,"
++      "int sparse_feature_size, int allocation_preference, bool? precompile = True, bool? with_tag = False) -> Tensor"));
++  m.def(TORCH_SELECTIVE_SCHEMA(
++      "axdimm::create_tensor.from_file(str tensor_type_name, str weights_file_path, ScalarType scalar_type,"
++      "Tensor tables_rows_num, int num_tables, int sparse_feature_size, int allocation_preference, bool? precompile = True, bool? with_tag = False) -> Tensor"));
+ }
+ 
+ TORCH_LIBRARY_IMPL(axdimm, CPU, m) {
+   m.impl(
+-      TORCH_SELECTIVE_NAME("axdimm::create_tensor"), TORCH_FN(create_tensor));
++      TORCH_SELECTIVE_NAME("axdimm::create_tensor.from_weights"),
++      TORCH_FN(create_tensor_from_weights));
++  m.impl(
++
++      TORCH_SELECTIVE_NAME("axdimm::create_tensor.from_file"),
++      TORCH_FN(create_tensor_from_file));
+ }
+ 
+ } // namespace axdimm
+-- 
+2.34.1
+

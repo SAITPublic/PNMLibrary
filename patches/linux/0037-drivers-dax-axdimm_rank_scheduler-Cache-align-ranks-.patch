@@ -1,0 +1,32 @@
+From a6f5b857b6964b172f91be72275a72abe66841d6 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 31 Aug 2022 17:01:43 +0900
+Subject: [PATCH 037/161] [drivers/dax/axdimm_rank_scheduler] Cache-align ranks
+ read/write counters
+
+Add padding for cache alignment for ranks read/write counters to avoid false
+sharing. Surprisingly this also solves FPGA hangs on workloads with high
+counters contentions
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/dax/axdimm_rank_scheduler.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/dax/axdimm_rank_scheduler.h b/drivers/dax/axdimm_rank_scheduler.h
+index 8083cdf16..ce678d3be 100644
+--- a/drivers/dax/axdimm_rank_scheduler.h
++++ b/drivers/dax/axdimm_rank_scheduler.h
+@@ -12,7 +12,9 @@ struct axdimm_rank_scheduler {
+ 	/* struct for managing rank read and write status */
+ 	struct axdimm_rank_stat_t {
+ 		uint8_t wr_stat;
++		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
+ 		uint8_t rd_stat;
++		uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(uint8_t)];
+ 	} axd_rank_stats[NUM_OF_RANK];
+ 	struct mutex rank_stat_lock;
+ };
+-- 
+2.34.1
+

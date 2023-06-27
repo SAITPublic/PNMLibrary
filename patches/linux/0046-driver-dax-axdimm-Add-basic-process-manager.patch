@@ -1,0 +1,928 @@
+From eaa8919e17efb7b39383e72edec912936ff038dc Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Thu, 25 Aug 2022 13:18:58 +0300
+Subject: [PATCH 046/161] [driver/dax/axdimm] Add basic process manager
+
+Actual implementation handles userspace processes only.
+In such case thread's allocated resources (ranks only at the moment)
+are assigned to userspace process which spawned thread, this
+fits ok since threads do not make AXDIMM memory allocation.
+
+Resolves: AXDIMM-256
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/dax/Makefile                 |   1 +
+ drivers/dax/axdimm-private.h         |   3 +
+ drivers/dax/axdimm.c                 |  27 ++-
+ drivers/dax/axdimm_allocator.c       |  22 +-
+ drivers/dax/axdimm_allocator.h       |   7 +-
+ drivers/dax/axdimm_log.h             |   1 +
+ drivers/dax/axdimm_process_manager.c | 348 +++++++++++++++++++++++++++
+ drivers/dax/axdimm_process_manager.h |  68 ++++++
+ drivers/dax/axdimm_rank_scheduler.c  | 150 ++++++++----
+ drivers/dax/axdimm_rank_scheduler.h  |  14 ++
+ drivers/dax/device.c                 |   5 +-
+ 11 files changed, 582 insertions(+), 64 deletions(-)
+ create mode 100644 drivers/dax/axdimm_process_manager.c
+ create mode 100644 drivers/dax/axdimm_process_manager.h
+
+diff --git a/drivers/dax/Makefile b/drivers/dax/Makefile
+index ab70c58d5..ded3bd752 100644
+--- a/drivers/dax/Makefile
++++ b/drivers/dax/Makefile
+@@ -13,6 +13,7 @@ device_dax-y += axdimm_allocator.o
+ device_dax-y += axdimm_rank_scheduler.o
+ device_dax-y += axdimm_mem_tree.o
+ device_dax-y += axdimm_sysfs.o
++device_dax-y += axdimm_process_manager.o
+ dax_pmem-y := pmem.o
+ 
+ obj-y += hmem/
+diff --git a/drivers/dax/axdimm-private.h b/drivers/dax/axdimm-private.h
+index d154e5392..21e15bed0 100644
+--- a/drivers/dax/axdimm-private.h
++++ b/drivers/dax/axdimm-private.h
+@@ -81,6 +81,9 @@ int axdimm_mmap(struct file *filep, struct vm_area_struct *vma);
+ 
+ long axdimm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+ 
++int axdimm_release(struct inode *node, struct file *f);
++int axdimm_open(struct inode *inode, struct file *filp);
++
+ #endif
+ 
+ /* __AXDIMM_PRIVATE_H__ */
+diff --git a/drivers/dax/axdimm.c b/drivers/dax/axdimm.c
+index 307f5aa8d..24fdf5c66 100644
+--- a/drivers/dax/axdimm.c
++++ b/drivers/dax/axdimm.c
+@@ -1,8 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2022 Samsung LTD. All rights reserved. */
+ 
+-#include "axdimm_rank_scheduler.h"
+-#include "axdimm_allocator.h"
++#include "axdimm_process_manager.h"
+ #include "axdimm-private.h"
+ #include "axdimm_sysfs.h"
+ #include "axdimm_log.h"
+@@ -27,6 +26,18 @@ MODULE_VERSION(AXDIMM_DRIVER_VERSION);
+ struct axdimm_allocator axdimm_allocator;
+ struct axdimm_rank_scheduler axdimm_rank_sched;
+ struct axdimm_dev axdimm_device;
++struct axdimm_process_manager axdimm_proc_mgr;
++
++int axdimm_release(struct inode *node, struct file *f)
++{
++	return release_axdimm_process(&axdimm_proc_mgr, &axdimm_allocator,
++				      &axdimm_rank_sched);
++}
++
++int axdimm_open(struct inode *inode, struct file *filp)
++{
++	return register_axdimm_process(&axdimm_proc_mgr);
++}
+ 
+ static uint64_t axdimm_GetHexAddress(int channel, int rank, int bankgroup,
+ 				     int bank, int row, int column)
+@@ -350,12 +361,15 @@ int init_axdimm_device(struct dev_dax *dev_dax)
+ 	 */
+ 	setup_axdimm_ranges(dev_dax);
+ 
++	/* Initialize manager of processes which use AXDIMM resources */
++	init_axdimm_process_manager(&axdimm_proc_mgr);
++
+ 	/* Reset ranks status and synchronization primitives */
+-	reset_axdimm_rank_scheduler(&axdimm_rank_sched);
++	init_axdimm_rank_scheduler(&axdimm_rank_sched, &axdimm_proc_mgr);
+ 
+ 	/* Initialize memory allocator */
+-	return init_axdimm_allocator(&axdimm_allocator,
+-				     &axdimm_device.mem_info);
++	return init_axdimm_allocator(&axdimm_allocator, &axdimm_device.mem_info,
++				     &axdimm_proc_mgr);
+ }
+ 
+ void cleanup_axdimm_device()
+@@ -363,6 +377,9 @@ void cleanup_axdimm_device()
+ 	/* Free allocated memory */
+ 	cleanup_axdimm_allocator(&axdimm_allocator);
+ 
++	/* Free allocated memory if any user processes alive upon device remove*/
++	cleanup_axdimm_process_manager(&axdimm_proc_mgr);
++
+ 	/* Remove test attribute */
+ 	destroy_axdimm_sysfs();
+ }
+diff --git a/drivers/dax/axdimm_allocator.c b/drivers/dax/axdimm_allocator.c
+index 9c6c3a3e0..269d689b6 100644
+--- a/drivers/dax/axdimm_allocator.c
++++ b/drivers/dax/axdimm_allocator.c
+@@ -2,6 +2,7 @@
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
+ #include "axdimm-private.h"
++#include "axdimm_process_manager.h"
+ #include "axdimm_allocator.h"
+ #include "axdimm_log.h"
+ #include "axdimm_mem_tree.h"
+@@ -44,7 +45,8 @@ static int init_memory_trees_and_size(struct axdimm_allocator *alloc,
+ }
+ 
+ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+-			  struct axdmem_info *mem_info)
++			  struct axdmem_info *mem_info,
++			  struct axdimm_process_manager *proc_mgr)
+ {
+ 	int err_code;
+ 
+@@ -56,6 +58,8 @@ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+ 
+ 	INIT_LIST_HEAD(&alloc->alloc_list);
+ 
++	alloc->proc_mgr = proc_mgr;
++
+ 	/* Protect memory allocation operations */
+ 	mutex_init(&alloc->memory_mutex);
+ 
+@@ -374,8 +378,13 @@ static int allocate_memory_ioctl(struct axdimm_allocator *alloc,
+ 	}
+ 
+ 	err_code = put_user(descriptor, &usr_req->descriptor);
+-	if (unlikely(err_code))
++	if (unlikely(err_code)) {
+ 		AXDIMM_ERR("Can't copy allocation descriptor to user.\n");
++		goto free_user_objects_sizes;
++	}
++
++	/* descriptor is valid and copied to user, so add it to process resources */
++	err_code = axdimm_proc_register_alloc(alloc->proc_mgr, descriptor);
+ 
+ free_user_objects_sizes:
+ 	kfree(kernel_req.user_objects_sizes);
+@@ -498,8 +507,7 @@ static int get_allocation_ioctl(struct axdimm_allocator *alloc,
+ 	return err_code;
+ }
+ 
+-static int deallocate_memory(struct axdimm_allocator *alloc,
+-			     uint64_t descriptor)
++int deallocate_memory(struct axdimm_allocator *alloc, uint64_t descriptor)
+ {
+ 	int err_code = -EINVAL;
+ 	struct list_head *cur, *n;
+@@ -542,8 +550,12 @@ static int deallocate_memory_ioctl(struct axdimm_allocator *alloc,
+ 	 * however in this method it's truncated to unsigned long.
+ 	 */
+ 	uint64_t in_descriptor = (uint64_t)arg;
++	int err_code = deallocate_memory(alloc, in_descriptor);
+ 
+-	return deallocate_memory(alloc, in_descriptor);
++	if (likely(err_code == 0))
++		axdimm_proc_remove_alloc(alloc->proc_mgr, in_descriptor);
++
++	return err_code;
+ }
+ 
+ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+diff --git a/drivers/dax/axdimm_allocator.h b/drivers/dax/axdimm_allocator.h
+index a68d660b1..e3f87fdb1 100644
+--- a/drivers/dax/axdimm_allocator.h
++++ b/drivers/dax/axdimm_allocator.h
+@@ -5,6 +5,7 @@
+ #define __AXDIMM_ALLOCATOR_H__
+ 
+ #include "axdimm-private.h"
++#include "axdimm_process_manager.h"
+ 
+ #include <linux/mutex.h>
+ #include <linux/libaxdimm.h>
+@@ -46,11 +47,14 @@ struct axdimm_allocator {
+ 	struct list_head alloc_list;
+ 	/* Allocation descriptor counter */
+ 	uint64_t descriptor_counter;
++	/* For process allocation ownership tracking */
++	struct axdimm_process_manager *proc_mgr;
+ 	struct mutex memory_mutex;
+ };
+ 
+ int init_axdimm_allocator(struct axdimm_allocator *alloc,
+-			  struct axdmem_info *mem_info);
++			  struct axdmem_info *mem_info,
++			  struct axdimm_process_manager *proc_mgr);
+ /*
+  * Not proccess(thread)-safe.
+  * `mem_info` might be NULL, if it is
+@@ -62,5 +66,6 @@ int reset_axdimm_allocator(struct axdimm_allocator *alloc,
+ void cleanup_axdimm_allocator(struct axdimm_allocator *alloc);
+ int mem_process_ioctl(unsigned int cmd, struct axdimm_allocator *alloc,
+ 		      unsigned long __user arg);
++int deallocate_memory(struct axdimm_allocator *alloc, uint64_t descriptor);
+ 
+ #endif /* __AXDIMM_ALLOCATOR_H__ */
+diff --git a/drivers/dax/axdimm_log.h b/drivers/dax/axdimm_log.h
+index b120a5c16..70b3793da 100644
+--- a/drivers/dax/axdimm_log.h
++++ b/drivers/dax/axdimm_log.h
+@@ -14,5 +14,6 @@
+ #define AXDIMM_ERR(fmt, ...) AXDIMM_PRINT(KERN_ERR, fmt, ##__VA_ARGS__)
+ #define AXDIMM_WRN(fmt, ...) AXDIMM_PRINT(KERN_WARNING, fmt, ##__VA_ARGS__)
+ #define AXDIMM_INF(fmt, ...) AXDIMM_PRINT(KERN_INFO, fmt, ##__VA_ARGS__)
++#define AXDIMM_DBG(fmt, ...) AXDIMM_PRINT(KERN_DEBUG, fmt, ##__VA_ARGS__)
+ 
+ #endif /* __AXDIMM_LOG_H__ */
+diff --git a/drivers/dax/axdimm_process_manager.c b/drivers/dax/axdimm_process_manager.c
+new file mode 100644
+index 000000000..88d9ff7b4
+--- /dev/null
++++ b/drivers/dax/axdimm_process_manager.c
+@@ -0,0 +1,348 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#include "axdimm_process_manager.h"
++#include "axdimm_rank_scheduler.h"
++#include "axdimm_allocator.h"
++#include "axdimm_log.h"
++
++#include <linux/sched/signal.h>
++#include <linux/slab.h>
++#include <linux/sched.h>
++
++enum rank_access_type { RANK_ACCESS_RD, RANK_ACCESS_WR, RANK_ACCESS_INVAL };
++
++static inline bool is_abnormal_process_exit(void)
++{
++	return current->flags & PF_SIGNALED ||
++	       current->exit_state == EXIT_DEAD ||
++	       current->exit_state == EXIT_ZOMBIE || current->exit_code != 0 ||
++	       current->exit_signal != SIGCHLD;
++}
++
++static inline enum rank_access_type get_rank_access_type(unsigned int cmd)
++{
++	if (cmd == GET_RANK_FOR_WRITE || cmd == RELEASE_WRITE_RANK)
++		return RANK_ACCESS_WR;
++	if (cmd == GET_RANK_FOR_READ || cmd == RELEASE_READ_RANK)
++		return RANK_ACCESS_RD;
++
++	return RANK_ACCESS_INVAL;
++}
++
++static inline const char *rank_access_type_to_str(enum rank_access_type type)
++{
++	return type == RANK_ACCESS_RD ? "rd" : "wr";
++}
++
++static pid_t get_current_process_id(void)
++{
++	/*
++	 * group_leader is a pointer to the task_struct of the main thread of
++	 * userspace process.
++	 */
++	return current->group_leader->pid;
++}
++
++static struct axdimm_proc_resources *
++find_current_proc_res(struct axdimm_process_manager *mgr)
++{
++	struct axdimm_proc_resources *proc_res;
++	pid_t pid = get_current_process_id();
++
++	list_for_each_entry (proc_res, &mgr->process_list, list) {
++		if (proc_res->pid == pid) {
++			return proc_res;
++		}
++	}
++
++	return NULL;
++}
++
++static int release_process_resources(struct axdimm_proc_resources *proc_res,
++				     struct axdimm_allocator *alloc,
++				     struct axdimm_rank_scheduler *rank_sched)
++{
++	/* in base case scenario the resources above should be already
++	 * released, but we need to check in case we are on
++	 * 'killed process' path */
++	int i;
++	struct axdimm_proc_desc *proc_desc;
++	struct axdimm_proc_desc *proc_desc_tmp;
++	bool failed = false;
++
++	/* handle unreleased ranks */
++	for (i = 0; i < NUM_OF_RANK; i++) {
++		if (proc_res->rank_write_mask & (1 << i)) {
++			failed |= (release_rank_write(rank_sched, i) != i);
++			proc_res->rank_write_mask &= ~(1 << i);
++			AXDIMM_INF(
++				"Abnormal release rank_wr[%d], pid: %d, tid: %d\n",
++				i, get_current_process_id(), current->pid);
++		}
++
++		if (proc_res->rank_read_mask & (1 << i)) {
++			failed |= (release_rank_read(rank_sched, i) != i);
++			proc_res->rank_read_mask &= ~(1 << i);
++			AXDIMM_INF(
++				"Abnormal release rank_rd[%d], pid: %d, tid: %d\n",
++				i, get_current_process_id(), current->pid);
++		}
++	}
++
++	/* handle unreleased allocation descriptors */
++	list_for_each_entry_safe (proc_desc, proc_desc_tmp,
++				  &proc_res->alloc_desc_list, list) {
++		failed |=
++			(deallocate_memory(alloc, proc_desc->alloc_desc) != 0);
++		AXDIMM_INF("Abnormal release desc[%lld], pid: %d, tid: %d\n",
++			   proc_desc->alloc_desc, get_current_process_id(),
++			   current->pid);
++		list_del(&proc_desc->list);
++		kfree(proc_desc);
++	}
++
++	return failed ? -1 : 0;
++}
++
++int release_axdimm_process(struct axdimm_process_manager *mgr,
++			   struct axdimm_allocator *alloc,
++			   struct axdimm_rank_scheduler *rank_sched)
++{
++	int err_code = -1;
++	struct axdimm_proc_resources *proc_res = NULL;
++
++	mutex_lock(&mgr->proc_list_lock);
++	proc_res = find_current_proc_res(mgr);
++
++	if (!proc_res) {
++		AXDIMM_ERR("Tried to release already released process by"
++			   " pid: %d, tid: %d \n",
++			   get_current_process_id(), current->pid);
++		goto release_process_unlock;
++	}
++
++	proc_res->ref_cnt--;
++	/* release resources and remove process from list if:
++	 *   - we are in last close syscall from userspace
++	 *   - process got finished abnormally
++	 */
++	if (proc_res->ref_cnt == 0 || is_abnormal_process_exit()) {
++		AXDIMM_DBG("Releasing process pid: %d, tid: %d, "
++			   "exit_state: %d, exit_code: %d, exit_sig: %d, "
++			   "flags (PF_* from include/linux/sched.h): 0x%x\n",
++			   get_current_process_id(), current->pid,
++			   current->exit_state, current->exit_code,
++			   current->exit_signal, current->flags);
++
++		err_code =
++			release_process_resources(proc_res, alloc, rank_sched);
++		list_del(&proc_res->list);
++		kfree(proc_res);
++	}
++
++release_process_unlock:
++	mutex_unlock(&mgr->proc_list_lock);
++
++	return err_code;
++}
++
++static int set_rank_status(struct axdimm_process_manager *mgr,
++			   enum rank_access_type type, int rank, bool set)
++{
++	int *rank_mask;
++	int mask_tmp;
++	int err_code = 0;
++	struct axdimm_proc_resources *proc_res = NULL;
++
++	mutex_lock(&mgr->proc_list_lock);
++	proc_res = find_current_proc_res(mgr);
++
++	if (proc_res == NULL) {
++		err_code = -1;
++		goto out;
++	}
++
++	/* get read or write mask according to request */
++	rank_mask = type == RANK_ACCESS_RD ? &proc_res->rank_read_mask :
++					     &proc_res->rank_write_mask;
++	mask_tmp = *rank_mask;
++	/* set or unset rank's bit according to request */
++	*rank_mask = set ? mask_tmp | (1 << rank) : mask_tmp & ~(1 << rank);
++
++out:
++	mutex_unlock(&mgr->proc_list_lock);
++	return err_code;
++}
++
++int axdimm_proc_register_rank(struct axdimm_process_manager *mgr, int rank,
++			      unsigned int cmd)
++{
++	enum rank_access_type rank_type = get_rank_access_type(cmd);
++
++	if (unlikely(rank_type == RANK_ACCESS_INVAL)) {
++		AXDIMM_ERR("Unknown rank type\n");
++		return -1;
++	}
++
++	AXDIMM_DBG("Registering rank_%s[%d], pid: %d, tid: %d\n",
++		   rank_access_type_to_str(rank_type), rank,
++		   get_current_process_id(), current->pid);
++	if (set_rank_status(mgr, rank_type, rank, true)) {
++		AXDIMM_ERR("Fail to register rank_%s[%d]\n",
++			   rank_access_type_to_str(rank_type), rank);
++		return -1;
++	}
++	return 0;
++}
++
++int axdimm_proc_remove_rank(struct axdimm_process_manager *mgr, int rank,
++			    unsigned int cmd)
++{
++	int rank_type = get_rank_access_type(cmd);
++
++	if (unlikely(rank_type == RANK_ACCESS_INVAL)) {
++		AXDIMM_ERR("Unknown rank type\n");
++		return -1;
++	}
++
++	AXDIMM_DBG("Removing rank_%s[%d], pid: %d, tid: %d\n",
++		   rank_access_type_to_str(rank_type), rank,
++		   get_current_process_id(), current->pid);
++	if (set_rank_status(mgr, rank_type, rank, false)) {
++		AXDIMM_ERR("Fail to remove rank_%s[%d]\n",
++			   rank_access_type_to_str(rank_type), rank);
++		return -1;
++	}
++	return 0;
++}
++
++static int update_descriptor_status(struct axdimm_process_manager *mgr,
++				    uint64_t desc, bool is_registration)
++{
++	struct axdimm_proc_desc *proc_desc_tmp;
++	int err_code = 0;
++	struct axdimm_proc_resources *proc_res = NULL;
++	struct axdimm_proc_desc *proc_desc = NULL;
++
++	mutex_lock(&mgr->proc_list_lock);
++	proc_res = find_current_proc_res(mgr);
++
++	if (proc_res == NULL) {
++		err_code = -1;
++		goto out;
++	}
++
++	if (is_registration) { /* allocate and add descritor to descriptors list */
++		proc_desc =
++			kzalloc(sizeof(struct axdimm_proc_desc), GFP_KERNEL);
++
++		if (proc_desc == NULL) {
++			err_code = -1;
++			goto out;
++		}
++
++		proc_desc->alloc_desc = desc;
++		list_add(&proc_desc->list, &proc_res->alloc_desc_list);
++	} else { /* remove requested descriptor from descriptors list */
++		list_for_each_entry_safe (proc_desc, proc_desc_tmp,
++					  &proc_res->alloc_desc_list, list) {
++			if (proc_desc->alloc_desc == desc) {
++				list_del(&proc_desc->list);
++				kfree(proc_desc);
++			}
++		}
++	}
++
++out:
++	mutex_unlock(&mgr->proc_list_lock);
++	return err_code;
++}
++
++static int register_descriptor(struct axdimm_process_manager *mgr,
++			       uint64_t desc)
++{
++	return update_descriptor_status(mgr, desc, true);
++}
++
++static int unregister_descriptor(struct axdimm_process_manager *mgr,
++				 uint64_t desc)
++{
++	return update_descriptor_status(mgr, desc, false);
++}
++
++int axdimm_proc_register_alloc(struct axdimm_process_manager *mgr,
++			       uint64_t desc)
++{
++	AXDIMM_DBG("Registering allocation, desc[%lld], pid: %d, tid: %d\n",
++		   desc, get_current_process_id(), current->pid);
++	if (register_descriptor(mgr, desc)) {
++		AXDIMM_ERR("Fail to register desc: %lld\n", desc);
++		return -1;
++	}
++	return 0;
++}
++
++int axdimm_proc_remove_alloc(struct axdimm_process_manager *mgr, uint64_t desc)
++{
++	AXDIMM_DBG("Removing allocation, desc[%lld], pid: %d, tid: %d\n", desc,
++		   get_current_process_id(), current->pid);
++	if (unregister_descriptor(mgr, desc)) {
++		AXDIMM_ERR("Fail to remove desc: %lld\n", desc);
++		return -1;
++	}
++	return 0;
++}
++
++int register_axdimm_process(struct axdimm_process_manager *mgr)
++{
++	int err_code = 0;
++	struct axdimm_proc_resources *proc_res = NULL;
++	pid_t pid = get_current_process_id();
++
++	mutex_lock(&mgr->proc_list_lock);
++	proc_res = find_current_proc_res(mgr);
++
++	if (proc_res)
++		goto inc_ref_count;
++
++	proc_res = kzalloc(sizeof(struct axdimm_proc_resources), GFP_KERNEL);
++
++	if (!proc_res) {
++		AXDIMM_ERR("Failed to register process, pid: %d, tid: %d\n",
++			   pid, current->pid);
++		err_code = -1;
++		goto out;
++	}
++
++	proc_res->pid = pid;
++	INIT_LIST_HEAD(&proc_res->alloc_desc_list);
++	list_add(&proc_res->list, &mgr->process_list);
++	AXDIMM_DBG("Registered process, pid: %d, tid: %d\n", pid, current->pid);
++
++inc_ref_count:
++	proc_res->ref_cnt++;
++out:
++	mutex_unlock(&mgr->proc_list_lock);
++	return err_code;
++}
++
++void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr)
++{
++	struct axdimm_proc_resources *proc_res_tmp;
++	struct axdimm_proc_resources *proc_res;
++
++	mutex_lock(&mgr->proc_list_lock);
++	list_for_each_entry_safe (proc_res, proc_res_tmp, &mgr->process_list,
++				  list) {
++		list_del(&proc_res->list);
++		kfree(proc_res);
++	}
++	mutex_unlock(&mgr->proc_list_lock);
++}
++
++void init_axdimm_process_manager(struct axdimm_process_manager *mgr)
++{
++	INIT_LIST_HEAD(&mgr->process_list);
++	mutex_init(&mgr->proc_list_lock);
++}
+diff --git a/drivers/dax/axdimm_process_manager.h b/drivers/dax/axdimm_process_manager.h
+new file mode 100644
+index 000000000..c7b7b99dd
+--- /dev/null
++++ b/drivers/dax/axdimm_process_manager.h
+@@ -0,0 +1,68 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#ifndef __AXDIMM_PROCESS_MANAGER_H__
++#define __AXDIMM_PROCESS_MANAGER_H__
++
++#include "axdimm_rank_scheduler.h"
++#include "axdimm_allocator.h"
++
++#include <linux/mutex.h>
++#include <linux/list.h>
++
++/* list of descriptors held by process */
++struct axdimm_proc_desc {
++	uint64_t alloc_desc;
++	struct list_head list;
++};
++
++/* resources allocated for particular process */
++struct axdimm_proc_resources {
++	int pid;
++	/* [TODO:] need to checkout performance impact of using just list,
++	 * maybe some more advanced data structure is required (rb_tree)  */
++	struct list_head alloc_desc_list;
++	int rank_write_mask;
++	int rank_read_mask;
++	/* this counter needed because release f_op is called on each close
++	 * syscall, sometimes userspace process can just open/close device
++	 * for reset ioctl purpose. take in mind this counter should be accessed
++	 * only under proc_list_lock in order to prevent race conditions
++	 */
++	int ref_cnt;
++	struct list_head list;
++};
++
++/*
++ * data structure for tracking device resources, allocated to user space
++ * processes
++ */
++struct axdimm_process_manager {
++	/* [TODO:] need to checkout performance impact of using just list,
++	 * maybe some more advanced data structure is required (rb_tree)  */
++	struct list_head process_list;
++	/* mutex for accessing process_list concurrently */
++	struct mutex proc_list_lock;
++};
++
++void init_axdimm_process_manager(struct axdimm_process_manager *mgr);
++void cleanup_axdimm_process_manager(struct axdimm_process_manager *mgr);
++/* function for handling 'open' file operation */
++int register_axdimm_process(struct axdimm_process_manager *mgr);
++/* function for handling 'release' file operation */
++int release_axdimm_process(struct axdimm_process_manager *mgr,
++			   struct axdimm_allocator *alloc,
++			   struct axdimm_rank_scheduler *rank_sched);
++
++/* functions for adding allocation/ranks into process's resources data structure*/
++int axdimm_proc_register_alloc(struct axdimm_process_manager *mgr,
++			       uint64_t desc);
++int axdimm_proc_register_rank(struct axdimm_process_manager *mgr, int rank,
++			      unsigned int cmd);
++
++/* function for removing allocation/ranks from process's resources data structure*/
++int axdimm_proc_remove_alloc(struct axdimm_process_manager *mgr, uint64_t desc);
++int axdimm_proc_remove_rank(struct axdimm_process_manager *mgr, int rank,
++			    unsigned int cmd);
++
++#endif /* __AXDIMM_PROCESS_MANAGER_H__ */
+diff --git a/drivers/dax/axdimm_rank_scheduler.c b/drivers/dax/axdimm_rank_scheduler.c
+index 74f4a8d56..0d8f46705 100644
+--- a/drivers/dax/axdimm_rank_scheduler.c
++++ b/drivers/dax/axdimm_rank_scheduler.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
++#include "axdimm_process_manager.h"
+ #include "axdimm_rank_scheduler.h"
+ #include "axdimm_log.h"
+ 
+@@ -66,7 +67,13 @@ void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched)
+ 	}
+ 
+ 	atomic64_set(&rank_sched->retry_timeout_ns, RETRY_TIMEOUT_NS);
++}
+ 
++void init_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched,
++				struct axdimm_process_manager *proc_mgr)
++{
++	rank_sched->proc_mgr = proc_mgr;
++	reset_axdimm_rank_scheduler(rank_sched);
+ 	mutex_init(&rank_sched->rank_stat_lock);
+ }
+ 
+@@ -119,10 +126,10 @@ static int get_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	return ret;
+ }
+ 
+-static int release_rank_write(struct axdimm_rank_scheduler *rank_sched,
+-			      unsigned int rank_id)
++int release_rank_write(struct axdimm_rank_scheduler *rank_sched,
++		       unsigned int rank_id)
+ {
+-	int ret = 0;
++	int ret = rank_id;
+ 	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
+ 
+ 	if (rank_id > (NUM_OF_RANK - 1)) {
+@@ -137,10 +144,10 @@ static int release_rank_write(struct axdimm_rank_scheduler *rank_sched,
+ 	return ret;
+ }
+ 
+-static int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
+-			     unsigned int rank_id)
++int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
++		      unsigned int rank_id)
+ {
+-	int ret = 0;
++	int ret = rank_id;
+ 	struct axdimm_rank_stat_t *axd_rs = rank_sched->axd_rank_stats;
+ 
+ 	if (rank_id > (NUM_OF_RANK - 1)) {
+@@ -154,62 +161,105 @@ static int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
+ 	return ret;
+ }
+ 
++static int wait_for_rank(struct axdimm_rank_scheduler *rank_sched,
++			 atomic_t *flag, struct wait_queue_head *wq)
++{
++	atomic_set(flag, 0);
++	/* timeout in nanoseconds */
++	return wait_event_interruptible_hrtimeout(
++		*wq, atomic_read(flag),
++		atomic64_read(&rank_sched->retry_timeout_ns));
++}
++
++int get_retry_read(struct axdimm_rank_scheduler *rank_sched, unsigned int arg)
++{
++	if (wait_for_rank(rank_sched, &rd_flag, &rd_wq) >= 0) {
++		return get_rank_read(rank_sched, arg);
++	}
++	return -1;
++}
++
++int get_retry_write(struct axdimm_rank_scheduler *rank_sched, unsigned int arg)
++{
++	if (wait_for_rank(rank_sched, &wr_flag, &wr_wq) >= 0) {
++		return get_rank_write(rank_sched, arg);
++	}
++	return -1;
++}
++int get_rank_retry(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
++		   unsigned int arg)
++{
++	if (cmd == GET_RANK_FOR_READ) {
++		return get_retry_read(rank_sched, arg);
++	} else if (cmd == GET_RANK_FOR_WRITE) {
++		return get_retry_write(rank_sched, arg);
++	} else {
++		AXDIMM_ERR("Unknown rank operation cmd [%d]\n", cmd);
++		return -EINVAL;
++	}
++}
++
++static int get_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
++		    unsigned int arg)
++{
++	if (cmd == GET_RANK_FOR_WRITE)
++		return get_rank_write(rank_sched, arg);
++	if (cmd == GET_RANK_FOR_READ)
++		return get_rank_read(rank_sched, arg);
++
++	AXDIMM_ERR("Unknown rank operation cmd [%d]\n", cmd);
++	return -EINVAL;
++}
++
+ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 		    unsigned int arg)
+ {
+-	int ret = -1;
++	int ret = get_rank(rank_sched, cmd, arg);
++	if (ret < 0) /* was not able to get rank for write, retry */
++		ret = get_rank_retry(rank_sched, cmd, arg);
+ 
+-	if (cmd == GET_RANK_FOR_WRITE) {
+-		ret = get_rank_write(rank_sched, arg);
+-		if (ret <
+-		    0) { /* was not able to get rank for write, wait some time and try again */
+-			int wait_res;
+-			atomic_set(&wr_flag, 0);
+-			/* timeout in nanoseconds */
+-			wait_res = wait_event_interruptible_hrtimeout(
+-				wr_wq, atomic_read(&wr_flag),
+-				atomic64_read(&rank_sched->retry_timeout_ns));
+-			if (wait_res >= 0) {
+-				ret = get_rank_write(rank_sched, arg);
+-			}
+-		}
+-	} else if (cmd == GET_RANK_FOR_READ) {
+-		ret = get_rank_read(rank_sched, arg);
+-		if (ret <
+-		    0) { /* was not able to get rank for read, wait some time */
+-			int wait_res;
+-			atomic_set(&rd_flag, 0);
+-			/* timeout in nanoseconds */
+-			wait_res = wait_event_interruptible_hrtimeout(
+-				rd_wq, atomic_read(&rd_flag),
+-				atomic64_read(&rank_sched->retry_timeout_ns));
+-			if (wait_res >= 0) {
+-				ret = get_rank_read(rank_sched, arg);
+-			}
+-		}
+-	}
++	if (ret >= 0) /* finally got rank, add to process resources */
++		axdimm_proc_register_rank(rank_sched->proc_mgr, ret, cmd);
+ 
+ 	return ret;
+ }
+ 
+-int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched,
+-			unsigned int cmd, unsigned int arg)
++static void wakeup_queue(struct axdimm_rank_scheduler *rank_sched, int rank,
++			 atomic_t *flag, struct wait_queue_head *wq)
+ {
+-	int ret = -1;
++	if (rank >= 0) { /* wake up someone */
++		atomic_set(flag, 1);
++		wake_up_interruptible(wq);
++	}
++}
++
++static int release_and_wakeup(struct axdimm_rank_scheduler *rank_sched,
++			      unsigned int cmd, unsigned int arg)
++{
++	int rank;
+ 
+ 	if (cmd == RELEASE_WRITE_RANK) {
+-		ret = release_rank_write(rank_sched, arg);
+-		if (ret >= 0) { /* wake up someone */
+-			atomic_set(&wr_flag, 1);
+-			wake_up_interruptible(&wr_wq);
+-		}
++		rank = release_rank_write(rank_sched, arg);
++		wakeup_queue(rank_sched, rank, &wr_flag, &wr_wq);
+ 	} else if (cmd == RELEASE_READ_RANK) {
+-		ret = release_rank_read(rank_sched, arg);
+-		if (ret >= 0) { /* wake up someone */
+-			atomic_set(&rd_flag, 1);
+-			wake_up_interruptible(&rd_wq);
+-		}
++		rank = release_rank_read(rank_sched, arg);
++		wakeup_queue(rank_sched, rank, &rd_flag, &rd_wq);
++	} else {
++		AXDIMM_ERR("Unknown rank operation cmd [%d]\n", cmd);
++		return -EINVAL;
+ 	}
+ 
+-	return ret;
++	return rank;
++}
++
++int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched,
++			unsigned int cmd, unsigned int arg)
++{
++	int rank;
++	rank = release_and_wakeup(rank_sched, cmd, arg);
++
++	if (rank >= 0)
++		return axdimm_proc_remove_rank(rank_sched->proc_mgr, rank, cmd);
++
++	return -1;
+ }
+diff --git a/drivers/dax/axdimm_rank_scheduler.h b/drivers/dax/axdimm_rank_scheduler.h
+index d9f93e892..f594b5aaa 100644
+--- a/drivers/dax/axdimm_rank_scheduler.h
++++ b/drivers/dax/axdimm_rank_scheduler.h
+@@ -5,6 +5,8 @@
+ #define __AXDIMM_RANK_SCHEDULER_H__
+ 
+ #include <linux/atomic.h>
++#include "axdimm_process_manager.h"
++
+ #include <linux/libaxdimm.h>
+ #include <linux/types.h>
+ #include <linux/mutex.h>
+@@ -22,12 +24,24 @@ struct axdimm_rank_scheduler {
+ 	atomic64_t retry_timeout_ns;
+ 	uint8_t cacheline_padding_4[L1_CACHE_BYTES - sizeof(atomic64_t)];
+ 	struct mutex rank_stat_lock;
++	/* For process allocation ownership tracking */
++	struct axdimm_process_manager *proc_mgr;
+ };
+ 
+ void reset_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched);
++void init_axdimm_rank_scheduler(struct axdimm_rank_scheduler *rank_sched,
++				struct axdimm_process_manager *proc_mgr);
+ int get_axdimm_rank(struct axdimm_rank_scheduler *rank_sched, unsigned int cmd,
+ 		    unsigned int arg);
+ int release_axdimm_rank(struct axdimm_rank_scheduler *rank_sched,
+ 			unsigned int cmd, unsigned int arg);
+ 
++/* these functions are intended for direct rank status manipulation from
++ * resource manager, in order to free resources which were not freed by
++ * user space process itself
++ */
++int release_rank_write(struct axdimm_rank_scheduler *rank_sched,
++		       unsigned int rank_id);
++int release_rank_read(struct axdimm_rank_scheduler *rank_sched,
++		      unsigned int rank_id);
+ #endif
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index 36043e4ad..8b3e384f1 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -371,15 +371,14 @@ static int dax_open(struct inode *inode, struct file *filp)
+ 	filp->private_data = dev_dax;
+ 	inode->i_flags = S_DAX;
+ 
+-	return 0;
++	return dev_dax->is_axdimm_device ? axdimm_open(inode, filp) : 0;
+ }
+ 
+ static int dax_release(struct inode *inode, struct file *filp)
+ {
+ 	struct dev_dax *dev_dax = filp->private_data;
+-
+ 	dev_dbg(&dev_dax->dev, "trace\n");
+-	return 0;
++	return dev_dax->is_axdimm_device ? axdimm_release(inode, filp) : 0;
+ }
+ 
+ 
+-- 
+2.34.1
+

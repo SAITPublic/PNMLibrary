@@ -1,0 +1,65 @@
+From dd4999e0414e96a7b61d1747350da5a0ba661ae0 Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Fri, 2 Jun 2023 20:26:08 +0300
+Subject: [PATCH 124/128] [Refactor] Rename PNMDevice -> pnm::Device
+
+Changes according to PNMLibrary
+
+Signed-off-by: Nataliia Cherepanova nataly.cher@partner.samsung.com
+---
+ aten/src/ATen/native/pnm/PNMDeviceContext.cpp | 4 ++--
+ caffe2/operators/lengths_reducer_ops_pnm.cc   | 4 ++--
+ caffe2/python/pybind_state_pnm.cc             | 2 +-
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/aten/src/ATen/native/pnm/PNMDeviceContext.cpp b/aten/src/ATen/native/pnm/PNMDeviceContext.cpp
+index 6c4784a3..a1f954cb 100644
+--- a/aten/src/ATen/native/pnm/PNMDeviceContext.cpp
++++ b/aten/src/ATen/native/pnm/PNMDeviceContext.cpp
+@@ -7,12 +7,12 @@ namespace native {
+ namespace pnm {
+ 
+ Device& PnmDeviceContext::device() {
+-  static auto static_device = SlsDevice::make(PNMDevice::Type::SLS_AXDIMM);
++  static auto static_device = SlsDevice::make(::pnm::Device::Type::SLS_AXDIMM);
+   return static_device;
+ }
+ 
+ ::pnm::ContextHandler& PnmDeviceContext::context() {
+-  static auto context = ::pnm::make_context(PNMDevice::Type::SLS_AXDIMM);
++  static auto context = ::pnm::make_context(::pnm::Device::Type::SLS_AXDIMM);
+   return context;
+ }
+ 
+diff --git a/caffe2/operators/lengths_reducer_ops_pnm.cc b/caffe2/operators/lengths_reducer_ops_pnm.cc
+index e235e0f0..654ca404 100644
+--- a/caffe2/operators/lengths_reducer_ops_pnm.cc
++++ b/caffe2/operators/lengths_reducer_ops_pnm.cc
+@@ -392,9 +392,9 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+ 
+   // [TODO: ] move into PNMContext
+   SlsDevice device_ =
+-      SlsDevice::make(PNMDevice::Type::SLS_AXDIMM);
++      SlsDevice::make(::pnm::Device::Type::SLS_AXDIMM);
+ 
+-  pnm::ContextHandler pnm_ctx_ = pnm::make_context(PNMDevice::Type::SLS_AXDIMM);
++  pnm::ContextHandler pnm_ctx_ = pnm::make_context(::pnm::Device::Type::SLS_AXDIMM);
+   pnm::Runner runner_{pnm_ctx_};
+ 
+   pnm::memory::EmbeddedTablesHandler tables_ = nullptr;
+diff --git a/caffe2/python/pybind_state_pnm.cc b/caffe2/python/pybind_state_pnm.cc
+index 29263298..06dad9a8 100644
+--- a/caffe2/python/pybind_state_pnm.cc
++++ b/caffe2/python/pybind_state_pnm.cc
+@@ -50,7 +50,7 @@ void addPNMGlobalMethods(py::module& m) {
+          uint32_t row_size_in_bytes,
+          uint32_t mem_preference,
+          bool use_shared_tables) -> uintptr_t {
+-        pnm_ctx = pnm::make_context(PNMDevice::Type::SLS_AXDIMM);
++        pnm_ctx = pnm::make_context(::pnm::Device::Type::SLS_AXDIMM);
+ 
+         if (use_shared_tables) {
+           LOG(INFO) << "Allocated shared tables with memory preference id: "
+-- 
+2.34.1
+

@@ -1,0 +1,210 @@
+From 35828cac53570cc28b1171d7fad13b66f329b447 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 13 Apr 2023 11:20:05 +0300
+Subject: [PATCH 20/23] Add warmup iteration into pytorch DLRM
+
+The warmup iterations were added into pytorch DLRM to reduce influence of random
+events that leads to performance degradation during the first iterations in the
+benchmark.
+
+The new argument from dlrm_s_pytorch.py and run_test.sh is a `--warmup_runs`
+defines the number of iteration before the main benchmark loop begins.
+
+Resolve: MCS23-640
+
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ dlrm_s_pytorch.py | 104 +++++++++++++++++++++++++++++-----------------
+ run_test.sh       |  13 ++++--
+ 2 files changed, 74 insertions(+), 43 deletions(-)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index 833bd38..90fc084 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -240,7 +240,8 @@ class DLRM_Net(nn.Module):
+ 
+     def create_axdimm_emb(self, m, ln):
+         print("Creating AXDIMM tensor of type:", self.axdimm_tensor_type)
+-        from_file = self.axdimm_tensor_type == AxdimmTensorType.secure_tagged.name
++        from_file = self.weights_path is not None
++        print("Load tensor data from file is {}".format("enable" if from_file else "disable"))
+         axdimm_weights = []
+         v_W_l = []
+         rows = []
+@@ -801,6 +802,55 @@ def dash_separated_floats(value):
+ 
+     return value
+ 
++def process_batch(
++    device,
++    use_gpu,
++    testBatch):
++    X_test, lS_o_test, lS_i_test, T_test, W_test, CBPP_test = unpack_batch(
++        testBatch
++    )
++
++    # forward pass
++    Z_test = dlrm_wrap(
++        X_test,
++        lS_o_test,
++        lS_i_test,
++        use_gpu,
++        device,
++        ndevices=ndevices,
++    )
++
++    ### gather the distributed results on each rank ###
++    # For some reason it requires explicit sync before all_gather call if
++    # tensor is on GPU memory
++    if Z_test.is_cuda:
++        torch.cuda.synchronize()
++    (_, batch_split_lengths) = ext_dist.get_split_lengths(X_test.size(0))
++    if ext_dist.my_size > 1:
++        Z_test = ext_dist.all_gather(Z_test, batch_split_lengths)
++
++    test_accu = 0
++    test_samp = 0
++
++    if args.mlperf_logging:
++        S_test = Z_test.detach().cpu().numpy()  # numpy array
++        T_test = T_test.detach().cpu().numpy()  # numpy array
++        scores.append(S_test)
++        targets.append(T_test)
++    else:
++        with record_function("DLRM accuracy compute"):
++            # compute loss and accuracy
++            S_test = Z_test.detach().cpu().numpy()  # numpy array
++            T_test = T_test.detach().cpu().numpy()  # numpy array
++
++            mbs_test = T_test.shape[0]  # = mini_batch_size except last
++            A_test = np.sum((np.round(S_test, 0) == T_test).astype(np.uint8))
++
++            test_accu += A_test
++            test_samp += mbs_test
++            
++    return [test_accu, test_samp]
++
+ 
+ def inference(
+     args,
+@@ -834,6 +884,10 @@ def inference(
+             testBatch = (testBatch[0], axdimm_offsets, axdimm_indices, testBatch[3])
+         test_loads.append(testBatch)
+ 
++    print("Make {} runs to warmup".format(args.warmup_runs))
++    for i in range(args.warmup_runs):
++        process_batch(device, use_gpu, test_loads[0])
++
+     start_inference = time.time()
+     i = 0
+     for testBatch in test_loads:
+@@ -841,53 +895,20 @@ def inference(
+         if nbatches > 0 and i >= nbatches:
+             break
+ 
+-        X_test, lS_o_test, lS_i_test, T_test, W_test, CBPP_test = unpack_batch(
+-            testBatch
+-        )
+-
+         # Skip the batch if batch size not multiple of total ranks
+         if ext_dist.my_size > 1 and X_test.size(0) % ext_dist.my_size != 0:
+             print("Warning: Skiping the batch %d with size %d" % (i, X_test.size(0)))
+             continue
+ 
+-        # forward pass
+-        Z_test = dlrm_wrap(
+-            X_test,
+-            lS_o_test,
+-            lS_i_test,
+-            use_gpu,
+-            device,
+-            ndevices=ndevices,
+-        )
+-        i = i + 1
+-        ### gather the distributed results on each rank ###
+-        # For some reason it requires explicit sync before all_gather call if
+-        # tensor is on GPU memory
+-        if Z_test.is_cuda:
+-            torch.cuda.synchronize()
+-        (_, batch_split_lengths) = ext_dist.get_split_lengths(X_test.size(0))
+-        if ext_dist.my_size > 1:
+-            Z_test = ext_dist.all_gather(Z_test, batch_split_lengths)
+-
+-        if args.mlperf_logging:
+-            S_test = Z_test.detach().cpu().numpy()  # numpy array
+-            T_test = T_test.detach().cpu().numpy()  # numpy array
+-            scores.append(S_test)
+-            targets.append(T_test)
+-        else:
+-            with record_function("DLRM accuracy compute"):
+-                # compute loss and accuracy
+-                S_test = Z_test.detach().cpu().numpy()  # numpy array
+-                T_test = T_test.detach().cpu().numpy()  # numpy array
+-
+-                mbs_test = T_test.shape[0]  # = mini_batch_size except last
+-                A_test = np.sum((np.round(S_test, 0) == T_test).astype(np.uint8))
++        [A_test, mbs_test] = process_batch(device, use_gpu, testBatch)
++        i += 1
+ 
+-                test_accu += A_test
+-                test_samp += mbs_test
++        test_accu += A_test
++        test_samp += mbs_test
+ 
+     end_inference = time.time()
+     total_time = end_inference - start_inference
++
+     print("Total inference time: {}s\nQueries number: {}.\nQueries per second "
+           "(QPS): {}.".format(total_time, i, i / total_time))
+ 
+@@ -1090,6 +1111,11 @@ def run():
+                         help="Axdimm tensor type")
+     parser.add_argument("--weights-path", required=False,
+                         help="Embedding weights file path")
++    parser.add_argument("--warmup_runs", required=False, type=int,
++                        help="Number of runs before working times are actually taken into account. "
++                             "Warming up may be useful in order to get stable results "
++                             "because of e.g caching effects of the code under benchmark.",
++                        default=1)
+ 
+     global args
+     global nbatches
+diff --git a/run_test.sh b/run_test.sh
+index e299fb9..a02e5c1 100755
+--- a/run_test.sh
++++ b/run_test.sh
+@@ -16,6 +16,7 @@ num_batches=100
+ axdimm_tensor_type="simple"
+ script_run_command="python3"
+ script_dir=$(dirname "$0")
++warmup_runs=1
+ 
+ while [ "$#" -ne 0 ]
+ do
+@@ -29,9 +30,13 @@ do
+         axdimm_tensor_type=$1
+         ;;
+     "--run-command")
+-	shift
+-	script_run_command=$1
+-	;;
++        shift
++        script_run_command=$1
++        ;;
++    "--warmup_runs")
++        shift
++        warmup_runs=$1
++        ;;
+ esac
+     shift
+ done
+@@ -48,4 +53,4 @@ fi
+ $script_run_command $script_dir/dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
+                             --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed="$num_indices_per_lookup_fixed" \
+                             --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" \
+-                            --use-axdimm "$axdimm_tensor_type" --weights-path "$weights_path" --inference-only
++                            --use-axdimm "$axdimm_tensor_type" --weights-path "$weights_path" --warmup_runs=$warmup_runs --inference-only
+-- 
+2.34.1
+

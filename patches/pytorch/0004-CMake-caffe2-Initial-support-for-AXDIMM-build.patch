@@ -1,0 +1,246 @@
+From 6672fd0c5d0caf42a586c8003b6b92ef4f566355 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Mon, 1 Nov 2021 12:52:34 +0900
+Subject: [PATCH 004/128] [CMake/caffe2] Initial support for AXDIMM build
+
+Add initial support for 'libtorch_axdimm.so' target that's enabled by adding
+'-DUSE_AXDIMM=ON' flag to cmake. The cumulative 'libtorch.so' library gets
+linked against 'libtorch_axdimm.so' to catch AXDIMM-mapped operations in
+caffe2.
+
+The new 'caffe2/operators/lengths_reducer_ops_axdimm.cc' dummy file is added
+to make CMake happy, otherwise it fails to configure 'torch_axdimm' target.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ CMakeLists.txt                                |  1 +
+ aten/src/ATen/CMakeLists.txt                  |  8 +++
+ caffe2/CMakeLists.txt                         | 53 ++++++++++++++++++-
+ caffe2/operators/CMakeLists.txt               |  5 ++
+ .../operators/lengths_reducer_ops_axdimm.cc   |  0
+ 5 files changed, 66 insertions(+), 1 deletion(-)
+ create mode 100644 caffe2/operators/lengths_reducer_ops_axdimm.cc
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 471fc8a8..d36aaa65 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -191,6 +191,7 @@ option(USE_CPP_CODE_COVERAGE "Compile C/C++ with code coverage flags" OFF)
+ option(USE_COLORIZE_OUTPUT "Colorize output during compilation" ON)
+ option(USE_ASAN "Use Address+Undefined Sanitizers" OFF)
+ option(USE_TSAN "Use Thread Sanitizer" OFF)
++option(USE_AXDIMM "Use AXDIMM" ON)
+ option(USE_CUDA "Use CUDA" ON)
+ cmake_dependent_option(
+      BUILD_LAZY_CUDA_LINALG "Build cuda linalg ops as separate library" ON "USE_CUDA AND LINUX AND BUILD_PYTHON" OFF)
+diff --git a/aten/src/ATen/CMakeLists.txt b/aten/src/ATen/CMakeLists.txt
+index 96fc2978..0ec60a6f 100644
+--- a/aten/src/ATen/CMakeLists.txt
++++ b/aten/src/ATen/CMakeLists.txt
+@@ -281,6 +281,10 @@ if(USE_ROCM)
+   set(all_hip_cpp ${native_miopen_cpp} ${native_cudnn_hip_cpp} ${miopen_cpp} ${all_hip_cpp})
+ endif()
+ 
++if(USE_AXDIMM)
++  list(APPEND ATen_AXDIMM_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/axdimm)
++endif()
++
+ list(APPEND ATen_CPU_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+ 
+ if(USE_TBB)
+@@ -527,6 +531,10 @@ if(USE_ROCM)
+   # list(APPEND ATen_HIP_DEPENDENCY_LIBS ATEN_CUDA_FILES_GEN_LIB)
+ endif()
+ 
++if(USE_AXDIMM)
++  set(ATen_AXDIMM_SRCS "")
++endif()
++
+ set(ATEN_INCLUDE_DIR "${CMAKE_INSTALL_PREFIX}/${AT_INSTALL_INCLUDE_DIR}")
+ configure_file(ATenConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/cmake-exports/ATenConfig.cmake")
+ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cmake-exports/ATenConfig.cmake"
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index 221e3f32..79418170 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -78,6 +78,7 @@ if(INTERN_BUILD_ATEN_OPS)
+   add_dependencies(aten_op_header_gen __aten_op_header_gen)
+ 
+   # Add source, includes, and libs to lists
++  list(APPEND Caffe2_AXDIMM_SRCS ${ATen_AXDIMM_SRCS})
+   list(APPEND Caffe2_CPU_SRCS ${ATen_CPU_SRCS})
+   list(APPEND Caffe2_GPU_SRCS ${ATen_CUDA_CPP_SRCS})
+   list(APPEND Caffe2_GPU_SRCS_W_SORT_BY_KEY ${ATen_CUDA_SRCS_W_SORT_BY_KEY})
+@@ -92,10 +93,12 @@ if(INTERN_BUILD_ATEN_OPS)
+   list(APPEND Caffe2_HIP_TEST_SRCS ${ATen_HIP_TEST_SRCS})
+   list(APPEND Caffe2_CPU_TEST_SRCS ${ATen_CORE_TEST_SRCS})
+   list(APPEND Caffe2_VULKAN_TEST_SRCS ${ATen_VULKAN_TEST_SRCS})
++  list(APPEND Caffe2_AXDIMM_INCLUDE ${ATen_AXDIMM_INCLUDE})
+   list(APPEND Caffe2_CPU_INCLUDE ${ATen_CPU_INCLUDE})
+   list(APPEND Caffe2_GPU_INCLUDE ${ATen_CUDA_INCLUDE})
+   list(APPEND Caffe2_HIP_INCLUDE ${ATen_HIP_INCLUDE})
+   list(APPEND Caffe2_VULKAN_INCLUDE ${ATen_VULKAN_INCLUDE})
++  list(APPEND Caffe2_AXDIMM_DEPENDENCY_LIBS ${ATen_AXDIMM_DEPENDENCY_LIBS})
+   list(APPEND Caffe2_DEPENDENCY_LIBS ${ATen_CPU_DEPENDENCY_LIBS})
+   list(APPEND Caffe2_CUDA_DEPENDENCY_LIBS ${ATen_CUDA_DEPENDENCY_LIBS})
+   list(APPEND Caffe2_HIP_DEPENDENCY_LIBS ${ATen_HIP_DEPENDENCY_LIBS})
+@@ -168,6 +171,7 @@ endif()
+ # Advanced: if we have allow list specified, we will do intersections for all
+ # main lib srcs.
+ if(CAFFE2_ALLOWLISTED_FILES)
++  caffe2_do_allowlist(Caffe2_AXDIMM_SRCS CAFFE2_ALLOWLISTED_FILES)
+   caffe2_do_allowlist(Caffe2_CPU_SRCS CAFFE2_ALLOWLISTED_FILES)
+   caffe2_do_allowlist(Caffe2_GPU_SRCS CAFFE2_ALLOWLISTED_FILES)
+   caffe2_do_allowlist(Caffe2_GPU_SRCS_W_SORT_BY_KEY CAFFE2_ALLOWLISTED_FILES)
+@@ -177,6 +181,11 @@ if(CAFFE2_ALLOWLISTED_FILES)
+ endif()
+ 
+ if(PRINT_CMAKE_DEBUG_INFO)
++  message(STATUS "AXDIMM sources: ")
++  foreach(tmp ${Caffe2_AXDIMM_SRCS})
++    message(STATUS "  " ${tmp})
++  endforeach()
++
+   message(STATUS "CPU sources: ")
+   foreach(tmp ${Caffe2_CPU_SRCS})
+     message(STATUS "  " ${tmp})
+@@ -972,6 +981,8 @@ elseif(USE_CUDA)
+     target_precompile_headers(torch_cuda PRIVATE
+         "$<$<COMPILE_LANGUAGE:CXX>:ATen/core/ATen_pch.h>")
+   endif()
++elseif(USE_AXDIMM)
++  add_library(torch_axdimm ${Caffe2_AXDIMM_SRCS})
+ endif()
+ 
+ if(NOT MSVC AND USE_XNNPACK)
+@@ -1227,6 +1238,27 @@ if(BUILD_LITE_INTERPRETER)
+ endif()
+ 
+ 
++# For torch/csrc/distributed/c10d
++function(include_torch_lib_dir target)
++  target_include_directories(${target} PRIVATE $<BUILD_INTERFACE:${TORCH_SRC_DIR}/csrc/distributed>)
++endfunction()
++
++include_torch_lib_dir(torch_cpu)
++if(USE_ROCM)
++  include_torch_lib_dir(torch_hip)
++elseif(USE_CUDA)
++  if(BUILD_SPLIT_CUDA)
++    include_torch_lib_dir(torch_cuda_cpp)
++  else()
++    include_torch_lib_dir(torch_cuda)
++  endif()
++elseif(USE_AXDIMM)
++  include_torch_lib_dir(torch_axdimm)
++endif()
++if(BUILD_PYTHON)
++    include_torch_lib_dir(torch_python)
++endif()
++
+ # Pass USE_DISTRIBUTED to torch_cpu, as some codes in jit/pickler.cpp and
+ # jit/unpickler.cpp need to be compiled only when USE_DISTRIBUTED is set
+ if(USE_DISTRIBUTED)
+@@ -1243,11 +1275,13 @@ if(USE_DISTRIBUTED)
+   if(USE_NCCL AND USE_C10D_NCCL)
+     if(USE_ROCM)
+       target_compile_definitions(torch_hip PUBLIC USE_C10D_NCCL)
+-    else()
++    elseif(USE_CUDA)
+       target_compile_definitions(torch_cuda PUBLIC USE_C10D_NCCL)
+       if(USE_NCCL_WITH_UCC)
+         target_compile_definitions(torch_cuda PUBLIC USE_NCCL_WITH_UCC)
+       endif()
++    else()
++      target_compile_definitions(torch_axdimm PUBLIC USE_C10D_NCCL)
+     endif()
+   endif()
+   if(USE_MPI AND USE_C10D_MPI)
+@@ -1327,6 +1361,10 @@ if(USE_CUDA)
+ elseif(USE_ROCM)
+   target_compile_options(torch_hip PRIVATE "-DTORCH_HIP_BUILD_MAIN_LIB")
+   target_compile_definitions(torch_hip PRIVATE "-DTORCH_HIP_BUILD_MAIN_LIB")
++elseif(USE_AXDIMM)
++  # Not sure we need this, but let it be.
++  target_compile_options(torch_axdimm PRIVATE "-DTORCH_AXDIMM_BUILD_MAIN_LIB")
++  target_compile_definitions(torch_axdimm PRIVATE "-DTORCH_AXDIMM_BUILD_MAIN_LIB")
+ endif()
+ 
+ if(USE_EXPERIMENTAL_CUDNN_V8_API)
+@@ -1422,6 +1460,8 @@ if(USE_CUDA)
+   caffe2_interface_library(torch_cuda torch_cuda_library)
+ elseif(USE_ROCM)
+   caffe2_interface_library(torch_hip torch_hip_library)
++elseif(USE_AXDIMM)
++  caffe2_interface_library(torch_axdimm torch_axdimm_library)
+ endif()
+ 
+ caffe2_interface_library(torch torch_library)
+@@ -1432,6 +1472,8 @@ if(USE_CUDA)
+   install(TARGETS torch_cuda torch_cuda_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
+ elseif(USE_ROCM)
+   install(TARGETS torch_hip torch_hip_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
++elseif(USE_AXDIMM)
++  install(TARGETS torch_axdimm torch_axdimm_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
+ endif()
+ install(TARGETS torch torch_library EXPORT Caffe2Targets DESTINATION "${TORCH_INSTALL_LIB_DIR}")
+ 
+@@ -1441,6 +1483,8 @@ if(USE_CUDA)
+   target_link_libraries(torch PUBLIC torch_cuda_library)
+ elseif(USE_ROCM)
+   target_link_libraries(torch PUBLIC torch_hip_library)
++elseif(USE_AXDIMM)
++  target_link_libraries(torch PUBLIC torch_axdimm_library)
+ endif()
+ 
+ if(PRINT_CMAKE_DEBUG_INFO)
+@@ -1923,6 +1967,10 @@ if(BUILD_PYTHON)
+     set_target_properties(caffe2_pybind11_state_hip PROPERTIES INSTALL_RPATH "${caffe2_pybind11_rpath}")
+   endif()
+ 
++  if(USE_AXDIMM)
++    # TODO: our code here.
++  endif()
++
+   if(MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
+     # If we are building under windows, we will copy the file from
+     # build/caffe2/python/{Debug,Release}/caffe2_pybind11_state.pyd
+@@ -1950,6 +1998,9 @@ if(BUILD_PYTHON)
+           $<TARGET_FILE:caffe2_pybind11_state_hip>
+           ${CMAKE_BINARY_DIR}/caffe2/python)
+     endif()
++    if(USE_AXDIMM)
++      # TODO: our code here.
++    endif()
+   endif()
+ 
+   # Finally, Copy all python files to build directory
+diff --git a/caffe2/operators/CMakeLists.txt b/caffe2/operators/CMakeLists.txt
+index cd36d197..fb8fcc2c 100644
+--- a/caffe2/operators/CMakeLists.txt
++++ b/caffe2/operators/CMakeLists.txt
+@@ -46,6 +46,10 @@ file(GLOB tmp_cudnn *_cudnn.cc)
+ exclude(tmp "${tmp}" ${tmp_cudnn})
+ set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS} ${tmp})
+ 
++# ---[ AXDIMM files.
++file(GLOB tmp *_axdimm.cc)
++set(Caffe2_AXDIMM_SRCS ${Caffe2_AXDIMM_SRCS} ${tmp})
++
+ set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS} ${tmp})
+ # exclude test files and gpu files
+ file(GLOB tmp *_test.cc)
+@@ -80,6 +84,7 @@ set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS} PARENT_SCOPE)
+ set(Caffe2_GPU_SRCS ${Caffe2_GPU_SRCS} PARENT_SCOPE)
+ set(Caffe2_GPU_SRCS_W_SORT_BY_KEY ${Caffe2_GPU_SRCS_W_SORT_BY_KEY} PARENT_SCOPE)
+ set(Caffe2_HIP_SRCS ${Caffe2_HIP_SRCS} PARENT_SCOPE)
++set(Caffe2_AXDIMM_SRCS ${Caffe2_AXDIMM_SRCS} PARENT_SCOPE)
+ set(Caffe2_CPU_TEST_SRCS ${Caffe2_CPU_TEST_SRCS} PARENT_SCOPE)
+ set(Caffe2_GPU_TEST_SRCS ${Caffe2_GPU_TEST_SRCS} PARENT_SCOPE)
+ set(Caffe2_HIP_TEST_SRCS ${Caffe2_HIP_TEST_SRCS} PARENT_SCOPE)
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+new file mode 100644
+index 00000000..e69de29b
+-- 
+2.34.1
+

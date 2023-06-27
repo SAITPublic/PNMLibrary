@@ -1,0 +1,2092 @@
+From 3b3b89a95524862bc45515b530420248bf41a383 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Wed, 26 Jul 2023 09:26:16 +0300
+Subject: [PATCH 149/161] [PNM] Removing redundant names
+
+* Introduce clang-format for PNM part with simple headers rule only
+
+Related: MCS-1373
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/.clang-format                     |   3 +
+ drivers/pnm/imdb_resource/Makefile            |   8 +-
+ .../{imdb_allocator.c => allocator.c}         |  32 +++--
+ .../{imdb_allocator.h => allocator.h}         |   2 +-
+ .../pnm/imdb_resource/{imdb_log.h => log.h}   |   0
+ .../{imdb_private.h => private.h}             |   0
+ .../{imdb_proc_mgr.c => proc_mgr.c}           | 134 +++++++++---------
+ .../{imdb_proc_mgr.h => proc_mgr.h}           |   0
+ drivers/pnm/imdb_resource/resource_device.c   |  22 +--
+ .../imdb_resource/{imdb_sysfs.c => sysfs.c}   |  16 +--
+ .../imdb_resource/{imdb_sysfs.h => sysfs.h}   |   0
+ .../{imdb_thread_sched.c => thread_sched.c}   |  53 ++++---
+ .../{imdb_thread_sched.h => thread_sched.h}   |  10 +-
+ drivers/pnm/sls_resource/Makefile             |  10 +-
+ .../{sls_allocator.c => allocator.c}          |  67 +++++----
+ .../{sls_allocator.h => allocator.h}          |  11 +-
+ drivers/pnm/sls_resource/{sls_log.h => log.h} |   6 +-
+ .../sls_resource/{sls_private.h => private.h} |  19 ++-
+ ...ls_process_manager.c => process_manager.c} |  37 +++--
+ ...ls_process_manager.h => process_manager.h} |  10 +-
+ ...{sls_rank_scheduler.c => rank_scheduler.c} |  54 ++++---
+ ...{sls_rank_scheduler.h => rank_scheduler.h} |  17 ++-
+ drivers/pnm/sls_resource/resource.c           |   2 +-
+ drivers/pnm/sls_resource/sls.c                |  30 ++--
+ .../pnm/sls_resource/{sls_sysfs.c => sysfs.c} |  32 ++---
+ .../pnm/sls_resource/{sls_sysfs.h => sysfs.h} |   0
+ ...ls_topology_export.c => topology_export.c} |   6 +-
+ ...ls_topology_export.h => topology_export.h} |   0
+ drivers/pnm/zswap/Makefile                    |   8 +-
+ .../{zswap_compressor.c => compressor.c}      |   6 +-
+ .../{zswap_compressor.h => compressor.h}      |   2 +-
+ .../pnm/zswap/{zswap_device.c => device.c}    |   6 +-
+ .../{zswap_parameters.c => parameters.c}      |   2 +-
+ drivers/pnm/zswap/{zswap_sim.c => sim.c}      |   7 +-
+ drivers/pnm/zswap/{zswap_sim.h => sim.h}      |   0
+ include/linux/pnm/.clang-format               |   1 +
+ lib/pnm/.clang-format                         |   1 +
+ mm/pnm/.clang-format                          |   1 +
+ mm/pnm/pnm_zswap.c                            |   5 +-
+ scripts/pnm/.clang-format                     |   1 +
+ scripts/pnm/zswap/qemu/demo/mmadvice.c        |   7 +-
+ 41 files changed, 317 insertions(+), 311 deletions(-)
+ create mode 100644 drivers/pnm/.clang-format
+ rename drivers/pnm/imdb_resource/{imdb_allocator.c => allocator.c} (91%)
+ rename drivers/pnm/imdb_resource/{imdb_allocator.h => allocator.h} (100%)
+ rename drivers/pnm/imdb_resource/{imdb_log.h => log.h} (100%)
+ rename drivers/pnm/imdb_resource/{imdb_private.h => private.h} (100%)
+ rename drivers/pnm/imdb_resource/{imdb_proc_mgr.c => proc_mgr.c} (71%)
+ rename drivers/pnm/imdb_resource/{imdb_proc_mgr.h => proc_mgr.h} (100%)
+ rename drivers/pnm/imdb_resource/{imdb_sysfs.c => sysfs.c} (97%)
+ rename drivers/pnm/imdb_resource/{imdb_sysfs.h => sysfs.h} (100%)
+ rename drivers/pnm/imdb_resource/{imdb_thread_sched.c => thread_sched.c} (64%)
+ rename drivers/pnm/imdb_resource/{imdb_thread_sched.h => thread_sched.h} (84%)
+ rename drivers/pnm/sls_resource/{sls_allocator.c => allocator.c} (87%)
+ rename drivers/pnm/sls_resource/{sls_allocator.h => allocator.h} (83%)
+ rename drivers/pnm/sls_resource/{sls_log.h => log.h} (83%)
+ rename drivers/pnm/sls_resource/{sls_private.h => private.h} (74%)
+ rename drivers/pnm/sls_resource/{sls_process_manager.c => process_manager.c} (94%)
+ rename drivers/pnm/sls_resource/{sls_process_manager.h => process_manager.h} (88%)
+ rename drivers/pnm/sls_resource/{sls_rank_scheduler.c => rank_scheduler.c} (83%)
+ rename drivers/pnm/sls_resource/{sls_rank_scheduler.h => rank_scheduler.h} (65%)
+ rename drivers/pnm/sls_resource/{sls_sysfs.c => sysfs.c} (95%)
+ rename drivers/pnm/sls_resource/{sls_sysfs.h => sysfs.h} (100%)
+ rename drivers/pnm/sls_resource/{sls_topology_export.c => topology_export.c} (98%)
+ rename drivers/pnm/sls_resource/{sls_topology_export.h => topology_export.h} (100%)
+ rename drivers/pnm/zswap/{zswap_compressor.c => compressor.c} (99%)
+ rename drivers/pnm/zswap/{zswap_compressor.h => compressor.h} (95%)
+ rename drivers/pnm/zswap/{zswap_device.c => device.c} (99%)
+ rename drivers/pnm/zswap/{zswap_parameters.c => parameters.c} (88%)
+ rename drivers/pnm/zswap/{zswap_sim.c => sim.c} (99%)
+ rename drivers/pnm/zswap/{zswap_sim.h => sim.h} (100%)
+ create mode 120000 include/linux/pnm/.clang-format
+ create mode 120000 lib/pnm/.clang-format
+ create mode 120000 mm/pnm/.clang-format
+ create mode 120000 scripts/pnm/.clang-format
+
+diff --git a/drivers/pnm/.clang-format b/drivers/pnm/.clang-format
+new file mode 100644
+index 000000000..87e3b2f39
+--- /dev/null
++++ b/drivers/pnm/.clang-format
+@@ -0,0 +1,3 @@
++BasedOnStyle: InheritParentConfig
++SortIncludes: true
++InsertNewlineAtEOF: true
+diff --git a/drivers/pnm/imdb_resource/Makefile b/drivers/pnm/imdb_resource/Makefile
+index 37cd0d1b1..c3376c1ba 100644
+--- a/drivers/pnm/imdb_resource/Makefile
++++ b/drivers/pnm/imdb_resource/Makefile
+@@ -3,7 +3,7 @@
+ obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource.o
+ 
+ imdb_resource-y := resource_device.o
+-imdb_resource-y += imdb_allocator.o
+-imdb_resource-y += imdb_thread_sched.o
+-imdb_resource-y += imdb_sysfs.o
+-imdb_resource-y += imdb_proc_mgr.o
++imdb_resource-y += allocator.o
++imdb_resource-y += thread_sched.o
++imdb_resource-y += sysfs.o
++imdb_resource-y += proc_mgr.o
+diff --git a/drivers/pnm/imdb_resource/imdb_allocator.c b/drivers/pnm/imdb_resource/allocator.c
+similarity index 91%
+rename from drivers/pnm/imdb_resource/imdb_allocator.c
+rename to drivers/pnm/imdb_resource/allocator.c
+index eb9f3cbb3..75e3d84ee 100644
+--- a/drivers/pnm/imdb_resource/imdb_allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -1,13 +1,13 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "imdb_allocator.h"
+-#include "imdb_log.h"
+-#include "imdb_proc_mgr.h"
+-#include "imdb_private.h"
++#include "allocator.h"
++#include "log.h"
++#include "private.h"
++#include "proc_mgr.h"
+ 
+-#include <linux/imdb_resources.h>
+ #include <linux/genalloc.h>
++#include <linux/imdb_resources.h>
+ #include <linux/kernel.h>
+ #include <linux/log2.h>
+ #include <linux/math.h>
+@@ -30,21 +30,24 @@ static int init_rank_pool(struct MemoryAllocator *alloc, uint8_t rank,
+ 		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
+ 
+ 	if (!pool) {
+-		IMDB_ERR("gen_pool_create failed for rank pool[%hhu], gran = [%llu]\n",
++		IMDB_ERR(
++			"gen_pool_create failed for rank pool[%hhu], gran = [%llu]\n",
+ 			rank, alloc->gran);
+ 		return -ENOMEM;
+ 	}
+ 
+ 	err_code = gen_pool_add(pool, start, size, NUMA_NO_NODE);
+ 	if (err_code < 0) {
+-		IMDB_ERR("Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
++		IMDB_ERR(
++			"Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
+ 			rank, size, err_code);
+ 		gen_pool_destroy(pool);
+ 		return err_code;
+ 	}
+ 	gen_pool_set_algo(pool, gen_pool_best_fit, NULL);
+ 
+-	IMDB_INF("Memory rank pool[%hhu] initialized: gran = [%llu], size = [%llu]\n",
++	IMDB_INF(
++		"Memory rank pool[%hhu] initialized: gran = [%llu], size = [%llu]\n",
+ 		rank, alloc->gran, size);
+ 
+ 	alloc->pools[rank] = pool;
+@@ -68,12 +71,14 @@ static void cleanup_memory_pools(struct MemoryAllocator *alloc)
+ 	for (rank = 0; rank < IMDB_NUM_OF_RANK; ++rank) {
+ 		pool = alloc->pools[rank];
+ 		if (!pool) {
+-			IMDB_WRN("Trying to cleanup memory rank pool[%hhu] that was not created\n",
++			IMDB_WRN(
++				"Trying to cleanup memory rank pool[%hhu] that was not created\n",
+ 				rank);
+ 			continue;
+ 		}
+ 		if (gen_pool_avail(pool) != gen_pool_size(pool)) {
+-			IMDB_ERR("pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
++			IMDB_ERR(
++				"pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
+ 				rank, gen_pool_size(pool),
+ 				gen_pool_avail(pool));
+ 			/*
+@@ -113,13 +118,14 @@ static int init_memory_pools(struct MemoryAllocator *alloc)
+ 	for (; rank < IMDB_NUM_OF_RANK; ++rank)
+ 		if (alloc->pools[rank]) {
+ 			IMDB_ERR("Not cleaned pool[%hhu] in initialization!\n",
+-				rank);
++				 rank);
+ 			alloc->pools[rank] = NULL;
+ 			IMDB_ERR("pool[%hhu] ptr forcefully reset to zero\n",
+-				rank);
++				 rank);
+ 		}
+ 
+-	for (rank = 0; rank < IMDB_NUM_OF_RANK; ++rank, start += IMDB_RANK_SIZE) {
++	for (rank = 0; rank < IMDB_NUM_OF_RANK;
++	     ++rank, start += IMDB_RANK_SIZE) {
+ 		err_code = init_rank_pool(alloc, rank, start, IMDB_RANK_SIZE);
+ 		if (err_code) {
+ 			cleanup_memory_pools(alloc);
+diff --git a/drivers/pnm/imdb_resource/imdb_allocator.h b/drivers/pnm/imdb_resource/allocator.h
+similarity index 100%
+rename from drivers/pnm/imdb_resource/imdb_allocator.h
+rename to drivers/pnm/imdb_resource/allocator.h
+index e3b2a1148..47869a247 100644
+--- a/drivers/pnm/imdb_resource/imdb_allocator.h
++++ b/drivers/pnm/imdb_resource/allocator.h
+@@ -4,8 +4,8 @@
+ #ifndef __IMDB_ALLOCATOR_H__
+ #define __IMDB_ALLOCATOR_H__
+ 
+-#include <linux/imdb_resources.h>
+ #include <linux/genalloc.h>
++#include <linux/imdb_resources.h>
+ 
+ struct MemoryAllocator {
+ 	/* Allocator granularity in bytes, the number should be a power of 2 */
+diff --git a/drivers/pnm/imdb_resource/imdb_log.h b/drivers/pnm/imdb_resource/log.h
+similarity index 100%
+rename from drivers/pnm/imdb_resource/imdb_log.h
+rename to drivers/pnm/imdb_resource/log.h
+diff --git a/drivers/pnm/imdb_resource/imdb_private.h b/drivers/pnm/imdb_resource/private.h
+similarity index 100%
+rename from drivers/pnm/imdb_resource/imdb_private.h
+rename to drivers/pnm/imdb_resource/private.h
+diff --git a/drivers/pnm/imdb_resource/imdb_proc_mgr.c b/drivers/pnm/imdb_resource/proc_mgr.c
+similarity index 71%
+rename from drivers/pnm/imdb_resource/imdb_proc_mgr.c
+rename to drivers/pnm/imdb_resource/proc_mgr.c
+index ff5072805..328f90f9d 100644
+--- a/drivers/pnm/imdb_resource/imdb_proc_mgr.c
++++ b/drivers/pnm/imdb_resource/proc_mgr.c
+@@ -1,20 +1,20 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright(c) 2023 Samsung LTD. All rights reserved.
+ 
+-#include "imdb_proc_mgr.h"
++#include "proc_mgr.h"
+ 
+-#include "imdb_allocator.h"
+-#include "imdb_log.h"
+-#include "imdb_thread_sched.h"
++#include "allocator.h"
++#include "log.h"
++#include "thread_sched.h"
+ 
+ #include "linux/imdb_resources.h"
+ #include "linux/ioport.h"
+ #include "linux/stddef.h"
+-#include <linux/types.h>
++#include <linux/list.h>
+ #include <linux/mutex.h>
+ #include <linux/sched.h>
+-#include <linux/list.h>
+ #include <linux/slab.h>
++#include <linux/types.h>
+ 
+ /* list of descriptors held by process */
+ struct imdb_alloc_res {
+@@ -41,7 +41,7 @@ struct imdb_proc_res {
+  * data structure for tracking device resources, allocated to user space
+  * processes
+  */
+-struct imdb_proc_mgr {
++struct proc_mgr {
+ 	struct list_head active_process_list; //[TODO: s.motov] use rb-tree
+ 	struct list_head leaked_process_list; //[TODO: s.motov] use rb-tree
+ 	atomic64_t leaked;
+@@ -50,12 +50,12 @@ struct imdb_proc_mgr {
+ 	struct mutex lock;
+ };
+ 
+-static struct imdb_proc_mgr imdb_proc_mgr = {
+-	.active_process_list = LIST_HEAD_INIT(imdb_proc_mgr.active_process_list),
+-	.leaked_process_list = LIST_HEAD_INIT(imdb_proc_mgr.leaked_process_list),
++static struct proc_mgr proc_mgr = {
++	.active_process_list = LIST_HEAD_INIT(proc_mgr.active_process_list),
++	.leaked_process_list = LIST_HEAD_INIT(proc_mgr.leaked_process_list),
+ 	.leaked = ATOMIC64_INIT(0),
+ 	.enable_cleanup = ATOMIC64_INIT(IMDB_DISABLE_CLEANUP),
+-	.lock = __MUTEX_INITIALIZER(imdb_proc_mgr.lock),
++	.lock = __MUTEX_INITIALIZER(proc_mgr.lock),
+ };
+ 
+ static pid_t get_current_process_id(void)
+@@ -68,7 +68,7 @@ static pid_t get_current_process_id(void)
+ }
+ 
+ /* this function should be called with sync */
+-static struct imdb_proc_res *find_current_proc_res(struct imdb_proc_mgr *mgr)
++static struct imdb_proc_res *find_current_proc_res(struct proc_mgr *mgr)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	const pid_t pid = get_current_process_id();
+@@ -94,7 +94,8 @@ static int clear_allocations(struct imdb_proc_res *proc_res)
+ 		allocation = &alloc_res->allocation;
+ 		begin = allocation->address;
+ 		end = begin + allocation->size;
+-		IMDB_DBG("Process manager release allocation [%llx, %llx], pid: %d, tid: %d\n",
++		IMDB_DBG(
++			"Process manager release allocation [%llx, %llx], pid: %d, tid: %d\n",
+ 			begin, end, get_current_process_id(), current->pid);
+ 
+ 		rc |= allocator_clear_res(allocation);
+@@ -104,7 +105,7 @@ static int clear_allocations(struct imdb_proc_res *proc_res)
+ 
+ 	if (rc) {
+ 		IMDB_ERR("Can't clear allocations, pid %d, tid %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 		rc = -EINVAL;
+ 	}
+ 
+@@ -119,14 +120,15 @@ static int clear_threads(struct imdb_proc_res *proc_res)
+ 	for (it = 0; it < IMDB_THREAD_NUM; ++it) {
+ 		if (proc_res->threads_mask & (1 << it)) {
+ 			rc |= thread_sched_clear_res(it);
+-			IMDB_DBG("Process manager release thread[%d], pid: %d, tid: %d\n",
++			IMDB_DBG(
++				"Process manager release thread[%d], pid: %d, tid: %d\n",
+ 				it, get_current_process_id(), current->pid);
+ 		}
+ 	}
+ 
+ 	if (rc) {
+ 		IMDB_ERR("Can't clear threads, pid %d tid %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 		return -EINVAL;
+ 	}
+ 
+@@ -155,13 +157,13 @@ int imdb_register_allocation(const struct imdb_allocation *allocation)
+ 	struct imdb_alloc_res *imdb_alloc = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&imdb_proc_mgr);
++	proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 	if (unlikely(!proc_res)) {
+ 		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 		goto error;
+ 	}
+@@ -177,7 +179,7 @@ int imdb_register_allocation(const struct imdb_allocation *allocation)
+ 	}
+ 
+ error:
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	return rc;
+ }
+@@ -188,9 +190,9 @@ int imdb_unregister_allocation(const struct imdb_allocation *allocation)
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&imdb_proc_mgr);
++	proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 	if (likely(proc_res)) {
+ 		rc = -EINVAL;
+@@ -207,14 +209,14 @@ int imdb_unregister_allocation(const struct imdb_allocation *allocation)
+ 		}
+ 		if (rc)
+ 			IMDB_ERR("Allocation not found, pid %d, tid %d\n",
+-				get_current_process_id(), current->pid);
++				 get_current_process_id(), current->pid);
+ 	} else {
+ 		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 	}
+ 
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	return rc;
+ }
+@@ -225,19 +227,19 @@ int imdb_register_thread(uint8_t thread)
+ 	int rc = 0;
+ 	const uint8_t thread_mask = 1 << thread;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&imdb_proc_mgr);
++	proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 	if (likely(proc_res)) {
+ 		proc_res->threads_mask |= thread_mask;
+ 	} else {
+ 		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 	};
+ 
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	return rc;
+ }
+@@ -248,19 +250,19 @@ int imdb_unregister_thread(uint8_t thread)
+ 	const uint8_t thread_mask = ~(1 << thread);
+ 	int rc = 0;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&imdb_proc_mgr);
++	proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 	if (likely(proc_res)) {
+ 		proc_res->threads_mask &= thread_mask;
+ 	} else {
+ 		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 		rc = -ESRCH;
+ 	}
+ 
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	return rc;
+ }
+@@ -270,9 +272,9 @@ int imdb_register_process(void)
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&imdb_proc_mgr);
++	proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 	if (!proc_res) {
+ 		proc_res = kzalloc(sizeof(*proc_res), GFP_KERNEL);
+@@ -280,21 +282,21 @@ int imdb_register_process(void)
+ 		if (unlikely(!proc_res)) {
+ 			rc = -ENOMEM;
+ 			IMDB_ERR("Can't allocate memory, pid %d, tid %d\n",
+-				get_current_process_id(), current->pid);
++				 get_current_process_id(), current->pid);
+ 			goto error;
+ 		}
+ 
+ 		proc_res->pid = get_current_process_id();
+ 		INIT_LIST_HEAD(&proc_res->alloc_res);
+-		list_add(&proc_res->list, &imdb_proc_mgr.active_process_list);
++		list_add(&proc_res->list, &proc_mgr.active_process_list);
+ 		IMDB_DBG("Registered process, pid: %d, tid: %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 	}
+ 
+ 	proc_res->ref_cnt++;
+ 
+ error:
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	return rc;
+ }
+@@ -305,13 +307,13 @@ int imdb_release_process(void)
+ 	int rc = 0;
+ 	bool delete_res = false;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+-	proc_res = find_current_proc_res(&imdb_proc_mgr);
++	proc_res = find_current_proc_res(&proc_mgr);
+ 
+ 	if (unlikely(!proc_res)) {
+ 		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			get_current_process_id(), current->pid);
++			 get_current_process_id(), current->pid);
+ 		delete_res = false;
+ 		rc = -ESRCH;
+ 		goto error;
+@@ -328,28 +330,29 @@ int imdb_release_process(void)
+ 	}
+ 
+ error:
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	if (delete_res) {
+ 		// Process manager is active or resources struct is empty
+ 		if (is_resource_empty(proc_res) ||
+-		    atomic64_read(&imdb_proc_mgr.enable_cleanup)) {
++		    atomic64_read(&proc_mgr.enable_cleanup)) {
+ 			rc = clear_process_resource(proc_res);
+ 			if (rc)
+-				IMDB_ERR("Can't clear process resources, pid %d, tid %d\n",
++				IMDB_ERR(
++					"Can't clear process resources, pid %d, tid %d\n",
+ 					get_current_process_id(), current->pid);
+ 
+ 			return rc;
+ 		}
+ 
+-		mutex_lock(&imdb_proc_mgr.lock);
++		mutex_lock(&proc_mgr.lock);
+ 
+-		atomic64_inc(&imdb_proc_mgr.leaked);
+-		list_add(&proc_res->list, &imdb_proc_mgr.leaked_process_list);
++		atomic64_inc(&proc_mgr.leaked);
++		list_add(&proc_res->list, &proc_mgr.leaked_process_list);
+ 		IMDB_DBG("Tracked leakage by pid: %d, tid: %d; thread_mask: %x",
+-			get_current_process_id(), current->pid,
+-			proc_res->threads_mask);
+-		mutex_unlock(&imdb_proc_mgr.lock);
++			 get_current_process_id(), current->pid,
++			 proc_res->threads_mask);
++		mutex_unlock(&proc_mgr.lock);
+ 	}
+ 
+ 	return rc;
+@@ -357,12 +360,12 @@ int imdb_release_process(void)
+ 
+ uint64_t imdb_get_leaked(void)
+ {
+-	return atomic64_read(&imdb_proc_mgr.leaked);
++	return atomic64_read(&proc_mgr.leaked);
+ }
+ 
+ void imdb_disable_cleanup(void)
+ {
+-	atomic64_set(&imdb_proc_mgr.enable_cleanup, IMDB_DISABLE_CLEANUP);
++	atomic64_set(&proc_mgr.enable_cleanup, IMDB_DISABLE_CLEANUP);
+ }
+ 
+ int imdb_enable_cleanup(void)
+@@ -371,15 +374,15 @@ int imdb_enable_cleanup(void)
+ 	struct imdb_proc_res *proc_res = NULL, *proc_res_tmp = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+-	atomic64_set(&imdb_proc_mgr.enable_cleanup, IMDB_ENABLE_CLEANUP);
++	atomic64_set(&proc_mgr.enable_cleanup, IMDB_ENABLE_CLEANUP);
+ 
+-	atomic64_set(&imdb_proc_mgr.leaked, 0);
++	atomic64_set(&proc_mgr.leaked, 0);
+ 	// splice list for critical section minimization
+-	list_splice_init(&imdb_proc_mgr.leaked_process_list, &list_tmp);
++	list_splice_init(&proc_mgr.leaked_process_list, &list_tmp);
+ 
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	list_for_each_entry_safe(proc_res, proc_res_tmp, &list_tmp, list) {
+ 		list_del(&proc_res->list);
+@@ -391,8 +394,7 @@ int imdb_enable_cleanup(void)
+ 
+ bool imdb_get_proc_manager(void)
+ {
+-	return atomic64_read(&imdb_proc_mgr.enable_cleanup) ==
+-	       IMDB_ENABLE_CLEANUP;
++	return atomic64_read(&proc_mgr.enable_cleanup) == IMDB_ENABLE_CLEANUP;
+ }
+ 
+ int imdb_reset_proc_manager(void)
+@@ -404,15 +406,15 @@ int imdb_reset_proc_manager(void)
+ 
+ 	bool have_leaks = false;
+ 
+-	mutex_lock(&imdb_proc_mgr.lock);
++	mutex_lock(&proc_mgr.lock);
+ 
+ 	// splice list for critical section minimization
+-	list_splice_init(&imdb_proc_mgr.active_process_list, &list_active_tmp);
+-	list_splice_init(&imdb_proc_mgr.leaked_process_list, &list_leaked_tmp);
++	list_splice_init(&proc_mgr.active_process_list, &list_active_tmp);
++	list_splice_init(&proc_mgr.leaked_process_list, &list_leaked_tmp);
+ 
+-	have_leaks = atomic64_read(&imdb_proc_mgr.leaked) != 0;
++	have_leaks = atomic64_read(&proc_mgr.leaked) != 0;
+ 
+-	mutex_unlock(&imdb_proc_mgr.lock);
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	list_for_each_entry_safe(proc_res, proc_res_tmp, &list_active_tmp,
+ 				 list) {
+@@ -430,5 +432,5 @@ int imdb_reset_proc_manager(void)
+ void imdb_destroy_proc_manager(void)
+ {
+ 	imdb_reset_proc_manager();
+-	mutex_destroy(&imdb_proc_mgr.lock);
++	mutex_destroy(&proc_mgr.lock);
+ }
+diff --git a/drivers/pnm/imdb_resource/imdb_proc_mgr.h b/drivers/pnm/imdb_resource/proc_mgr.h
+similarity index 100%
+rename from drivers/pnm/imdb_resource/imdb_proc_mgr.h
+rename to drivers/pnm/imdb_resource/proc_mgr.h
+diff --git a/drivers/pnm/imdb_resource/resource_device.c b/drivers/pnm/imdb_resource/resource_device.c
+index 5d4edcaba..7cc677e0f 100644
+--- a/drivers/pnm/imdb_resource/resource_device.c
++++ b/drivers/pnm/imdb_resource/resource_device.c
+@@ -1,23 +1,23 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "imdb_allocator.h"
+-#include "imdb_log.h"
+-#include "imdb_proc_mgr.h"
+-#include "imdb_private.h"
+-#include "imdb_thread_sched.h"
+-#include "imdb_sysfs.h"
++#include "allocator.h"
++#include "log.h"
++#include "private.h"
++#include "proc_mgr.h"
++#include "sysfs.h"
++#include "thread_sched.h"
+ 
+-#include <linux/init.h>
+-#include <linux/module.h>
+-#include <linux/kernel.h>
+-#include <linux/fs.h>
+ #include <linux/cdev.h>
+ #include <linux/device.h>
++#include <linux/fs.h>
+ #include <linux/imdb_resources.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
+ 
+ static long imdb_ioctl(struct file *file, unsigned int cmd,
+-		      unsigned long __user arg)
++		       unsigned long __user arg)
+ {
+ 	int result = 0;
+ 
+diff --git a/drivers/pnm/imdb_resource/imdb_sysfs.c b/drivers/pnm/imdb_resource/sysfs.c
+similarity index 97%
+rename from drivers/pnm/imdb_resource/imdb_sysfs.c
+rename to drivers/pnm/imdb_resource/sysfs.c
+index 77e971131..822630162 100644
+--- a/drivers/pnm/imdb_resource/imdb_sysfs.c
++++ b/drivers/pnm/imdb_resource/sysfs.c
+@@ -1,19 +1,19 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright(c) 2023 Samsung LTD. All rights reserved.
+ 
+-#include "imdb_sysfs.h"
++#include "sysfs.h"
+ 
+-#include "imdb_allocator.h"
+-#include "imdb_log.h"
+-#include "imdb_proc_mgr.h"
+-#include "imdb_thread_sched.h"
++#include "allocator.h"
++#include "log.h"
++#include "proc_mgr.h"
++#include "thread_sched.h"
+ 
+ #include "linux/types.h"
+-#include <linux/stringify.h>
+-#include <linux/kobject.h>
+ #include <linux/device.h>
+-#include <linux/sysfs.h>
+ #include <linux/imdb_resources.h>
++#include <linux/kobject.h>
++#include <linux/stringify.h>
++#include <linux/sysfs.h>
+ 
+ #define THREAD_ATTR_COUNT 1
+ #define WITH_NULL_TERM(var) ((var) + 1)
+diff --git a/drivers/pnm/imdb_resource/imdb_sysfs.h b/drivers/pnm/imdb_resource/sysfs.h
+similarity index 100%
+rename from drivers/pnm/imdb_resource/imdb_sysfs.h
+rename to drivers/pnm/imdb_resource/sysfs.h
+diff --git a/drivers/pnm/imdb_resource/imdb_thread_sched.c b/drivers/pnm/imdb_resource/thread_sched.c
+similarity index 64%
+rename from drivers/pnm/imdb_resource/imdb_thread_sched.c
+rename to drivers/pnm/imdb_resource/thread_sched.c
+index 074d6d1a1..f46a45fd8 100644
+--- a/drivers/pnm/imdb_resource/imdb_thread_sched.c
++++ b/drivers/pnm/imdb_resource/thread_sched.c
+@@ -1,18 +1,18 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "imdb_thread_sched.h"
+-#include "imdb_log.h"
+-#include "imdb_proc_mgr.h"
++#include "thread_sched.h"
++#include "log.h"
++#include "proc_mgr.h"
+ 
+-#include <linux/kernel.h>
+ #include <linux/fs.h>
+ #include <linux/imdb_resources.h>
++#include <linux/kernel.h>
+ 
+-static struct imdb_thread_sched imdb_thread_sched = {
++static struct thread_sched thread_sched = {
+ 	.threads = {},
+-	.lock = __MUTEX_INITIALIZER(imdb_thread_sched.lock),
+-	.wq = __WAIT_QUEUE_HEAD_INITIALIZER(imdb_thread_sched.wq)
++	.lock = __MUTEX_INITIALIZER(thread_sched.lock),
++	.wq = __WAIT_QUEUE_HEAD_INITIALIZER(thread_sched.wq)
+ };
+ 
+ /* When free engine found, return true, otherwise return false
+@@ -23,18 +23,17 @@ static bool imdb_find_free_thread(uint8_t *out)
+ 	bool found_free_thread = false;
+ 	uint8_t thread = 0;
+ 
+-	mutex_lock(&imdb_thread_sched.lock);
++	mutex_lock(&thread_sched.lock);
+ 
+ 	for (; thread < IMDB_THREAD_NUM; ++thread) {
+-		if (imdb_thread_sched.threads[thread].state == IMDB_THREAD_IDLE) {
+-			imdb_thread_sched.threads[thread].state =
+-				IMDB_THREAD_BUSY;
++		if (thread_sched.threads[thread].state == IMDB_THREAD_IDLE) {
++			thread_sched.threads[thread].state = IMDB_THREAD_BUSY;
+ 			found_free_thread = true;
+ 			break;
+ 		}
+ 	}
+ 
+-	mutex_unlock(&imdb_thread_sched.lock);
++	mutex_unlock(&thread_sched.lock);
+ 
+ 	*out = thread;
+ 
+@@ -51,18 +50,18 @@ static int imdb_release_thread(unsigned long __user arg)
+ 		return -EINVAL;
+ 	}
+ 
+-	mutex_lock(&imdb_thread_sched.lock);
++	mutex_lock(&thread_sched.lock);
+ 
+-	if (imdb_thread_sched.threads[thread].state == IMDB_THREAD_BUSY) {
+-		imdb_thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
++	if (thread_sched.threads[thread].state == IMDB_THREAD_BUSY) {
++		thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
+ 	} else {
+ 		IMDB_ERR("Thread is already IDLE");
+ 		rc = -EINVAL;
+ 	}
+ 
+-	mutex_unlock(&imdb_thread_sched.lock);
++	mutex_unlock(&thread_sched.lock);
+ 
+-	wake_up_interruptible(&imdb_thread_sched.wq);
++	wake_up_interruptible(&thread_sched.wq);
+ 
+ 	return rc;
+ }
+@@ -72,7 +71,7 @@ static int imdb_get_thread(void)
+ 	int rc = 0;
+ 	uint8_t thread = 0;
+ 
+-	rc = wait_event_interruptible(imdb_thread_sched.wq,
++	rc = wait_event_interruptible(thread_sched.wq,
+ 				      imdb_find_free_thread(&thread));
+ 
+ 	if (unlikely(rc)) {
+@@ -93,11 +92,11 @@ bool get_thread_state(uint8_t thread)
+ {
+ 	bool state = false;
+ 
+-	mutex_lock(&imdb_thread_sched.lock);
++	mutex_lock(&thread_sched.lock);
+ 
+-	state = imdb_thread_sched.threads[thread].state == IMDB_THREAD_BUSY;
++	state = thread_sched.threads[thread].state == IMDB_THREAD_BUSY;
+ 
+-	mutex_unlock(&imdb_thread_sched.lock);
++	mutex_unlock(&thread_sched.lock);
+ 
+ 	return state;
+ }
+@@ -109,18 +108,18 @@ int reset_thread_sched(void)
+ 
+ 	IMDB_INF("Thread scheduler reset");
+ 
+-	mutex_lock(&imdb_thread_sched.lock);
++	mutex_lock(&thread_sched.lock);
+ 
+ 	for (; thread < IMDB_THREAD_NUM; ++thread) {
+-		if (imdb_thread_sched.threads[thread].state == IMDB_THREAD_BUSY)
++		if (thread_sched.threads[thread].state == IMDB_THREAD_BUSY)
+ 			IMDB_WRN("Busy thread hard reset %u", thread);
+ 
+-		imdb_thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
++		thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
+ 	}
+ 
+-	mutex_unlock(&imdb_thread_sched.lock);
++	mutex_unlock(&thread_sched.lock);
+ 
+-	wake_up_interruptible(&imdb_thread_sched.wq);
++	wake_up_interruptible(&thread_sched.wq);
+ 
+ 	return rc;
+ }
+@@ -132,7 +131,7 @@ int init_thread_sched(void)
+ 
+ void destroy_thread_sched(void)
+ {
+-	mutex_destroy(&imdb_thread_sched.lock);
++	mutex_destroy(&thread_sched.lock);
+ }
+ 
+ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
+diff --git a/drivers/pnm/imdb_resource/imdb_thread_sched.h b/drivers/pnm/imdb_resource/thread_sched.h
+similarity index 84%
+rename from drivers/pnm/imdb_resource/imdb_thread_sched.h
+rename to drivers/pnm/imdb_resource/thread_sched.h
+index 71675314b..3327f0baa 100644
+--- a/drivers/pnm/imdb_resource/imdb_thread_sched.h
++++ b/drivers/pnm/imdb_resource/thread_sched.h
+@@ -1,14 +1,14 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#ifndef __imdb_thread_sched_H__
+-#define __imdb_thread_sched_H__
++#ifndef __THREAD_SCHED_H__
++#define __THREAD_SCHED_H__
+ 
+-#include <linux/wait.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/mutex.h>
++#include <linux/wait.h>
+ 
+-struct imdb_thread_sched {
++struct thread_sched {
+ 	struct {
+ 		uint8_t state;
+ 		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
+@@ -27,4 +27,4 @@ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg);
+ bool get_thread_state(uint8_t thread);
+ 
+ int thread_sched_clear_res(uint8_t thread);
+-#endif //__imdb_thread_sched_H__
++#endif //__THREAD_SCHED_H__
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index cd48fa57a..d5f9a7f6a 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -3,8 +3,8 @@ obj-$(CONFIG_SLS_RESOURCE) += sls_resource.o
+ CFLAGS_sls.o += -DSLS_DRIVER_VERSION=\"$(shell git rev-parse --short HEAD)\"
+ sls_resource-y := resource.o
+ sls_resource-y += sls.o
+-sls_resource-y += sls_allocator.o
+-sls_resource-y += sls_process_manager.o
+-sls_resource-y += sls_rank_scheduler.o
+-sls_resource-y += sls_sysfs.o
+-sls_resource-y += sls_topology_export.o
++sls_resource-y += allocator.o
++sls_resource-y += process_manager.o
++sls_resource-y += rank_scheduler.o
++sls_resource-y += sysfs.o
++sls_resource-y += topology_export.o
+diff --git a/drivers/pnm/sls_resource/sls_allocator.c b/drivers/pnm/sls_resource/allocator.c
+similarity index 87%
+rename from drivers/pnm/sls_resource/sls_allocator.c
+rename to drivers/pnm/sls_resource/allocator.c
+index 884747023..66cfdb1ba 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -1,11 +1,11 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "sls_allocator.h"
++#include "allocator.h"
+ 
+-#include "sls_log.h"
+-#include "sls_private.h"
+-#include "sls_process_manager.h"
++#include "log.h"
++#include "private.h"
++#include "process_manager.h"
+ 
+ #include <linux/genalloc.h>
+ #include <linux/kernel.h>
+@@ -18,7 +18,7 @@
+ #define HUGE_PAGE_SIZE (2 << 20)
+ 
+ /* Helper structure for memory allocation */
+-struct sls_allocator {
++struct allocator {
+ 	/* Allocator granularity in bytes, the number should be a power of 2 */
+ 	uint64_t gran;
+ 	/* GenAlloc memory pools for each rank, each pool has it's own virtual
+@@ -33,18 +33,17 @@ struct sls_allocator {
+ 
+ DEFINE_MUTEX(memory_mutex);
+ 
+-void lock_allocator(void)
++void lock_sls_allocator(void)
+ {
+ 	mutex_lock(&memory_mutex);
+ }
+ 
+-void unlock_allocator(void)
++void unlock_sls_allocator(void)
+ {
+ 	mutex_unlock(&memory_mutex);
+ }
+ 
+-static int init_rank_pool(struct sls_allocator *alloc, uint8_t rank,
+-			  uint64_t size)
++static int init_rank_pool(struct allocator *alloc, uint8_t rank, uint64_t size)
+ {
+ 	int err_code;
+ 	struct gen_pool *pool =
+@@ -81,7 +80,7 @@ static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+ 	chunk->end_addr = chunk->start_addr - 1;
+ }
+ 
+-static void cleanup_pools(struct sls_allocator *alloc)
++static void cleanup_pools(struct allocator *alloc)
+ {
+ 	uint8_t rank;
+ 	struct gen_pool *pool;
+@@ -94,8 +93,7 @@ static void cleanup_pools(struct sls_allocator *alloc)
+ 			continue;
+ 		}
+ 		if (unlikely(gen_pool_avail(pool) != gen_pool_size(pool))) {
+-			SLS_ERR(
+-				"Memory rank pool[%hhu]: non-deallocated objects exist, size: %zu, avail: %zu\n",
++			SLS_ERR("Pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
+ 				rank, gen_pool_size(pool),
+ 				gen_pool_avail(pool));
+ 			/*
+@@ -113,7 +111,7 @@ static void cleanup_pools(struct sls_allocator *alloc)
+ 	kfree(alloc->pools);
+ }
+ 
+-static inline uint64_t get_rank_size(struct sls_allocator *alloc, uint8_t rank)
++static inline uint64_t get_rank_size(struct allocator *alloc, uint8_t rank)
+ {
+ 	uint64_t size =
+ 		alloc->mem_info->mem_size[rank % NUM_OF_CS][SLS_BLOCK_BASE];
+@@ -124,7 +122,7 @@ static inline uint64_t get_rank_size(struct sls_allocator *alloc, uint8_t rank)
+ 	return size;
+ }
+ 
+-static int init_pools(struct sls_allocator *alloc)
++static int init_pools(struct allocator *alloc)
+ {
+ 	uint8_t rank;
+ 	uint64_t rank_size;
+@@ -155,7 +153,7 @@ static int init_pools(struct sls_allocator *alloc)
+ 	return 0;
+ }
+ 
+-static int set_granularity(struct sls_allocator *alloc, uint64_t gran)
++static int set_granularity(struct allocator *alloc, uint64_t gran)
+ {
+ 	if (unlikely(!is_power_of_2(gran))) {
+ 		SLS_ERR("Memory granularity should be a power of 2!\n");
+@@ -166,9 +164,8 @@ static int set_granularity(struct sls_allocator *alloc, uint64_t gran)
+ }
+ 
+ // [TODO: @p.bred] Generalize all PNM allocators logic
+-static int init_allocator(struct sls_allocator *alloc,
+-			  struct sls_mem_info *mem_info,
+-			  enum sls_device_type devtype)
++static int init(struct allocator *alloc, struct sls_mem_info *mem_info,
++		enum sls_device_type devtype)
+ {
+ 	int err = 0;
+ 
+@@ -202,14 +199,14 @@ int init_sls_allocator(struct sls_mem_info *mem_info,
+ 		       enum sls_device_type devtype)
+ {
+ 	SLS_DBG("Initializing SLS allocator\n");
+-	return init_allocator(&allocator, mem_info, devtype);
++	return init(&allocator, mem_info, devtype);
+ }
+ 
+ static void reset_lock(void)
+ {
+ 	if (unlikely(mutex_is_locked(&memory_mutex))) {
+ 		SLS_WRN("Mutex unlock forced.\n");
+-		unlock_allocator();
++		unlock_sls_allocator();
+ 	}
+ }
+ 
+@@ -229,7 +226,7 @@ void cleanup_sls_allocator(void)
+ 	mutex_destroy(&memory_mutex);
+ }
+ 
+-static uint8_t select_optimal_rank(struct sls_allocator *alloc)
++static uint8_t select_optimal_rank(struct allocator *alloc)
+ {
+ 	uint8_t rank;
+ 	uint8_t optimal_rank = 0;
+@@ -247,7 +244,7 @@ static uint8_t select_optimal_rank(struct sls_allocator *alloc)
+ }
+ 
+ // Call only when holding allocator lock
+-static int allocate_memory_unsafe(struct sls_allocator *alloc,
++static int allocate_memory_unsafe(struct allocator *alloc,
+ 				  struct sls_memory_alloc_request *req)
+ {
+ 	if (req->rank != SLS_ALLOC_ANY_RANK && req->rank >= alloc->nr_pools) {
+@@ -276,7 +273,7 @@ static int allocate_memory_unsafe(struct sls_allocator *alloc,
+ 	return 0;
+ }
+ 
+-static int allocate_memory_ioctl(struct sls_allocator *alloc,
++static int allocate_memory_ioctl(struct allocator *alloc,
+ 				 unsigned long __user arg)
+ {
+ 	int err;
+@@ -291,13 +288,13 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 		return err;
+ 	}
+ 
+-	lock_allocator();
++	lock_sls_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+ 		err = allocate_memory_unsafe(alloc, &kreq);
+ 		if (unlikely(err)) {
+-			unlock_allocator();
++			unlock_sls_allocator();
+ 			return err;
+ 		}
+ 
+@@ -306,7 +303,7 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 		if (unlikely(err)) {
+ 			SLS_ERR("Failed to write user alloc request. Ptr = %p.\n",
+ 				ureq);
+-			unlock_allocator();
++			unlock_sls_allocator();
+ 			return err;
+ 		}
+ 
+@@ -317,7 +314,7 @@ static int allocate_memory_ioctl(struct sls_allocator *alloc,
+ 				kreq.rank, kreq.rank_offset, kreq.size);
+ 		}
+ 	}
+-	unlock_allocator();
++	unlock_sls_allocator();
+ 
+ 	return err;
+ }
+@@ -355,7 +352,7 @@ int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ 	return 0;
+ }
+ 
+-static int deallocate_memory_ioctl(struct sls_allocator *alloc,
++static int deallocate_memory_ioctl(struct allocator *alloc,
+ 				   unsigned long __user arg)
+ {
+ 	int err;
+@@ -371,19 +368,19 @@ static int deallocate_memory_ioctl(struct sls_allocator *alloc,
+ 		return err;
+ 	}
+ 
+-	lock_allocator();
++	lock_sls_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+ 
+ 		err = deallocate_memory_unsafe(kreq);
+ 		if (unlikely(err)) {
+-			unlock_allocator();
++			unlock_sls_allocator();
+ 			return err;
+ 		}
+ 
+ 		err = sls_proc_remove_alloc(kreq);
+ 	}
+-	unlock_allocator();
++	unlock_sls_allocator();
+ 
+ 	return err;
+ }
+@@ -393,13 +390,13 @@ uint64_t get_total_size(uint8_t rank)
+ 	struct gen_pool *pool = NULL;
+ 	uint64_t size = 0;
+ 
+-	lock_allocator();
++	lock_sls_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
+ 		pool = allocator.pools[rank];
+ 		size = pool ? gen_pool_size(pool) : 0;
+ 	}
+-	unlock_allocator();
++	unlock_sls_allocator();
+ 
+ 	return size;
+ }
+@@ -409,13 +406,13 @@ uint64_t get_free_size(uint8_t rank)
+ 	struct gen_pool *pool = NULL;
+ 	uint64_t size = 0;
+ 
+-	lock_allocator();
++	lock_sls_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
+ 		pool = allocator.pools[rank];
+ 		size = pool ? gen_pool_avail(pool) : 0;
+ 	}
+-	unlock_allocator();
++	unlock_sls_allocator();
+ 
+ 	return size;
+ }
+diff --git a/drivers/pnm/sls_resource/sls_allocator.h b/drivers/pnm/sls_resource/allocator.h
+similarity index 83%
+rename from drivers/pnm/sls_resource/sls_allocator.h
+rename to drivers/pnm/sls_resource/allocator.h
+index ada0882e5..950c7f42f 100644
+--- a/drivers/pnm/sls_resource/sls_allocator.h
++++ b/drivers/pnm/sls_resource/allocator.h
+@@ -4,15 +4,16 @@
+ #ifndef __SLS_ALLOCATOR_H__
+ #define __SLS_ALLOCATOR_H__
+ 
+-#include <linux/sls_resources.h>
+ #include <linux/list.h>
++#include <linux/sls_resources.h>
+ #include <linux/types.h>
+ 
+ //[TODO: s-motov] make common sls_dev structure
+ struct sls_mem_info;
+ enum sls_device_type;
+ 
+-int init_sls_allocator(struct sls_mem_info *mem_info, enum sls_device_type devtype);
++int init_sls_allocator(struct sls_mem_info *mem_info,
++		       enum sls_device_type devtype);
+ /*
+  * Not proccess(thread)-safe.
+  * `mem_info` might be NULL, if it is
+@@ -23,13 +24,11 @@ int reset_sls_allocator(void);
+ void cleanup_sls_allocator(void);
+ int mem_process_ioctl(unsigned int cmd, unsigned long __user arg);
+ int deallocate_memory_unsafe(struct sls_memory_alloc_request req);
+-void lock_allocator(void);
+-void unlock_allocator(void);
++void lock_sls_allocator(void);
++void unlock_sls_allocator(void);
+ 
+ uint64_t get_total_size(uint8_t rank);
+ 
+ uint64_t get_free_size(uint8_t rank);
+ 
+-
+-
+ #endif /* __SLS_ALLOCATOR_H__ */
+diff --git a/drivers/pnm/sls_resource/sls_log.h b/drivers/pnm/sls_resource/log.h
+similarity index 83%
+rename from drivers/pnm/sls_resource/sls_log.h
+rename to drivers/pnm/sls_resource/log.h
+index 4dcc04111..89f095942 100644
+--- a/drivers/pnm/sls_resource/sls_log.h
++++ b/drivers/pnm/sls_resource/log.h
+@@ -8,9 +8,9 @@
+ 
+ #define SLS_DD_MARK "[DAX_SLS_DD]"
+ 
+-#define SLS_PRINT(level, fmt, ...)                                          \
+-	pr_##level(SLS_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__,          \
+-	       ##__VA_ARGS__)
++#define SLS_PRINT(level, fmt, ...)                                 \
++	pr_##level(SLS_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
++		   ##__VA_ARGS__)
+ #define SLS_ERR(fmt, ...) SLS_PRINT(err, fmt, ##__VA_ARGS__)
+ #define SLS_WRN(fmt, ...) SLS_PRINT(warn, fmt, ##__VA_ARGS__)
+ #define SLS_INF(fmt, ...) SLS_PRINT(info, fmt, ##__VA_ARGS__)
+diff --git a/drivers/pnm/sls_resource/sls_private.h b/drivers/pnm/sls_resource/private.h
+similarity index 74%
+rename from drivers/pnm/sls_resource/sls_private.h
+rename to drivers/pnm/sls_resource/private.h
+index deb42c153..e775242ef 100644
+--- a/drivers/pnm/sls_resource/sls_private.h
++++ b/drivers/pnm/sls_resource/private.h
+@@ -4,24 +4,24 @@
+ #ifndef __SLS_PRIVATE_H__
+ #define __SLS_PRIVATE_H__
+ 
+-#include "sls_log.h"
++#include "log.h"
+ 
+-#include <linux/sls_common.h>
+ #include <linux/cdev.h>
+ #include <linux/compiler.h>
+ #include <linux/device.h>
+ #include <linux/fs.h>
++#include <linux/kobject.h>
+ #include <linux/semaphore.h>
++#include <linux/sls_common.h>
+ #include <linux/types.h>
+-#include <linux/kobject.h>
+ 
+ #define SLS_COPY_FROM_TO_USER(func, error, dst, src, size)        \
+-	do {                                                         \
+-		error = func(dst, src, size) ? -EFAULT : 0;          \
+-		if (unlikely(error)) {                               \
++	do {                                                      \
++		error = func(dst, src, size) ? -EFAULT : 0;       \
++		if (unlikely(error)) {                            \
+ 			SLS_ERR("Can't copy '" #src "' to '" #dst \
+-				   "' in '" #func "'\n");            \
+-		}                                                    \
++				"' in '" #func "'\n");            \
++		}                                                 \
+ 	} while (0)
+ #define SLS_COPY_FROM_USER(error, dst, src, size) \
+ 	SLS_COPY_FROM_TO_USER(copy_from_user, error, dst, src, size)
+@@ -36,8 +36,7 @@ struct sls_device_data {
+ 
+ static inline int is_sls_range(u64 start, u64 end)
+ {
+-	return start >= SLS_BASE_ADDR &&
+-	       end < SLS_BASE_ADDR + SLS_MEMORY_SIZE;
++	return start >= SLS_BASE_ADDR && end < SLS_BASE_ADDR + SLS_MEMORY_SIZE;
+ }
+ 
+ void cleanup_sls_device(void);
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.c b/drivers/pnm/sls_resource/process_manager.c
+similarity index 94%
+rename from drivers/pnm/sls_resource/sls_process_manager.c
+rename to drivers/pnm/sls_resource/process_manager.c
+index de73b1040..e21a5495b 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.c
++++ b/drivers/pnm/sls_resource/process_manager.c
+@@ -1,14 +1,14 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+-#include "sls_process_manager.h"
+-#include "sls_rank_scheduler.h"
+-#include "sls_allocator.h"
+-#include "sls_log.h"
++#include "process_manager.h"
++#include "allocator.h"
++#include "log.h"
++#include "rank_scheduler.h"
+ 
++#include <linux/sched.h>
+ #include <linux/sched/signal.h>
+ #include <linux/slab.h>
+-#include <linux/sched.h>
+ 
+ // [TODO: @e-kutovoi MCS23-1260] Rename desc -> req, since there are no
+ // "descriptors" anymore
+@@ -37,7 +37,7 @@ struct sls_proc_resources {
+  * data structure for tracking device resources, allocated to user space
+  * processes
+  */
+-struct sls_process_manager {
++struct process_manager {
+ 	/* [TODO:] need to checkout performance impact of using just list,
+ 	 * maybe some more advanced data structure is required (rb_tree)
+ 	 */
+@@ -49,7 +49,7 @@ struct sls_process_manager {
+ 	struct mutex proc_list_lock;
+ };
+ 
+-static struct sls_process_manager proc_mgr = {
++static struct process_manager proc_mgr = {
+ 	.enable_cleanup = ATOMIC64_INIT(0),
+ 	.active_process_list = LIST_HEAD_INIT(proc_mgr.active_process_list),
+ 	.leaked_process_list = LIST_HEAD_INIT(proc_mgr.leaked_process_list),
+@@ -138,7 +138,7 @@ static pid_t get_current_process_id(void)
+ 
+ /* this function should be called with sync */
+ static struct sls_proc_resources *
+-find_current_proc_res(struct sls_process_manager *mgr)
++find_current_proc_res(struct process_manager *mgr)
+ {
+ 	struct sls_proc_resources *proc_res;
+ 	pid_t pid = get_current_process_id();
+@@ -157,7 +157,7 @@ static bool has_resources_leaked(struct sls_proc_resources *proc_res)
+ 	       !RB_EMPTY_ROOT(&proc_res->alloc_desc_tree);
+ }
+ 
+-static void track_leaked_resources(struct sls_process_manager *mgr,
++static void track_leaked_resources(struct process_manager *mgr,
+ 				   struct sls_proc_resources *proc_res)
+ {
+ 	struct rb_node *node;
+@@ -224,14 +224,13 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 		 * annoying to use. So we should instead refactor the code, and
+ 		 * perhaps move the RB-tree from process manager into the allocator.
+ 		 */
+-		lock_allocator();
++		lock_sls_allocator();
+ 		{
+ 			//[TODO:s-motov] kcsan check
+ 
+ 			failed |= deallocate_memory_unsafe(
+ 					  desc_node->request) != 0;
+-			SLS_INF(
+-				"Abnormal release desc[rank = %u, rank_offset = %llu], pid: %d, tid: %d\n",
++			SLS_INF("Abnormal release desc[rank=%u, rank_offset=%llu],pid:%d,tid:%d\n",
+ 				desc_node->request.rank,
+ 				desc_node->request.rank_offset,
+ 				get_current_process_id(), current->pid);
+@@ -239,7 +238,7 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 			rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
+ 			kfree(desc_node);
+ 		}
+-		unlock_allocator();
++		unlock_sls_allocator();
+ 	}
+ 
+ 	return failed ? -1 : 0;
+@@ -295,7 +294,7 @@ int release_sls_process(void)
+ 	return err_code;
+ }
+ 
+-static int set_rank_status(struct sls_process_manager *mgr,
++static int set_rank_status(struct process_manager *mgr,
+ 			   enum rank_access_type type, int rank, bool set)
+ {
+ 	unsigned long *rank_mask;
+@@ -367,7 +366,7 @@ int sls_proc_remove_rank(int rank, unsigned int cmd)
+ 	return 0;
+ }
+ 
+-static int update_descriptor_status(struct sls_process_manager *mgr,
++static int update_descriptor_status(struct process_manager *mgr,
+ 				    struct sls_memory_alloc_request req,
+ 				    bool is_registration)
+ {
+@@ -409,13 +408,13 @@ static int update_descriptor_status(struct sls_process_manager *mgr,
+ 	return err_code;
+ }
+ 
+-static int register_descriptor(struct sls_process_manager *mgr,
++static int register_descriptor(struct process_manager *mgr,
+ 			       struct sls_memory_alloc_request req)
+ {
+ 	return update_descriptor_status(mgr, req, true);
+ }
+ 
+-static int unregister_descriptor(struct sls_process_manager *mgr,
++static int unregister_descriptor(struct process_manager *mgr,
+ 				 struct sls_memory_alloc_request req)
+ {
+ 	return update_descriptor_status(mgr, req, false);
+@@ -535,13 +534,13 @@ void cleanup_process_list(struct list_head *process_list)
+ 	}
+ }
+ 
+-void reset_sls_process_manager(void)
++void reset_process_manager(void)
+ {
+ 	cleanup_process_list(&proc_mgr.active_process_list);
+ 	cleanup_process_list(&proc_mgr.leaked_process_list);
+ }
+ 
+-void cleanup_sls_process_manager(void)
++void cleanup_process_manager(void)
+ {
+ 	struct sls_proc_resources *proc_res_tmp;
+ 	struct sls_proc_resources *proc_res;
+diff --git a/drivers/pnm/sls_resource/sls_process_manager.h b/drivers/pnm/sls_resource/process_manager.h
+similarity index 88%
+rename from drivers/pnm/sls_resource/sls_process_manager.h
+rename to drivers/pnm/sls_resource/process_manager.h
+index 638de724f..91b455fbe 100644
+--- a/drivers/pnm/sls_resource/sls_process_manager.h
++++ b/drivers/pnm/sls_resource/process_manager.h
+@@ -4,15 +4,15 @@
+ #ifndef __SLS_PROCESS_MANAGER_H__
+ #define __SLS_PROCESS_MANAGER_H__
+ 
+-#include "sls_rank_scheduler.h"
+-#include "sls_allocator.h"
++#include "allocator.h"
++#include "rank_scheduler.h"
+ 
+-#include <linux/mutex.h>
+ #include <linux/list.h>
++#include <linux/mutex.h>
+ #include <linux/rbtree.h>
+ 
+-void cleanup_sls_process_manager(void);
+-void reset_sls_process_manager(void);
++void cleanup_process_manager(void);
++void reset_process_manager(void);
+ /* function for handling 'open' file operation */
+ int register_sls_process(void);
+ /* function for handling 'release' file operation */
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.c b/drivers/pnm/sls_resource/rank_scheduler.c
+similarity index 83%
+rename from drivers/pnm/sls_resource/sls_rank_scheduler.c
+rename to drivers/pnm/sls_resource/rank_scheduler.c
+index 8c34e2d24..f18782cad 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.c
++++ b/drivers/pnm/sls_resource/rank_scheduler.c
+@@ -1,9 +1,9 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
+-#include "sls_process_manager.h"
+-#include "sls_rank_scheduler.h"
+-#include "sls_log.h"
++#include "rank_scheduler.h"
++#include "log.h"
++#include "process_manager.h"
+ 
+ #include <linux/bitops.h>
+ #include <linux/uaccess.h>
+@@ -18,7 +18,7 @@
+  */
+ #define RETRY_TIMEOUT_NS (100000)
+ 
+-struct sls_rank_scheduler {
++struct rank_scheduler {
+ 	/* struct for managing rank read and write status */
+ 	struct sls_rank_stat_t {
+ 		uint8_t wr_stat;
+@@ -33,7 +33,7 @@ struct sls_rank_scheduler {
+ 	struct mutex rank_stat_lock;
+ };
+ 
+-static struct sls_rank_scheduler sls_rank_sched;
++static struct rank_scheduler sls_rank_sched;
+ 
+ static atomic_t wr_flag = ATOMIC_INIT(0);
+ static atomic_t rd_flag = ATOMIC_INIT(0);
+@@ -41,7 +41,7 @@ static DECLARE_WAIT_QUEUE_HEAD(wr_wq);
+ static DECLARE_WAIT_QUEUE_HEAD(rd_wq);
+ 
+ static unsigned long
+-acquire_free_rank_for_write(struct sls_rank_scheduler *rank_sched,
++acquire_free_rank_for_write(struct rank_scheduler *rank_sched,
+ 			    unsigned int rw_msk, unsigned int wo_msk)
+ {
+ 	unsigned long rank;
+@@ -54,9 +54,8 @@ acquire_free_rank_for_write(struct sls_rank_scheduler *rank_sched,
+ 	return rank;
+ }
+ 
+-static void find_free_ranks(struct sls_rank_scheduler *rank_sched,
+-			    unsigned int msk, unsigned int *rw_msk,
+-			    unsigned int *wo_msk)
++static void find_free_ranks(struct rank_scheduler *rank_sched, unsigned int msk,
++			    unsigned int *rw_msk, unsigned int *wo_msk)
+ {
+ 	size_t rank;
+ 	struct sls_rank_stat_t *axd_rs = rank_sched->rank_stats;
+@@ -77,7 +76,7 @@ static void find_free_ranks(struct sls_rank_scheduler *rank_sched,
+ 		*rw_msk, *wo_msk, msk);
+ }
+ 
+-void reset_sls_rank_scheduler(void)
++void reset_rank_scheduler(void)
+ {
+ 	size_t rank;
+ 
+@@ -95,20 +94,19 @@ void reset_sls_rank_scheduler(void)
+ 	atomic64_set(&sls_rank_sched.retry_timeout_ns, RETRY_TIMEOUT_NS);
+ }
+ 
+-void init_sls_rank_scheduler(void)
++void init_rank_scheduler(void)
+ {
+-	reset_sls_rank_scheduler();
++	reset_rank_scheduler();
+ 	mutex_init(&sls_rank_sched.rank_stat_lock);
+ }
+ 
+-void destroy_sls_rank_scheduler(void)
++void destroy_rank_scheduler(void)
+ {
+-	reset_sls_rank_scheduler();
++	reset_rank_scheduler();
+ 	mutex_destroy(&sls_rank_sched.rank_stat_lock);
+ }
+ 
+-static int get_rank_write(struct sls_rank_scheduler *rank_sched,
+-			  unsigned int msk)
++static int get_rank_write(struct rank_scheduler *rank_sched, unsigned int msk)
+ {
+ 	int ret = -1;
+ 	/* masks for saving available ranks in corresponding bits */
+@@ -142,7 +140,7 @@ static int get_rank_write(struct sls_rank_scheduler *rank_sched,
+ 	return ret;
+ }
+ 
+-static int get_rank_read(struct sls_rank_scheduler *rank_sched,
++static int get_rank_read(struct rank_scheduler *rank_sched,
+ 			 unsigned int rank_id)
+ {
+ 	int ret = -1;
+@@ -219,7 +217,7 @@ int release_rank_read(unsigned int rank_id)
+ // Here we disable kcsan checks due to unavoidable data race in
+ // wait_event_interruptible_hrtimeout. We can't replace that function because the
+ // HW is hanging
+-static __no_kcsan int wait_for_rank(struct sls_rank_scheduler *rank_sched,
++static __no_kcsan int wait_for_rank(struct rank_scheduler *rank_sched,
+ 				    atomic_t *flag, struct wait_queue_head *wq)
+ {
+ 	atomic_set(flag, 0);
+@@ -229,7 +227,7 @@ static __no_kcsan int wait_for_rank(struct sls_rank_scheduler *rank_sched,
+ 		atomic64_read(&rank_sched->retry_timeout_ns));
+ }
+ 
+-int get_retry_read(struct sls_rank_scheduler *rank_sched, unsigned int arg)
++int get_retry_read(struct rank_scheduler *rank_sched, unsigned int arg)
+ {
+ 	if (wait_for_rank(rank_sched, &rd_flag, &rd_wq) >= 0)
+ 		return get_rank_read(rank_sched, arg);
+@@ -237,14 +235,14 @@ int get_retry_read(struct sls_rank_scheduler *rank_sched, unsigned int arg)
+ 	return -1;
+ }
+ 
+-int get_retry_write(struct sls_rank_scheduler *rank_sched, unsigned int arg)
++int get_retry_write(struct rank_scheduler *rank_sched, unsigned int arg)
+ {
+ 	if (wait_for_rank(rank_sched, &wr_flag, &wr_wq) >= 0)
+ 		return get_rank_write(rank_sched, arg);
+ 
+ 	return -1;
+ }
+-int get_rank_retry(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
++int get_rank_retry(struct rank_scheduler *rank_sched, unsigned int cmd,
+ 		   unsigned int arg)
+ {
+ 	if (cmd == GET_RANK_FOR_READ)
+@@ -256,7 +254,7 @@ int get_rank_retry(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
+ 	return -EINVAL;
+ }
+ 
+-static int get_rank(struct sls_rank_scheduler *rank_sched, unsigned int cmd,
++static int get_rank(struct rank_scheduler *rank_sched, unsigned int cmd,
+ 		    unsigned int arg)
+ {
+ 	if (cmd == GET_RANK_FOR_WRITE)
+@@ -281,7 +279,7 @@ int get_sls_rank(unsigned int cmd, unsigned int arg)
+ 	return ret;
+ }
+ 
+-bool sls_rank_scheduler_rank_state(uint8_t rank)
++bool rank_scheduler_rank_state(uint8_t rank)
+ {
+ 	bool state;
+ 
+@@ -291,24 +289,24 @@ bool sls_rank_scheduler_rank_state(uint8_t rank)
+ 	return state;
+ }
+ 
+-uint64_t sls_rank_scheduler_acquisition_count(uint8_t rank)
++uint64_t rank_scheduler_acquisition_count(uint8_t rank)
+ {
+ 	struct sls_rank_stat_t *axd_rs = sls_rank_sched.rank_stats;
+ 
+ 	return atomic64_read(&axd_rs[rank].wr_acquisition_count);
+ }
+ 
+-uint64_t sls_rank_scheduler_acquisition_timeout(void)
++uint64_t rank_scheduler_acquisition_timeout(void)
+ {
+ 	return atomic64_read(&sls_rank_sched.retry_timeout_ns);
+ }
+ 
+-void sls_rank_scheduler_set_acquisition_timeout(uint64_t timeout)
++void rank_scheduler_set_acquisition_timeout(uint64_t timeout)
+ {
+ 	atomic64_set(&sls_rank_sched.retry_timeout_ns, timeout);
+ }
+ 
+-static void wakeup_queue(struct sls_rank_scheduler *rank_sched, int rank,
++static void wakeup_queue(struct rank_scheduler *rank_sched, int rank,
+ 			 atomic_t *flag, struct wait_queue_head *wq)
+ {
+ 	if (rank >= 0) { /* wake up someone */
+@@ -317,7 +315,7 @@ static void wakeup_queue(struct sls_rank_scheduler *rank_sched, int rank,
+ 	}
+ }
+ 
+-static int release_and_wakeup(struct sls_rank_scheduler *rank_sched,
++static int release_and_wakeup(struct rank_scheduler *rank_sched,
+ 			      unsigned int cmd, unsigned int arg)
+ {
+ 	int rank;
+diff --git a/drivers/pnm/sls_resource/sls_rank_scheduler.h b/drivers/pnm/sls_resource/rank_scheduler.h
+similarity index 65%
+rename from drivers/pnm/sls_resource/sls_rank_scheduler.h
+rename to drivers/pnm/sls_resource/rank_scheduler.h
+index ba90f2801..5a785fc26 100644
+--- a/drivers/pnm/sls_resource/sls_rank_scheduler.h
++++ b/drivers/pnm/sls_resource/rank_scheduler.h
+@@ -6,13 +6,13 @@
+ 
+ #include <linux/atomic.h>
+ 
++#include <linux/mutex.h>
+ #include <linux/sls_resources.h>
+ #include <linux/types.h>
+-#include <linux/mutex.h>
+ 
+-void reset_sls_rank_scheduler(void);
+-void init_sls_rank_scheduler(void);
+-void destroy_sls_rank_scheduler(void);
++void reset_rank_scheduler(void);
++void init_rank_scheduler(void);
++void destroy_rank_scheduler(void);
+ int get_sls_rank(unsigned int cmd, unsigned int arg);
+ int release_sls_rank(unsigned int cmd, unsigned int arg);
+ 
+@@ -23,11 +23,10 @@ int release_sls_rank(unsigned int cmd, unsigned int arg);
+ int release_rank_write(unsigned int rank_id);
+ int release_rank_read(unsigned int rank_id);
+ 
+-bool sls_rank_scheduler_rank_state(uint8_t rank);
+-uint64_t sls_rank_scheduler_acquisition_count(uint8_t rank);
+-
+-uint64_t sls_rank_scheduler_acquisition_timeout(void);
+-void sls_rank_scheduler_set_acquisition_timeout(uint64_t timeout);
++bool rank_scheduler_rank_state(uint8_t rank);
++uint64_t rank_scheduler_acquisition_count(uint8_t rank);
+ 
++uint64_t rank_scheduler_acquisition_timeout(void);
++void rank_scheduler_set_acquisition_timeout(uint64_t timeout);
+ 
+ #endif
+diff --git a/drivers/pnm/sls_resource/resource.c b/drivers/pnm/sls_resource/resource.c
+index 807e909d1..f5b530188 100644
+--- a/drivers/pnm/sls_resource/resource.c
++++ b/drivers/pnm/sls_resource/resource.c
+@@ -1,8 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+-#include <linux/module.h>
+ #include "sls.h"
++#include <linux/module.h>
+ 
+ static int __init init_mod(void)
+ {
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 1a15ec4b0..ca84dd085 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -1,21 +1,21 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "sls_process_manager.h"
+-#include "sls_private.h"
+-#include "sls_sysfs.h"
+-#include "sls_log.h"
++#include "log.h"
++#include "private.h"
++#include "process_manager.h"
++#include "sysfs.h"
+ 
+-#include <linux/pnm_sls_set_mem_info.h>
+ #include <linux/cdev.h>
+ #include <linux/dax.h>
+ #include <linux/fs.h>
+ #include <linux/io.h>
+-#include <linux/sls_resources.h>
+ #include <linux/mm.h>
+ #include <linux/mman.h>
+ #include <linux/module.h>
++#include <linux/pnm_sls_set_mem_info.h>
+ #include <linux/slab.h>
++#include <linux/sls_resources.h>
+ 
+ #ifdef SLS_DRIVER_VERSION
+ MODULE_VERSION(SLS_DRIVER_VERSION);
+@@ -95,9 +95,9 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+-		reset_sls_rank_scheduler();
++		reset_rank_scheduler();
+ 		retval = reset_sls_allocator();
+-		reset_sls_process_manager();
++		reset_process_manager();
+ 		break;
+ 	case ALLOCATE_MEMORY:
+ 	case DEALLOCATE_MEMORY:
+@@ -234,19 +234,19 @@ int init_sls_device(void)
+ 		goto allocator_fail;
+ 
+ 	/* Reset ranks status and synchronization primitives */
+-	init_sls_rank_scheduler();
++	init_rank_scheduler();
+ 
+ 	/* Create sysfs subsystem for the device */
+ 	err = build_sls_sysfs(&mem_info, sls_resource_device, sls_device_type);
+ 	if (err)
+-		goto build_sysfs_fail;
++		goto build_sls_sysfs_fail;
+ 
+ 	SLS_INF("Initialization is done");
+ 	return 0;
+ 
+-build_sysfs_fail:
+-	destroy_sls_rank_scheduler();
+-	cleanup_sls_process_manager();
++build_sls_sysfs_fail:
++	destroy_rank_scheduler();
++	cleanup_process_manager();
+ allocator_fail:
+ 	destroy_sls_resource_dev();
+ resource_device_fail:
+@@ -261,10 +261,10 @@ void cleanup_sls_device(void)
+ 	cleanup_sls_allocator();
+ 
+ 	/* Free allocated memory if any user processes alive upon device remove*/
+-	cleanup_sls_process_manager();
++	cleanup_process_manager();
+ 
+ 	/* Reset state */
+-	destroy_sls_rank_scheduler();
++	destroy_rank_scheduler();
+ 
+ 	/* Remove test attribute */
+ 	destroy_sls_sysfs();
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.c b/drivers/pnm/sls_resource/sysfs.c
+similarity index 95%
+rename from drivers/pnm/sls_resource/sls_sysfs.c
+rename to drivers/pnm/sls_resource/sysfs.c
+index 5440acbc9..4e7a5b21d 100644
+--- a/drivers/pnm/sls_resource/sls_sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs.c
+@@ -1,13 +1,13 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+ 
+-#include "sls_sysfs.h"
+-#include "sls_allocator.h"
+-#include "sls_log.h"
+-#include "sls_rank_scheduler.h"
+-#include "sls_process_manager.h"
+-#include "sls_private.h"
+-#include "sls_topology_export.h"
++#include "sysfs.h"
++#include "allocator.h"
++#include "log.h"
++#include "private.h"
++#include "process_manager.h"
++#include "rank_scheduler.h"
++#include "topology_export.h"
+ 
+ #include <linux/device.h>
+ #include <linux/genalloc.h>
+@@ -67,7 +67,7 @@ static DEVICE_ATTR_RW(cleanup);
+ static ssize_t acq_timeout_show(struct device *device,
+ 				struct device_attribute *attr, char *buf)
+ {
+-	uint64_t acquisition_count = sls_rank_scheduler_acquisition_timeout();
++	uint64_t acquisition_count = rank_scheduler_acquisition_timeout();
+ 
+ 	return sysfs_emit(buf, "%llu\n", acquisition_count);
+ }
+@@ -84,7 +84,7 @@ static ssize_t acq_timeout_store(struct device *device,
+ 		return -EINVAL;
+ 	}
+ 	SLS_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
+-	sls_rank_scheduler_set_acquisition_timeout(acq_timeout);
++	rank_scheduler_set_acquisition_timeout(acq_timeout);
+ 	return count;
+ }
+ static DEVICE_ATTR_RW(acq_timeout);
+@@ -170,7 +170,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 	uint64_t free_size, size, wr_acq_count;
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[0]) == 0) {
+-		state = sls_rank_scheduler_rank_state(attr->rank);
++		state = rank_scheduler_rank_state(attr->rank);
+ 		return sysfs_emit(buf, "%u\n", state);
+ 	}
+ 
+@@ -185,7 +185,7 @@ static ssize_t rank_show(struct rank_attribute *attr, char *buf)
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, rank_attr_name[3]) == 0) {
+-		wr_acq_count = sls_rank_scheduler_acquisition_count(attr->rank);
++		wr_acq_count = rank_scheduler_acquisition_count(attr->rank);
+ 		return sysfs_emit(buf, "%llu\n", wr_acq_count);
+ 	}
+ 
+@@ -401,31 +401,31 @@ int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev,
+ 	if (!ranks_kobj) {
+ 		err = -ENOMEM;
+ 		SLS_ERR("Failed to create ranks kobject\n");
+-		goto sls_sysfs_out;
++		goto sysfs_out;
+ 	}
+ 
+ 	if (sysfs_create_groups(ranks_kobj, dev_attr_groups)) {
+ 		err = -ENOMEM;
+-		goto sls_sysfs_out;
++		goto sysfs_out;
+ 	}
+ 
+ 	err = sls_export_topology_constants(&resource_dev->kobj);
+ 	if (err) {
+ 		SLS_ERR("Failed to build memory topology sysfs");
+-		goto sls_sysfs_out;
++		goto sysfs_out;
+ 	}
+ 
+ 	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
+ 		err = build_rank_sysfs(ranks_kobj, rank);
+ 		if (err) {
+ 			SLS_ERR("Failed to build sysfs for rank [%d]\n", rank);
+-			goto sls_sysfs_out;
++			goto sysfs_out;
+ 		}
+ 	}
+ 
+ 	SLS_DBG("Built SLS sysfs\n");
+ 
+-sls_sysfs_out:
++sysfs_out:
+ 	return err;
+ }
+ 
+diff --git a/drivers/pnm/sls_resource/sls_sysfs.h b/drivers/pnm/sls_resource/sysfs.h
+similarity index 100%
+rename from drivers/pnm/sls_resource/sls_sysfs.h
+rename to drivers/pnm/sls_resource/sysfs.h
+diff --git a/drivers/pnm/sls_resource/sls_topology_export.c b/drivers/pnm/sls_resource/topology_export.c
+similarity index 98%
+rename from drivers/pnm/sls_resource/sls_topology_export.c
+rename to drivers/pnm/sls_resource/topology_export.c
+index 3f3b4cd06..a0d7ec299 100644
+--- a/drivers/pnm/sls_resource/sls_topology_export.c
++++ b/drivers/pnm/sls_resource/topology_export.c
+@@ -1,9 +1,9 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "sls_private.h"
+-#include "sls_log.h"
+-#include "sls_topology_export.h"
++#include "topology_export.h"
++#include "log.h"
++#include "private.h"
+ 
+ #include <linux/pnm_sls_mem_topology.h>
+ #include <linux/sls_resources.h>
+diff --git a/drivers/pnm/sls_resource/sls_topology_export.h b/drivers/pnm/sls_resource/topology_export.h
+similarity index 100%
+rename from drivers/pnm/sls_resource/sls_topology_export.h
+rename to drivers/pnm/sls_resource/topology_export.h
+diff --git a/drivers/pnm/zswap/Makefile b/drivers/pnm/zswap/Makefile
+index 9b4a6798e..167bde9e7 100644
+--- a/drivers/pnm/zswap/Makefile
++++ b/drivers/pnm/zswap/Makefile
+@@ -2,7 +2,7 @@
+ 
+ obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap_sim.o
+ 
+-pnm_zswap_sim-y := zswap_device.o
+-pnm_zswap_sim-y += zswap_sim.o
+-pnm_zswap_sim-y += zswap_compressor.o
+-pnm_zswap_sim-y += zswap_parameters.o
++pnm_zswap_sim-y := device.o
++pnm_zswap_sim-y += sim.o
++pnm_zswap_sim-y += compressor.o
++pnm_zswap_sim-y += parameters.o
+diff --git a/drivers/pnm/zswap/zswap_compressor.c b/drivers/pnm/zswap/compressor.c
+similarity index 99%
+rename from drivers/pnm/zswap/zswap_compressor.c
+rename to drivers/pnm/zswap/compressor.c
+index 9032a0ce8..ac870f38a 100644
+--- a/drivers/pnm/zswap/zswap_compressor.c
++++ b/drivers/pnm/zswap/compressor.c
+@@ -3,16 +3,16 @@
+ 
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+-#include "zswap_compressor.h"
+-#include "zswap_sim.h"
++#include "compressor.h"
++#include "sim.h"
+ 
+-#include <linux/smp.h>
+ #include <asm/unaligned.h>
+ #include <linux/kernel.h>
+ #include <linux/log2.h>
+ #include <linux/math64.h>
+ #include <linux/module.h>
+ #include <linux/slab.h>
++#include <linux/smp.h>
+ 
+ /***************************************************/
+ /* Emulation Parameters for Performance Estimation */
+diff --git a/drivers/pnm/zswap/zswap_compressor.h b/drivers/pnm/zswap/compressor.h
+similarity index 95%
+rename from drivers/pnm/zswap/zswap_compressor.h
+rename to drivers/pnm/zswap/compressor.h
+index c140b3af3..14a65c2ac 100644
+--- a/drivers/pnm/zswap/zswap_compressor.h
++++ b/drivers/pnm/zswap/compressor.h
+@@ -4,7 +4,7 @@
+ #ifndef __ZSWAP_COMPRESSOR_H__
+ #define __ZSWAP_COMPRESSOR_H__
+ 
+-#include "zswap_sim.h"
++#include "sim.h"
+ 
+ #include <linux/pnm/cxl_zswap.h>
+ 
+diff --git a/drivers/pnm/zswap/zswap_device.c b/drivers/pnm/zswap/device.c
+similarity index 99%
+rename from drivers/pnm/zswap/zswap_device.c
+rename to drivers/pnm/zswap/device.c
+index ed2bc0808..175428540 100644
+--- a/drivers/pnm/zswap/zswap_device.c
++++ b/drivers/pnm/zswap/device.c
+@@ -1,17 +1,17 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "zswap_sim.h"
++#include "sim.h"
+ 
+-#include <linux/io.h>
++#include <asm/timer.h>
+ #include <linux/debugfs.h>
++#include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/kthread.h> //kthread_create(), kthread_run()
+ #include <linux/list.h>
+ #include <linux/mm.h>
+ #include <linux/mm_types.h>
+ #include <linux/module.h>
+-#include <asm/timer.h>
+ #include <linux/pnm/cxl_zswap_driver.h>
+ #include <linux/slab.h>
+ #include <linux/spinlock.h>
+diff --git a/drivers/pnm/zswap/zswap_parameters.c b/drivers/pnm/zswap/parameters.c
+similarity index 88%
+rename from drivers/pnm/zswap/zswap_parameters.c
+rename to drivers/pnm/zswap/parameters.c
+index 590bc8349..b0075b703 100644
+--- a/drivers/pnm/zswap/zswap_parameters.c
++++ b/drivers/pnm/zswap/parameters.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "zswap_sim.h"
++#include "sim.h"
+ 
+ bool log_enabled = 1;
+ module_param_named(log_enabled, log_enabled, bool, 0644);
+diff --git a/drivers/pnm/zswap/zswap_sim.c b/drivers/pnm/zswap/sim.c
+similarity index 99%
+rename from drivers/pnm/zswap/zswap_sim.c
+rename to drivers/pnm/zswap/sim.c
+index b9fbe64e7..55807d7d4 100644
+--- a/drivers/pnm/zswap/zswap_sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -4,14 +4,13 @@
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+ #include <asm/barrier.h>
+-#include <linux/delay.h>
+-#include <linux/io.h>
+ #include <asm/msr.h>
+ #include <asm/timer.h>
+ #include <linux/circ_buf.h>
+ #include <linux/delay.h>
+ #include <linux/freezer.h>
+ #include <linux/init.h>
++#include <linux/io.h>
+ #include <linux/irqflags.h>
+ #include <linux/kthread.h>
+ #include <linux/ktime.h>
+@@ -28,8 +27,8 @@
+ #include <linux/vmalloc.h>
+ #include <linux/workqueue.h>
+ 
+-#include "zswap_compressor.h"
+-#include "zswap_sim.h"
++#include "compressor.h"
++#include "sim.h"
+ 
+ static struct pnm_info *pnm_ctrl;
+ 
+diff --git a/drivers/pnm/zswap/zswap_sim.h b/drivers/pnm/zswap/sim.h
+similarity index 100%
+rename from drivers/pnm/zswap/zswap_sim.h
+rename to drivers/pnm/zswap/sim.h
+diff --git a/include/linux/pnm/.clang-format b/include/linux/pnm/.clang-format
+new file mode 120000
+index 000000000..81597c374
+--- /dev/null
++++ b/include/linux/pnm/.clang-format
+@@ -0,0 +1 @@
++../../../drivers/pnm/.clang-format
+\ No newline at end of file
+diff --git a/lib/pnm/.clang-format b/lib/pnm/.clang-format
+new file mode 120000
+index 000000000..7fcb50b3b
+--- /dev/null
++++ b/lib/pnm/.clang-format
+@@ -0,0 +1 @@
++../../drivers/pnm/.clang-format
+\ No newline at end of file
+diff --git a/mm/pnm/.clang-format b/mm/pnm/.clang-format
+new file mode 120000
+index 000000000..7fcb50b3b
+--- /dev/null
++++ b/mm/pnm/.clang-format
+@@ -0,0 +1 @@
++../../drivers/pnm/.clang-format
+\ No newline at end of file
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index 8ea055c9f..e8f5fc0f9 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -3,10 +3,7 @@
+ 
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+-#include <linux/delay.h>
+-#include <linux/io.h>
+ #include <asm/msr.h>
+-#include <linux/processor.h>
+ #include <asm/timer.h>
+ #include <crypto/acompress.h>
+ #include <linux/atomic.h>
+@@ -15,6 +12,7 @@
+ #include <linux/delay.h>
+ #include <linux/frontswap.h>
+ #include <linux/highmem.h>
++#include <linux/io.h>
+ #include <linux/list.h>
+ #include <linux/lzo.h>
+ #include <linux/mempool.h>
+@@ -26,6 +24,7 @@
+ #include <linux/pagemap.h>
+ #include <linux/pnm/cxl_zswap.h>
+ #include <linux/preempt.h>
++#include <linux/processor.h>
+ #include <linux/rbtree.h>
+ #include <linux/scatterlist.h>
+ #include <linux/slab.h>
+diff --git a/scripts/pnm/.clang-format b/scripts/pnm/.clang-format
+new file mode 120000
+index 000000000..7fcb50b3b
+--- /dev/null
++++ b/scripts/pnm/.clang-format
+@@ -0,0 +1 @@
++../../drivers/pnm/.clang-format
+\ No newline at end of file
+diff --git a/scripts/pnm/zswap/qemu/demo/mmadvice.c b/scripts/pnm/zswap/qemu/demo/mmadvice.c
+index 5c741e92d..88a71daf7 100644
+--- a/scripts/pnm/zswap/qemu/demo/mmadvice.c
++++ b/scripts/pnm/zswap/qemu/demo/mmadvice.c
+@@ -1,9 +1,12 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include <linux/mman.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <unistd.h>
+ #include <sys/mman.h>
+-#include <linux/mman.h>
++#include <unistd.h>
+ 
+ #ifndef MADV_PAGEOUT
+ #define MADV_PAGEOUT 21 /* force pages out immediately */
+-- 
+2.34.1
+

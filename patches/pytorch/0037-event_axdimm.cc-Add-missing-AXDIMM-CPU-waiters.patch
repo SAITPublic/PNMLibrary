@@ -1,0 +1,40 @@
+From 37804db75a7ad3d2b9b734274e3e3f47f1612ab9 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Tue, 15 Feb 2022 14:54:18 +0900
+Subject: [PATCH 037/128] [event_axdimm.cc] Add missing AXDIMM <-> CPU waiters
+
+Add missed registers:
+
+REGISTER_EVENT_WAIT_FUNCTION(AXDIMM, CPU, EventWaitAXDIMMCPU);
+REGISTER_EVENT_WAIT_FUNCTION(CPU, AXDIMM, EventWaitCPUAXDIMM)
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/core/event_axdimm.cc | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/core/event_axdimm.cc b/caffe2/core/event_axdimm.cc
+index c6aa9b1e..8724f811 100644
+--- a/caffe2/core/event_axdimm.cc
++++ b/caffe2/core/event_axdimm.cc
+@@ -79,7 +79,7 @@ void EventWaitCPUAXDIMM(const Event* event, void* context) {
+ }
+ 
+ // Waiter is AXDIMM, event is CPU
+-void EventWaitCUDACPU(const Event* event, void* context) {
++void EventWaitAXDIMMCPU(const Event* event, void* context) {
+   event->Finish(); // calls EventFinishCPU
+ }
+ 
+@@ -152,6 +152,8 @@ void EventResetAXDIMM(Event* event) {
+ REGISTER_EVENT_CREATE_FUNCTION(AXDIMM, EventCreateAXDIMM);
+ REGISTER_EVENT_RECORD_FUNCTION(AXDIMM, EventRecordAXDIMM);
+ REGISTER_EVENT_WAIT_FUNCTION(AXDIMM, AXDIMM, EventWaitAXDIMMAXDIMM);
++REGISTER_EVENT_WAIT_FUNCTION(AXDIMM, CPU, EventWaitAXDIMMCPU);
++REGISTER_EVENT_WAIT_FUNCTION(CPU, AXDIMM, EventWaitCPUAXDIMM);
+ REGISTER_EVENT_FINISH_FUNCTION(AXDIMM, EventFinishAXDIMM);
+ 
+ REGISTER_EVENT_QUERY_FUNCTION(AXDIMM, EventQueryAXDIMM);
+-- 
+2.34.1
+

@@ -1,0 +1,1442 @@
+From f9b1d685886c247d3542d9648ebc3968f20afb57 Mon Sep 17 00:00:00 2001
+From: "Li, Xun" <xun.li@intel.com>
+Date: Thu, 20 Oct 2022 05:16:01 +0000
+Subject: [PATCH 01/27] [LibOS,PAL,Docs] Add shared untrusted memory support
+
+Add manifest syntax item `sys.insecure__shared_memory = "[none|passthrough]"`.
+When "passthrough" is specified, Gramine mounts `/dev/shm/` on host to
+`/dev/shm/`, which is folder contains shared memory file. Shared memory is
+created in untrusted memory, and accessible by its child, another Gramine or
+native process. Files under `/dev/shm/` support read-write pass-through mmap.
+
+Signed-off-by: Li, Xun <xun.li@intel.com>
+---
+ Documentation/manifest-syntax.rst       |  37 ++++
+ libos/include/libos_fs.h                |   2 +
+ libos/include/libos_handle.h            |   1 +
+ libos/src/bookkeep/libos_vma.c          |   6 +-
+ libos/src/fs/chroot/fs.c                |  18 +-
+ libos/src/fs/libos_fs.c                 |  32 +++
+ libos/src/fs/libos_fs_util.c            |  12 ++
+ libos/src/fs/proc/thread.c              |   1 +
+ libos/src/fs/shm/fs.c                   | 250 ++++++++++++++++++++++++
+ libos/src/meson.build                   |   1 +
+ libos/src/sys/libos_mmap.c              |  32 ++-
+ libos/test/regression/manifest.template |   3 +
+ libos/test/regression/meson.build       |   3 +
+ libos/test/regression/shm.c             |  65 ++++++
+ libos/test/regression/test_libos.py     |   3 +
+ libos/test/regression/tests.toml        |   1 +
+ libos/test/regression/tests_musl.toml   |   1 +
+ pal/include/pal/pal.h                   |   2 +
+ pal/src/host/linux-sgx/enclave_ocalls.c |   5 +-
+ pal/src/host/linux-sgx/pal_devices.c    | 121 ++++++++++--
+ pal/src/host/linux-sgx/pal_host.h       |   1 +
+ pal/src/host/linux-sgx/pal_linux.h      |   4 +
+ pal/src/host/linux-sgx/pal_linux_defs.h |   7 +
+ pal/src/host/linux-sgx/pal_main.c       |  44 ++++-
+ pal/src/host/linux-sgx/pal_streams.c    |  17 +-
+ pal/src/host/linux/pal_devices.c        | 117 +++++++++--
+ pal/src/host/linux/pal_host.h           |   1 +
+ pal/src/host/linux/pal_memory.c         |   3 +
+ pal/src/host/linux/pal_streams.c        |  20 +-
+ 29 files changed, 744 insertions(+), 66 deletions(-)
+ create mode 100644 libos/src/fs/shm/fs.c
+ create mode 100644 libos/test/regression/shm.c
+
+diff --git a/Documentation/manifest-syntax.rst b/Documentation/manifest-syntax.rst
+index 64a89570..3fbd6a9e 100644
+--- a/Documentation/manifest-syntax.rst
++++ b/Documentation/manifest-syntax.rst
+@@ -445,6 +445,43 @@ Start (current working) directory
+ This syntax specifies the start (current working) directory. If not specified,
+ then Gramine sets the root directory as the start directory (see ``fs.root``).
+ 
++Untrusted shared memory
++^^^^^^^^^^^^^^^^^^^^^^^
++
++::
++
++    sys.insecure__shared_memory = "[none|passthrough]"
++    (Default: "none")
++
++By default, Gramine disables shared memory (i.e., memory shared with the host).
++In Gramine, shared memory applies to pseudo-files located under `/dev/shm/` and
++mapped into application address space with the `MAP_SHARED` flag.
++
++This disablement by default is particularly important for the SGX environment, where
++all data put in shared memory (i.e. memory residing outside of the SGX enclave)
++must be preliminarily encrypted or at least integrity-protected. Unmodified
++applications almost never have such "protect data in shared memory" logic, so
++enabling shared memory in Gramine by default would be insecure.
++
++Specifying `"passthrough"` explicitly allows shared memory. To be more precise,
++the `/dev/shm/` host directory (used for sharing data between processes and devices)
++is mounted inside Gramine, so that the application may create files -- called "shared
++memory objects" in POSIX -- under this directory (for example, this is how `shm_open()`
++Glibc function works).
++
++.. note ::
++   Shared memory is insecure by itself in SGX environments:
++
++       - Typically applications do not encrypt the data put in shared memory,
++         which may lead to leaks of enclave data.
++       - Untrusted host can modify data in shared memory as it wishes, so
++         applications could see or operate on maliciously modified data.
++
++   It is the responsibility of the app developer to correctly use shared memory, with
++   security implications in mind. In most cases, data in shared memory should be
++   preliminarily encrypted or integrity-protected with a key pre-shared between all
++   participating processes (and possibly devices that use this shared memory).
++
+ SGX syntax
+ ----------
+ 
+diff --git a/libos/include/libos_fs.h b/libos/include/libos_fs.h
+index 47ca25e3..7b5253e4 100644
+--- a/libos/include/libos_fs.h
++++ b/libos/include/libos_fs.h
+@@ -916,6 +916,7 @@ extern struct libos_fs epoll_builtin_fs;
+ extern struct libos_fs eventfd_builtin_fs;
+ extern struct libos_fs synthetic_builtin_fs;
+ extern struct libos_fs path_builtin_fs;
++extern struct libos_fs shm_builtin_fs;
+ 
+ struct libos_fs* find_fs(const char* name);
+ 
+@@ -945,6 +946,7 @@ int generic_emulated_mmap(struct libos_handle* hdl, void* addr, size_t size, int
+                           uint64_t offset);
+ int generic_emulated_msync(struct libos_handle* hdl, void* addr, size_t size, int prot, int flags,
+                            uint64_t offset);
++int generic_truncate(struct libos_handle* hdl, file_off_t size);
+ 
+ int synthetic_setup_dentry(struct libos_dentry* dent, mode_t type, mode_t perm);
+ 
+diff --git a/libos/include/libos_handle.h b/libos/include/libos_handle.h
+index 056e31aa..f984f5db 100644
+--- a/libos/include/libos_handle.h
++++ b/libos/include/libos_handle.h
+@@ -37,6 +37,7 @@ enum libos_handle_type {
+     TYPE_TMPFS,      /* string-based files (with data inside dentry), used by `tmpfs` filesystem */
+     TYPE_SYNTHETIC,  /* synthetic files, used by `synthetic` filesystem */
+     TYPE_PATH,       /* path to a file (the file is not actually opened) */
++    TYPE_SHM,        /* shared files, used by `shm` filesystem */
+ 
+     /* Pipes and sockets: */
+     TYPE_PIPE,       /* pipes, used by `pipe` filesystem */
+diff --git a/libos/src/bookkeep/libos_vma.c b/libos/src/bookkeep/libos_vma.c
+index 1d488ce6..5af88d08 100644
+--- a/libos/src/bookkeep/libos_vma.c
++++ b/libos/src/bookkeep/libos_vma.c
+@@ -999,8 +999,10 @@ int bkeep_mmap_any_in_range(void* _bottom_addr, void* _top_addr, size_t length,
+                             struct libos_handle* file, uint64_t offset, const char* comment,
+                             void** ret_val_ptr) {
+     assert(_bottom_addr < _top_addr);
+-    assert(g_pal_public_state->memory_address_start <= _bottom_addr
+-           && _top_addr <= g_pal_public_state->memory_address_end);
++    assert((g_pal_public_state->memory_address_start <= _bottom_addr
++               && _top_addr <= g_pal_public_state->memory_address_end)
++           || (g_pal_public_state->shared_address_start <= _bottom_addr
++               && _top_addr <= g_pal_public_state->shared_address_end));
+ 
+     if (!length || !IS_ALLOC_ALIGNED(length)) {
+         return -EINVAL;
+diff --git a/libos/src/fs/chroot/fs.c b/libos/src/fs/chroot/fs.c
+index 04a2caa8..b683b5a4 100644
+--- a/libos/src/fs/chroot/fs.c
++++ b/libos/src/fs/chroot/fs.c
+@@ -338,22 +338,6 @@ static int chroot_mmap(struct libos_handle* hdl, void* addr, size_t size, int pr
+     return 0;
+ }
+ 
+-static int chroot_truncate(struct libos_handle* hdl, file_off_t size) {
+-    assert(hdl->type == TYPE_CHROOT);
+-
+-    int ret;
+-
+-    lock(&hdl->inode->lock);
+-    ret = PalStreamSetLength(hdl->pal_handle, size);
+-    if (ret == 0) {
+-        hdl->inode->size = size;
+-    } else {
+-        ret = pal_to_unix_errno(ret);
+-    }
+-    unlock(&hdl->inode->lock);
+-    return ret;
+-}
+-
+ int chroot_readdir(struct libos_dentry* dent, readdir_callback_t callback, void* arg) {
+     int ret;
+     PAL_HANDLE palhdl;
+@@ -503,7 +487,7 @@ struct libos_fs_ops chroot_fs_ops = {
+      * breaks for such device-specific cases */
+     .seek       = &generic_inode_seek,
+     .hstat      = &generic_inode_hstat,
+-    .truncate   = &chroot_truncate,
++    .truncate   = &generic_truncate,
+     .poll       = &generic_inode_poll,
+ };
+ 
+diff --git a/libos/src/fs/libos_fs.c b/libos/src/fs/libos_fs.c
+index 0680073b..c00d5689 100644
+--- a/libos/src/fs/libos_fs.c
++++ b/libos/src/fs/libos_fs.c
+@@ -32,6 +32,7 @@ static struct libos_fs* g_builtin_fs[] = {
+     &pseudo_builtin_fs,
+     &synthetic_builtin_fs,
+     &path_builtin_fs,
++    &shm_builtin_fs,
+ };
+ 
+ static struct libos_lock g_mount_mgr_lock;
+@@ -159,6 +160,33 @@ out:
+     return ret;
+ }
+ 
++static int mount_dev_shm(void) {
++    char* shared_memory_str = NULL;
++    int ret = toml_string_in(g_manifest_root, "sys.insecure__shared_memory", &shared_memory_str);
++    if (ret < 0) {
++        log_error("Cannot parse 'sys.insecure__shared_memory'");
++        return ret;
++    }
++
++    if (shared_memory_str) {
++        if (!strcmp(shared_memory_str, "none")) {
++            /* do nothing */
++            ret = 0;
++        } else if (!strcmp(shared_memory_str, "passthrough")) {
++            ret = mount_fs(&(struct libos_mount_params){
++                .type = "shm",
++                .path = "/dev/shm",
++                .uri = URI_PREFIX_DEV "/dev/shm",
++            });
++        } else {
++            log_error("Unknown 'sys.insecure__shared_memory'");
++            ret = -EINVAL;
++        }
++        free(shared_memory_str);
++    }
++    return ret;
++}
++
+ static int mount_sys(void) {
+     int ret;
+ 
+@@ -194,6 +222,10 @@ static int mount_sys(void) {
+     if (ret < 0)
+         return ret;
+ 
++    ret = mount_dev_shm();
++    if (ret < 0)
++        return ret;
++
+     return 0;
+ }
+ 
+diff --git a/libos/src/fs/libos_fs_util.c b/libos/src/fs/libos_fs_util.c
+index 82b3a5ec..379e424b 100644
+--- a/libos/src/fs/libos_fs_util.c
++++ b/libos/src/fs/libos_fs_util.c
+@@ -234,3 +234,15 @@ out:
+     }
+     return ret;
+ }
++
++int generic_truncate(struct libos_handle* hdl, file_off_t size) {
++    lock(&hdl->inode->lock);
++    int ret = PalStreamSetLength(hdl->pal_handle, size);
++    if (ret == 0) {
++        hdl->inode->size = size;
++    } else {
++        ret = pal_to_unix_errno(ret);
++    }
++    unlock(&hdl->inode->lock);
++    return ret;
++}
+diff --git a/libos/src/fs/proc/thread.c b/libos/src/fs/proc/thread.c
+index e4b3968a..a76d5ad0 100644
+--- a/libos/src/fs/proc/thread.c
++++ b/libos/src/fs/proc/thread.c
+@@ -285,6 +285,7 @@ static char* describe_handle(struct libos_handle* hdl) {
+         case TYPE_SOCK:    str = "sock:[?]";    break;
+         case TYPE_EPOLL:   str = "epoll:[?]";   break;
+         case TYPE_EVENTFD: str = "eventfd:[?]"; break;
++        case TYPE_SHM:     str = "shm:[?]";     break;
+         default:           str = "unknown:[?]"; break;
+     }
+     return strdup(str);
+diff --git a/libos/src/fs/shm/fs.c b/libos/src/fs/shm/fs.c
+new file mode 100644
+index 00000000..8b90652d
+--- /dev/null
++++ b/libos/src/fs/shm/fs.c
+@@ -0,0 +1,250 @@
++/* SPDX-License-Identifier: LGPL-3.0-or-later */
++/* Copyright (C) 2022 Intel Corporation
++ *                    Li Xun <xun.li@intel.com>
++ *                    Paweł Marczewski <pawel@invisiblethingslab.com>
++ */
++
++/*
++ * This file contains code for implementation of 'shm' filesystem.
++ * If enabled in manifest, files of this type are shared with the host OS, when mapped.
++ */
++
++#include <asm/errno.h>
++
++#include "libos_flags_conv.h"
++#include "libos_fs.h"
++#include "libos_handle.h"
++#include "libos_lock.h"
++#include "perm.h"
++#include "stat.h"
++
++#define HOST_PERM(perm) ((perm) | PERM_r________)
++
++static int shm_mount(struct libos_mount_params* params, void** mount_data) {
++    __UNUSED(params);
++    __UNUSED(mount_data);
++    return 0;
++}
++
++static ssize_t shm_read(struct libos_handle* hdl, void* buf, size_t count, file_off_t* pos) {
++    assert(hdl->type == TYPE_SHM);
++
++    size_t actual_count = count;
++    int ret = PalStreamRead(hdl->pal_handle, *pos, &actual_count, buf);
++    if (ret < 0) {
++        return pal_to_unix_errno(ret);
++    }
++    assert(actual_count <= count);
++    *pos += actual_count;
++    return actual_count;
++}
++
++static ssize_t shm_write(struct libos_handle* hdl, const void* buf, size_t count,
++                         file_off_t* pos) {
++    assert(hdl->type == TYPE_SHM);
++
++    size_t actual_count = count;
++    int ret = PalStreamWrite(hdl->pal_handle, *pos, &actual_count, (void*)buf);
++    if (ret < 0) {
++        return pal_to_unix_errno(ret);
++    }
++    assert(actual_count <= count);
++
++    *pos += actual_count;
++    /* Update file size if we just wrote past the end of file */
++    lock(&hdl->inode->lock);
++    if (hdl->inode->size < *pos)
++        hdl->inode->size = *pos;
++    unlock(&hdl->inode->lock);
++
++    return actual_count;
++}
++
++static int shm_mmap(struct libos_handle* hdl, void* addr, size_t size, int prot, int flags,
++                    uint64_t offset) {
++    assert(hdl->type == TYPE_SHM);
++    assert(addr);
++
++    pal_prot_flags_t pal_prot = LINUX_PROT_TO_PAL(prot, flags);
++
++    if (flags & MAP_ANONYMOUS)
++        return -EINVAL;
++
++    int ret = PalStreamMap(hdl->pal_handle, addr, pal_prot, offset, size);
++    if (ret < 0)
++        return pal_to_unix_errno(ret);
++
++    return 0;
++}
++
++/* Open a PAL handle, and associate it with a LibOS handle. */
++static int shm_do_open(struct libos_handle* hdl, struct libos_dentry* dent, mode_t type,
++                       int flags, mode_t perm) {
++    assert(locked(&g_dcache_lock));
++
++    char* uri;
++    int ret = chroot_dentry_uri(dent, type, &uri);
++    if (ret < 0)
++        return ret;
++
++    PAL_HANDLE palhdl;
++    enum pal_access access = LINUX_OPEN_FLAGS_TO_PAL_ACCESS(flags);
++    enum pal_create_mode create = LINUX_OPEN_FLAGS_TO_PAL_CREATE(flags);
++    pal_stream_options_t options = LINUX_OPEN_FLAGS_TO_PAL_OPTIONS(flags) | PAL_OPTION_PASSTHROUGH;
++    mode_t host_perm = HOST_PERM(perm);
++    ret = PalStreamOpen(uri, access, host_perm, create, options, &palhdl);
++    if (ret < 0) {
++        ret = pal_to_unix_errno(ret);
++        goto out;
++    }
++
++    hdl->uri = uri;
++    uri = NULL;
++
++    hdl->type = TYPE_SHM;
++    hdl->pos = 0;
++    hdl->pal_handle = palhdl;
++    ret = 0;
++
++out:
++    free(uri);
++    return ret;
++}
++
++
++static int shm_setup_dentry(struct libos_dentry* dent, mode_t type, mode_t perm,
++                            file_off_t size) {
++    assert(locked(&g_dcache_lock));
++    assert(!dent->inode);
++
++    struct libos_inode* inode = get_new_inode(dent->mount, type, perm);
++    if (!inode)
++        return -ENOMEM;
++    inode->size = size;
++    dent->inode = inode;
++    return 0;
++}
++
++static int shm_lookup(struct libos_dentry* dent) {
++    assert(locked(&g_dcache_lock));
++
++    char* uri = NULL;
++    /*
++     * We don't know the file type yet, so we can't construct a PAL URI with the right prefix.
++     * However, "file:" prefix is good enough here: `PalStreamAttributesQuery` will access the file
++     * and report the right file type.
++     */
++    int ret = chroot_dentry_uri(dent, S_IFREG, &uri);
++    if (ret < 0)
++        goto out;
++
++    PAL_STREAM_ATTR pal_attr;
++    ret = PalStreamAttributesQuery(uri, &pal_attr);
++    if (ret < 0) {
++        ret = pal_to_unix_errno(ret);
++        goto out;
++    }
++
++    mode_t type;
++    switch (pal_attr.handle_type) {
++        case PAL_TYPE_FILE:
++            /* Regular files in shm file system are device files. */
++            type = S_IFCHR;
++            break;
++        case PAL_TYPE_DIR:
++            /* Subdirectories (e.g. /dev/shm/subdir/) are not allowed in shm file system. */
++            if (dent != dent->mount->root) {
++                ret = -EACCES;
++                goto out;
++            }
++            type = S_IFDIR;
++            break;
++        case PAL_TYPE_DEV:
++            type = S_IFCHR;
++            break;
++        default:
++            log_error("unexpected handle type returned by PAL: %d", pal_attr.handle_type);
++            BUG();
++    }
++
++    file_off_t size = (type == S_IFCHR ? pal_attr.pending_size : 0);
++
++    ret = shm_setup_dentry(dent, type, pal_attr.share_flags, size);
++out:
++    free(uri);
++    return ret;
++}
++
++static int shm_open(struct libos_handle* hdl, struct libos_dentry* dent, int flags) {
++    assert(locked(&g_dcache_lock));
++    assert(dent->inode);
++
++    return shm_do_open(hdl, dent, dent->inode->type, flags, /*perm=*/0);
++}
++
++static int shm_creat(struct libos_handle* hdl, struct libos_dentry* dent, int flags, mode_t perm) {
++    assert(locked(&g_dcache_lock));
++    assert(!dent->inode);
++
++    mode_t type = S_IFCHR;
++    int ret = shm_do_open(hdl, dent, type, flags | O_CREAT | O_EXCL, perm);
++    if (ret < 0)
++        return ret;
++
++    return shm_setup_dentry(dent, type, perm, /*size=*/0);
++}
++
++/* NOTE: this function is different from generic `chroot_unlink` only to add
++ * PAL_OPTION_PASSTHROUGH. */
++static int shm_unlink(struct libos_dentry* dent) {
++    assert(locked(&g_dcache_lock));
++    assert(dent->inode);
++
++    char* uri;
++    int ret = chroot_dentry_uri(dent, dent->inode->type, &uri);
++    if (ret < 0)
++        return ret;
++
++    PAL_HANDLE palhdl;
++    ret = PalStreamOpen(uri, PAL_ACCESS_RDONLY, /*share_flags=*/0, PAL_CREATE_NEVER,
++                        PAL_OPTION_PASSTHROUGH, &palhdl);
++    if (ret < 0) {
++        ret = pal_to_unix_errno(ret);
++        goto out;
++    }
++
++    ret = PalStreamDelete(palhdl, PAL_DELETE_ALL);
++    PalObjectClose(palhdl);
++    if (ret < 0) {
++        ret = pal_to_unix_errno(ret);
++        goto out;
++    }
++    ret = 0;
++out:
++    free(uri);
++    return ret;
++}
++struct libos_fs_ops shm_fs_ops = {
++    .mount      = shm_mount,
++    .read       = shm_read,
++    .write      = shm_write,
++    .mmap       = shm_mmap,
++    .seek       = generic_inode_seek,
++    .hstat      = generic_inode_hstat,
++    .truncate   = generic_truncate,
++    .poll       = generic_inode_poll,
++};
++
++struct libos_d_ops shm_d_ops = {
++    .open    = shm_open,
++    .lookup  = shm_lookup,
++    .creat   = shm_creat,
++    .stat    = generic_inode_stat,
++    .unlink  = shm_unlink,
++};
++
++struct libos_fs shm_builtin_fs = {
++    .name   = "shm",
++    .fs_ops = &shm_fs_ops,
++    .d_ops  = &shm_d_ops,
++};
+diff --git a/libos/src/meson.build b/libos/src/meson.build
+index 4bcbb66c..b9946bc2 100644
+--- a/libos/src/meson.build
++++ b/libos/src/meson.build
+@@ -37,6 +37,7 @@ libos_sources = files(
+     'fs/proc/info.c',
+     'fs/proc/ipc_thread.c',
+     'fs/proc/thread.c',
++    'fs/shm/fs.c',
+     'fs/socket/fs.c',
+     'fs/sys/cache_info.c',
+     'fs/sys/cpu_info.c',
+diff --git a/libos/src/sys/libos_mmap.c b/libos/src/sys/libos_mmap.c
+index 59957a3f..b81047bc 100644
+--- a/libos/src/sys/libos_mmap.c
++++ b/libos/src/sys/libos_mmap.c
+@@ -152,10 +152,21 @@ void* libos_syscall_mmap(void* addr, size_t length, int prot, int flags, int fd,
+         flags &= ~MAP_32BIT;
+ #endif
+ 
++    void* memory_range_start = NULL;
++    void* memory_range_end   = NULL;
++
++    /* Shared mapping of files of "shm" type use a different memory range.
++     * See "libos/src/fs/shm/fs.c" for more details. */
++    if (flags & MAP_SHARED && hdl && !strcmp(hdl->fs->name, "shm")) {
++        memory_range_start = g_pal_public_state->shared_address_start;
++        memory_range_end = g_pal_public_state->shared_address_end;
++    } else {
++        memory_range_start = g_pal_public_state->memory_address_start;
++        memory_range_end = g_pal_public_state->memory_address_end;
++    }
+     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
+         /* We know that `addr + length` does not overflow (`access_ok` above). */
+-        if (addr < g_pal_public_state->memory_address_start
+-                || (uintptr_t)g_pal_public_state->memory_address_end < (uintptr_t)addr + length) {
++        if (addr < memory_range_start || (uintptr_t)memory_range_end < (uintptr_t)addr + length) {
+             ret = -EINVAL;
+             goto out_handle;
+         }
+@@ -208,18 +219,23 @@ void* libos_syscall_mmap(void* addr, size_t length, int prot, int flags, int fd,
+         }
+     } else {
+         /* We know that `addr + length` does not overflow (`access_ok` above). */
+-        if (addr && (uintptr_t)g_pal_public_state->memory_address_start <= (uintptr_t)addr
+-                && (uintptr_t)addr + length <= (uintptr_t)g_pal_public_state->memory_address_end) {
+-            ret = bkeep_mmap_any_in_range(g_pal_public_state->memory_address_start,
+-                                          (char*)addr + length, length, prot, flags, hdl, offset,
+-                                          NULL, &addr);
++        if (addr && (uintptr_t)memory_range_start <= (uintptr_t)addr
++                && (uintptr_t)addr + length <= (uintptr_t)memory_range_end) {
++            ret = bkeep_mmap_any_in_range(memory_range_start, (char*)addr + length, length, prot,
++                                          flags, hdl, offset, NULL, &addr);
+         } else {
+             /* Hacky way to mark we had no hit and need to search below. */
+             ret = -1;
+         }
+         if (ret < 0) {
+             /* We either had no hinted address or could not allocate memory at it. */
+-            ret = bkeep_mmap_any_aslr(length, prot, flags, hdl, offset, NULL, &addr);
++            if (memory_range_start == g_pal_public_state->memory_address_start) {
++                ret = bkeep_mmap_any_aslr(length, prot, flags, hdl, offset, NULL, &addr);
++            } else {
++                /* Shared memory range does not have ASLR. */
++                ret = bkeep_mmap_any_in_range(memory_range_start, memory_range_end, length, prot,
++                                              flags, hdl, offset, NULL, &addr);
++            }
+         }
+         if (ret < 0) {
+             ret = -ENOMEM;
+diff --git a/libos/test/regression/manifest.template b/libos/test/regression/manifest.template
+index 8b944299..99a0cead 100644
+--- a/libos/test/regression/manifest.template
++++ b/libos/test/regression/manifest.template
+@@ -7,6 +7,9 @@ loader.insecure__use_cmdline_argv = true
+ # for eventfd test
+ sys.insecure__allow_eventfd = true
+ 
++# for untrusted shared memory test (`shm.c`)
++sys.insecure__shared_memory = "passthrough"
++
+ fs.mounts = [
+   { path = "/lib", uri = "file:{{ gramine.runtimedir(libc) }}" },
+   { path = "/{{ entrypoint }}", uri = "file:{{ binary_dir }}/{{ entrypoint }}" },
+diff --git a/libos/test/regression/meson.build b/libos/test/regression/meson.build
+index a59c8ffb..2bd50c5d 100644
+--- a/libos/test/regression/meson.build
++++ b/libos/test/regression/meson.build
+@@ -115,6 +115,9 @@ tests = {
+     'shared_object': {
+         'pie': true,
+     },
++    'shm': {
++        'link_args': '-lrt',
++    },
+     'sigaction_per_process': {},
+     'sigaltstack': {},
+     'sighandler_reset': {},
+diff --git a/libos/test/regression/shm.c b/libos/test/regression/shm.c
+new file mode 100644
+index 00000000..7d557e03
+--- /dev/null
++++ b/libos/test/regression/shm.c
+@@ -0,0 +1,65 @@
++#define _XOPEN_SOURCE 700
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <sys/types.h>
++#include <sys/wait.h>
++#include <unistd.h>
++
++#include "common.h"
++
++#define SHMNAME "/shm_test"
++#define CREATE_MODE 0666
++#define FILE_SIZE 4096 * 4
++
++static const char g_shared_text[] = "test_text";
++
++static void write_shm(void) {
++    int fd = CHECK(shm_open(SHMNAME, O_RDWR | O_CREAT | O_EXCL, CREATE_MODE));
++    CHECK(ftruncate(fd, FILE_SIZE));
++
++    void* addr = mmap(NULL, FILE_SIZE, PROT_WRITE, MAP_SHARED, fd, 0);
++    if (addr == MAP_FAILED) {
++        err(1, "mmap failed");
++    }
++    memcpy(addr, g_shared_text, sizeof(g_shared_text));
++
++    CHECK(munmap(addr, FILE_SIZE));
++}
++
++static void read_shm(void) {
++    int fd = CHECK(shm_open(SHMNAME, O_RDONLY, 0));
++
++    void* addr = mmap(NULL, FILE_SIZE, PROT_READ, MAP_SHARED, fd, 0);
++    if (addr == MAP_FAILED) {
++        err(1, "mmap failed");
++    }
++
++    if (memcmp(addr, g_shared_text, sizeof(g_shared_text))) {
++        errx(1, "memcmp failed");
++    }
++    CHECK(munmap(addr, FILE_SIZE));
++    CHECK(shm_unlink(SHMNAME));
++}
++
++int main(void) {
++    pid_t p = CHECK(fork());
++    if (p == 0) {
++        write_shm();
++        return 0;
++    }
++
++    /* parent waits for child termination */
++    int status = 0;
++    CHECK(wait(&status));
++    if (!WIFEXITED(status) || WEXITSTATUS(status)) {
++        errx(1, "child wait status: %#x", status);
++    }
++    read_shm();
++
++    puts("TEST OK");
++    return 0;
++}
+diff --git a/libos/test/regression/test_libos.py b/libos/test/regression/test_libos.py
+index 28ea47ba..a1ae2b81 100644
+--- a/libos/test/regression/test_libos.py
++++ b/libos/test/regression/test_libos.py
+@@ -1216,6 +1216,9 @@ class TC_40_FileSystem(RegressionTestCase):
+         stdout, _ = self.run_binary(['synthetic'])
+         self.assertIn("TEST OK", stdout)
+ 
++    def test_070_shm(self):
++        stdout, _ = self.run_binary(['shm'])
++        self.assertIn("TEST OK", stdout)
+ 
+ class TC_50_GDB(RegressionTestCase):
+     def setUp(self):
+diff --git a/libos/test/regression/tests.toml b/libos/test/regression/tests.toml
+index f69dac79..9aa90a7b 100644
+--- a/libos/test/regression/tests.toml
++++ b/libos/test/regression/tests.toml
+@@ -100,6 +100,7 @@ manifests = [
+   "shared_object",
+   "shadow_pseudo_fs",
+   "shebang_test_script",
++  "shm",
+   "sigaction_per_process",
+   "sigaltstack",
+   "sighandler_reset",
+diff --git a/libos/test/regression/tests_musl.toml b/libos/test/regression/tests_musl.toml
+index 44a1d36f..ae5b6951 100644
+--- a/libos/test/regression/tests_musl.toml
++++ b/libos/test/regression/tests_musl.toml
+@@ -101,6 +101,7 @@ manifests = [
+   "send_handle",
+   "shadow_pseudo_fs",
+   "shared_object",
++  "shm",
+   "sigaction_per_process",
+   "sigaltstack",
+   "sighandler_reset",
+diff --git a/pal/include/pal/pal.h b/pal/include/pal/pal.h
+index 8a7ec766..fe7ece6c 100644
+--- a/pal/include/pal/pal.h
++++ b/pal/include/pal/pal.h
+@@ -150,6 +150,8 @@ struct pal_public_state {
+     void* memory_address_end;               /*!< usable memory end address */
+     uintptr_t early_libos_mem_range_start;  /*!< start of memory usable before checkpoint restore */
+     uintptr_t early_libos_mem_range_end;    /*!< end of memory usable before checkpoint restore */
++    void* shared_address_start;             /*!< usable shared memory start address */
++    void* shared_address_end;               /*!< usable shared memory end address */
+ 
+     struct pal_initial_mem_range* initial_mem_ranges; /*!< array of initial memory ranges, see
+                                                            `pal_memory.c` for more details */
+diff --git a/pal/src/host/linux-sgx/enclave_ocalls.c b/pal/src/host/linux-sgx/enclave_ocalls.c
+index c21df64e..6e331603 100644
+--- a/pal/src/host/linux-sgx/enclave_ocalls.c
++++ b/pal/src/host/linux-sgx/enclave_ocalls.c
+@@ -194,7 +194,7 @@ int ocall_mmap_untrusted(void** addrptr, size_t size, int prot, int flags, int f
+ 
+     void* requested_addr = *addrptr;
+ 
+-    if (flags & MAP_FIXED) {
++    if (flags & MAP_FIXED || flags & MAP_FIXED_NOREPLACE) {
+         if (!sgx_is_valid_untrusted_ptr(requested_addr, size, PAGE_SIZE)) {
+             sgx_reset_ustack(old_ustack);
+             return -EINVAL;
+@@ -216,7 +216,8 @@ int ocall_mmap_untrusted(void** addrptr, size_t size, int prot, int flags, int f
+ 
+     if (retval < 0) {
+         if (retval != -EACCES && retval != -EAGAIN && retval != -EBADF && retval != -EINVAL &&
+-                retval != -ENFILE && retval != -ENODEV && retval != -ENOMEM && retval != -EPERM) {
++                retval != -ENFILE && retval != -ENODEV && retval != -ENOMEM && retval != -EEXIST &&
++                retval != -EPERM) {
+             retval = -EPERM;
+         }
+         sgx_reset_ustack(old_ustack);
+diff --git a/pal/src/host/linux-sgx/pal_devices.c b/pal/src/host/linux-sgx/pal_devices.c
+index 0339fe7c..c4555da9 100644
+--- a/pal/src/host/linux-sgx/pal_devices.c
++++ b/pal/src/host/linux-sgx/pal_devices.c
+@@ -17,6 +17,7 @@
+ #include "pal_internal.h"
+ #include "pal_linux.h"
+ #include "pal_linux_error.h"
++#include "path_utils.h"
+ #include "perm.h"
+ #include "toml.h"
+ #include "toml_utils.h"
+@@ -25,6 +26,7 @@ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
+                     pal_share_flags_t share, enum pal_create_mode create,
+                     pal_stream_options_t options) {
+     int ret;
++    char* normpath = NULL;
+     assert(create != PAL_CREATE_IGNORED);
+ 
+     if (strcmp(type, URI_TYPE_DEV))
+@@ -56,6 +58,22 @@ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
+         }
+     } else {
+         /* other devices must be opened through the host */
++
++        /* normalize uri into normpath */
++        size_t normpath_size = strlen(uri) + 1;
++        normpath = malloc(normpath_size);
++        if (!normpath){
++            ret = -PAL_ERROR_NOMEM;
++            goto fail;
++        }
++
++        ret = get_norm_path(uri, normpath, &normpath_size);
++        if (ret < 0) {
++            log_warning("Could not normalize path (%s): %s", uri, pal_strerror(ret));
++            ret = -PAL_ERROR_DENIED;
++            goto fail;
++        }
++
+         hdl->dev.nonblocking = !!(options & PAL_OPTION_NONBLOCK);
+ 
+         ret = ocall_open(uri, PAL_ACCESS_TO_LINUX_OPEN(access)  |
+@@ -67,7 +85,9 @@ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
+             ret = unix_to_pal_error(ret);
+             goto fail;
+         }
+-        hdl->dev.fd = ret;
++
++        hdl->dev.realpath = normpath;
++        hdl->dev.fd       = ret;
+ 
+         if (access == PAL_ACCESS_RDONLY) {
+             hdl->flags |= PAL_HANDLE_FD_READABLE;
+@@ -83,11 +103,12 @@ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
+     return 0;
+ fail:
+     free(hdl);
++    free(normpath);
+     return ret;
+ }
+ 
+ static int64_t dev_read(PAL_HANDLE handle, uint64_t offset, uint64_t size, void* buffer) {
+-    if (offset || handle->hdr.type != PAL_TYPE_DEV)
++    if (handle->hdr.type != PAL_TYPE_DEV)
+         return -PAL_ERROR_INVAL;
+ 
+     if (!(handle->flags & PAL_HANDLE_FD_READABLE))
+@@ -96,12 +117,22 @@ static int64_t dev_read(PAL_HANDLE handle, uint64_t offset, uint64_t size, void*
+     if (handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_DENIED;
+ 
+-    ssize_t bytes = ocall_read(handle->dev.fd, buffer, size);
++    if (!handle->dev.realpath) {
++        /* tty doesn't have offsets */
++        if (offset)
++            return -PAL_ERROR_INVAL;
++
++        int64_t bytes = ocall_read(handle->dev.fd, buffer, size);
++        return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
++    }
++
++    /* host devices use offset */
++    int64_t bytes = ocall_pread(handle->dev.fd, buffer, size, offset);
+     return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
+ }
+ 
+ static int64_t dev_write(PAL_HANDLE handle, uint64_t offset, uint64_t size, const void* buffer) {
+-    if (offset || handle->hdr.type != PAL_TYPE_DEV)
++    if (handle->hdr.type != PAL_TYPE_DEV)
+         return -PAL_ERROR_INVAL;
+ 
+     if (!(handle->flags & PAL_HANDLE_FD_WRITABLE))
+@@ -110,7 +141,17 @@ static int64_t dev_write(PAL_HANDLE handle, uint64_t offset, uint64_t size, cons
+     if (handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_DENIED;
+ 
+-    ssize_t bytes = ocall_write(handle->dev.fd, buffer, size);
++    if (!handle->dev.realpath) {
++        /* tty doesn't have offsets */
++        if (offset)
++            return -PAL_ERROR_INVAL;
++
++        int64_t bytes = ocall_write(handle->dev.fd, buffer, size);
++        return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
++    }
++
++    /* host devices use offset */
++    int64_t bytes = ocall_pwrite(handle->dev.fd, buffer, size, offset);
+     return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
+ }
+ 
+@@ -122,6 +163,7 @@ static int dev_close(PAL_HANDLE handle) {
+     int ret = 0;
+     if (handle->dev.fd != PAL_IDX_POISON && handle->dev.fd != 0 && handle->dev.fd != 1) {
+         ret = ocall_close(handle->dev.fd);
++        free(handle->dev.realpath);
+     }
+     handle->dev.fd = PAL_IDX_POISON;
+     return ret < 0 ? unix_to_pal_error(ret) : 0;
+@@ -168,13 +210,13 @@ static int dev_attrquery(const char* type, const char* uri, PAL_STREAM_ATTR* att
+         ocall_close(fd);
+     }
+ 
+-    attr->handle_type  = PAL_TYPE_DEV;
+-    attr->nonblocking  = false;
++    attr->handle_type = PAL_TYPE_DEV;
++    attr->nonblocking = false;
+     return 0;
+ }
+ 
+ static int dev_attrquerybyhdl(PAL_HANDLE handle, PAL_STREAM_ATTR* attr) {
+-    if (handle->hdr.type != PAL_TYPE_DEV)
++    if (handle->hdr.type != PAL_TYPE_DEV || handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_INVAL;
+ 
+     if (handle->dev.fd == 0 || handle->dev.fd == 1) {
+@@ -192,30 +234,77 @@ static int dev_attrquerybyhdl(PAL_HANDLE handle, PAL_STREAM_ATTR* attr) {
+         attr->pending_size = stat_buf.st_size;
+     }
+ 
+-    attr->handle_type  = PAL_TYPE_DEV;
+-    attr->nonblocking  = handle->dev.nonblocking;
++    attr->handle_type = PAL_TYPE_DEV;
++    attr->nonblocking = handle->dev.nonblocking;
+     return 0;
+ }
+ 
+-/* this dummy function is implemented to support opening TTY devices with O_TRUNC flag */
+-static int64_t dev_setlength(PAL_HANDLE handle, uint64_t length) {
++static int dev_delete(PAL_HANDLE handle, enum pal_delete_mode delete_mode) {
+     if (handle->hdr.type != PAL_TYPE_DEV)
+         return -PAL_ERROR_INVAL;
+ 
+-    if (!(handle->dev.fd == 0 || handle->dev.fd == 1))
+-        return -PAL_ERROR_NOTSUPPORT;
+-
+-    if (length != 0)
++    if (delete_mode != PAL_DELETE_ALL)
+         return -PAL_ERROR_INVAL;
+ 
++    if (handle->dev.realpath) {
++        int ret = ocall_delete(handle->dev.realpath);
++        return ret < 0 ? unix_to_pal_error(ret) : ret;
++    }
+     return 0;
+ }
+ 
++static int dev_map(PAL_HANDLE handle, void* addr, pal_prot_flags_t prot, uint64_t offset,
++                   uint64_t size) {
++    if (handle->hdr.type != PAL_TYPE_DEV)
++        return -PAL_ERROR_INVAL;
++
++    assert(IS_ALLOC_ALIGNED(offset) && IS_ALLOC_ALIGNED(size));
++
++    uint64_t dummy;
++    if (__builtin_add_overflow(offset, size, &dummy)) {
++        return -PAL_ERROR_INVAL;
++    }
++
++    if (!handle->dev.realpath)
++        return -PAL_ERROR_INVAL;
++
++    /* can only map the file outside of enclave */
++    if (addr < g_pal_public_state.shared_address_start
++            || (uintptr_t)addr + size > (uintptr_t)g_pal_public_state.shared_address_end) {
++        log_warning("it is impossible to map a device into the enclave");
++        return -PAL_ERROR_DENIED;
++    }
++
++    void* mem = addr;
++    int ret = ocall_mmap_untrusted(&mem, size, PAL_PROT_TO_LINUX(prot), MAP_SHARED | MAP_FIXED,
++                                   handle->dev.fd, offset);
++    return ret < 0 ? unix_to_pal_error(ret) : ret;
++}
++
++static int64_t dev_setlength(PAL_HANDLE handle, uint64_t length) {
++    if (handle->hdr.type != PAL_TYPE_DEV || handle->dev.fd == PAL_IDX_POISON)
++        return -PAL_ERROR_INVAL;
++
++    if (!handle->dev.realpath) {
++        /* TTY devices opened with O_TRUNC flag */
++        if (length != 0)
++            return -PAL_ERROR_INVAL;
++        return 0;
++    }
++
++    int ret = ocall_ftruncate(handle->dev.fd, length);
++    if (ret < 0)
++        return unix_to_pal_error(ret);
++    return (int64_t)length;
++}
++
+ struct handle_ops g_dev_ops = {
+     .open           = &dev_open,
+     .read           = &dev_read,
+     .write          = &dev_write,
+     .close          = &dev_close,
++    .delete         = &dev_delete,
++    .map            = &dev_map,
+     .setlength      = &dev_setlength,
+     .flush          = &dev_flush,
+     .attrquery      = &dev_attrquery,
+diff --git a/pal/src/host/linux-sgx/pal_host.h b/pal/src/host/linux-sgx/pal_host.h
+index be301039..d2d36fcc 100644
+--- a/pal/src/host/linux-sgx/pal_host.h
++++ b/pal/src/host/linux-sgx/pal_host.h
+@@ -74,6 +74,7 @@ typedef struct {
+ 
+         struct {
+             PAL_IDX fd;
++            char* realpath;
+             bool nonblocking;
+         } dev;
+ 
+diff --git a/pal/src/host/linux-sgx/pal_linux.h b/pal/src/host/linux-sgx/pal_linux.h
+index 643b3533..98a1c953 100644
+--- a/pal/src/host/linux-sgx/pal_linux.h
++++ b/pal/src/host/linux-sgx/pal_linux.h
+@@ -29,6 +29,10 @@
+ #include "sgx_arch.h"
+ #include "sgx_attest.h"
+ 
++#ifndef MAP_FIXED_NOREPLACE
++#define MAP_FIXED_NOREPLACE 0x100000
++#endif
++
+ /* Part of Linux-SGX PAL private state which is not shared with other PALs. */
+ extern struct pal_linuxsgx_state {
+     /* enclave information */
+diff --git a/pal/src/host/linux-sgx/pal_linux_defs.h b/pal/src/host/linux-sgx/pal_linux_defs.h
+index 6ad22857..6b02e962 100644
+--- a/pal/src/host/linux-sgx/pal_linux_defs.h
++++ b/pal/src/host/linux-sgx/pal_linux_defs.h
+@@ -40,3 +40,10 @@ static_assert(SSA_XSAVE_SIZE_MAX + /* GPRs size in SSA */176 <= SSA_FRAME_SIZE -
+ 
+ #define MAX_ARGS_SIZE 10000000
+ #define MAX_ENV_SIZE  10000000
++
++/*
++ * The address should be in untrusted memory (outside of enclave), and should not overlap with the
++ * ASan shadow memory area (see `asan.h`) or DBGINFO_ADDR (see `sgx_gdb.h`).
++ */
++#define SHARED_ADDR_MIN 0x400000000000ULL /* 128TB */
++#define SHARED_MEM_SIZE 0x10000000000ULL  /* 1TB */
+diff --git a/pal/src/host/linux-sgx/pal_main.c b/pal/src/host/linux-sgx/pal_main.c
+index d03ce0e5..c08783d9 100644
+--- a/pal/src/host/linux-sgx/pal_main.c
++++ b/pal/src/host/linux-sgx/pal_main.c
+@@ -16,7 +16,10 @@
+ #include <stdnoreturn.h>
+ 
+ #include "api.h"
++#include "asan.h"
++#include "assert.h"
+ #include "enclave_tf.h"
++#include "gdb_integration/sgx_gdb.h"
+ #include "init.h"
+ #include "pal.h"
+ #include "pal_internal.h"
+@@ -397,6 +400,7 @@ static int print_warnings_on_insecure_configs(PAL_HANDLE parent_process) {
+     bool use_host_env         = false;
+     bool disable_aslr         = false;
+     bool allow_eventfd        = false;
++    bool allow_shared_memory  = false;
+     bool allow_all_files      = false;
+     bool use_allowed_files    = g_allowed_files_warn;
+     bool encrypted_files_keys = false;
+@@ -434,6 +438,15 @@ static int print_warnings_on_insecure_configs(PAL_HANDLE parent_process) {
+     if (ret < 0)
+         goto out;
+ 
++    char* shared_memory_str = NULL;
++    ret = toml_string_in(g_pal_public_state.manifest_root, "sys.insecure__shared_memory",
++                         &shared_memory_str);
++    if (ret < 0)
++        goto out;
++    if (shared_memory_str && !strcmp(shared_memory_str, "passthrough"))
++        allow_shared_memory = true;
++    free(shared_memory_str);
++
+     if (get_file_check_policy() == FILE_CHECK_POLICY_ALLOW_ALL_BUT_LOG)
+         allow_all_files = true;
+ 
+@@ -451,7 +464,8 @@ static int print_warnings_on_insecure_configs(PAL_HANDLE parent_process) {
+     }
+ 
+     if (!verbose_log_level && !sgx_debug && !use_cmdline_argv && !use_host_env && !disable_aslr &&
+-            !allow_eventfd && !allow_all_files && !use_allowed_files && !encrypted_files_keys) {
++            !allow_eventfd && !allow_shared_memory && !allow_all_files && !use_allowed_files &&
++            !encrypted_files_keys) {
+         /* there are no insecure configurations, skip printing */
+         ret = 0;
+         goto out;
+@@ -485,6 +499,10 @@ static int print_warnings_on_insecure_configs(PAL_HANDLE parent_process) {
+         log_always("  - sys.insecure__allow_eventfd = true         "
+                    "(host-based eventfd is enabled)");
+ 
++    if (allow_shared_memory)
++        log_always("  - sys.insecure__shared_memory = passthrough  "
++                   "(untrusted shared memory is enabled)");
++
+     if (allow_all_files)
+         log_always("  - sgx.file_check_policy = allow_all_but_log  "
+                    "(all files are passed through from untrusted host without verification)");
+@@ -559,6 +577,30 @@ noreturn void pal_linux_main(void* uptr_libpal_uri, size_t libpal_uri_len, void*
+     g_pal_public_state.memory_address_start = g_pal_linuxsgx_state.heap_min;
+     g_pal_public_state.memory_address_end = g_pal_linuxsgx_state.heap_max;
+ 
++    static_assert(SHARED_ADDR_MIN >= DBGINFO_ADDR + sizeof(struct enclave_dbginfo)
++                      || DBGINFO_ADDR > SHARED_ADDR_MIN + SHARED_MEM_SIZE,
++                  "SHARED_ADDR_MIN overlaps with DBGINFO_ADDR");
++#ifdef ASAN
++    static_assert(SHARED_ADDR_MIN >= ASAN_SHADOW_START + ASAN_SHADOW_LENGTH,
++                      || ASAN_SHADOW_START > SHARED_ADDR_MIN + SHARED_MEM_SIZE,
++                  "SHARED_ADDR_MIN overlaps with ASAN_SHADOW");
++#endif
++    void* shared_memory_start = (void*)SHARED_ADDR_MIN;
++    ret = ocall_mmap_untrusted(&shared_memory_start, SHARED_MEM_SIZE, PROT_NONE,
++                               MAP_NORESERVE | MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE,
++                               /*fd=*/-1, /*offset=*/0);
++    if (ret < 0) {
++        log_error("Cannot allocate shared memory.");
++        ocall_exit(1, /*is_exitgroup=*/true);
++    }
++    if (shared_memory_start != (void*)SHARED_ADDR_MIN) {
++        log_error("Kernel doesn't support MAP_FIXED_NOREPLACE. Update kernel to at least 4.17.");
++        ocall_exit(1, /*is_exitgroup=*/true);
++    }
++
++    g_pal_public_state.shared_address_start = shared_memory_start;
++    g_pal_public_state.shared_address_end = shared_memory_start + SHARED_MEM_SIZE;
++
+     if (parent_stream_fd < 0) {
+         /* First process does not have reserved memory ranges. */
+         urts_reserved_mem_ranges = NULL;
+diff --git a/pal/src/host/linux-sgx/pal_streams.c b/pal/src/host/linux-sgx/pal_streams.c
+index e4decdb2..ba119ab9 100644
+--- a/pal/src/host/linux-sgx/pal_streams.c
++++ b/pal/src/host/linux-sgx/pal_streams.c
+@@ -64,7 +64,10 @@ static ssize_t handle_serialize(PAL_HANDLE handle, void** data) {
+             /* no need to serialize ssl_ctx and handshake_helper_thread_hdl */
+             break;
+         case PAL_TYPE_DEV:
+-            /* devices have no fields to serialize */
++            if (handle->dev.realpath) {
++                field = handle->dev.realpath;
++                field_size = strlen(handle->dev.realpath) + 1;
++            }
+             break;
+         case PAL_TYPE_DIR:
+             field = handle->dir.realpath;
+@@ -161,6 +164,18 @@ static int handle_deserialize(PAL_HANDLE* handle, const void* data, size_t size,
+             hdl->pipe.handshake_helper_thread_hdl = NULL;
+             break;
+         case PAL_TYPE_DEV:
++            assert(hdl_size <= size);
++
++            size_t path_size = size - hdl_size;
++            if (path_size) {
++                char* path = malloc(path_size);
++                if (!path) {
++                    free(hdl);
++                    return -PAL_ERROR_NOMEM;
++                }
++                memcpy(path, (const char*)data + hdl_size, path_size);
++                hdl->dir.realpath = path;
++            }
+             break;
+         case PAL_TYPE_DIR: {
+             assert(hdl_size < size);
+diff --git a/pal/src/host/linux/pal_devices.c b/pal/src/host/linux/pal_devices.c
+index b8adfc08..37ca4740 100644
+--- a/pal/src/host/linux/pal_devices.c
++++ b/pal/src/host/linux/pal_devices.c
+@@ -16,12 +16,14 @@
+ #include "pal_flags_conv.h"
+ #include "pal_internal.h"
+ #include "pal_linux.h"
++#include "path_utils.h"
+ #include "perm.h"
+ 
+ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum pal_access access,
+                     pal_share_flags_t share, enum pal_create_mode create,
+                     pal_stream_options_t options) {
+     int ret;
++    char* normpath = NULL;
+ 
+     if (strcmp(type, URI_TYPE_DEV))
+         return -PAL_ERROR_INVAL;
+@@ -52,6 +54,22 @@ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
+         }
+     } else {
+         /* other devices must be opened through the host */
++
++        /* normalize uri into normpath */
++        size_t normpath_size = strlen(uri) + 1;
++        normpath = malloc(normpath_size);
++        if (!normpath){
++            ret = -PAL_ERROR_NOMEM;
++            goto fail;
++        }
++
++        ret = get_norm_path(uri, normpath, &normpath_size);
++        if (ret < 0) {
++            log_warning("Could not normalize path (%s): %s", uri, pal_strerror(ret));
++            ret = -PAL_ERROR_DENIED;
++            goto fail;
++        }
++
+         hdl->dev.nonblocking = !!(options & PAL_OPTION_NONBLOCK);
+ 
+         ret = DO_SYSCALL(open, uri, PAL_ACCESS_TO_LINUX_OPEN(access)  |
+@@ -63,7 +81,9 @@ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
+             ret = unix_to_pal_error(ret);
+             goto fail;
+         }
+-        hdl->dev.fd = ret;
++
++        hdl->dev.realpath = normpath;
++        hdl->dev.fd       = ret;
+ 
+         if (access == PAL_ACCESS_RDONLY) {
+             hdl->flags |= PAL_HANDLE_FD_READABLE;
+@@ -79,11 +99,12 @@ static int dev_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
+     return 0;
+ fail:
+     free(hdl);
++    free(normpath);
+     return ret;
+ }
+ 
+ static int64_t dev_read(PAL_HANDLE handle, uint64_t offset, uint64_t size, void* buffer) {
+-    if (offset || handle->hdr.type != PAL_TYPE_DEV)
++    if (handle->hdr.type != PAL_TYPE_DEV)
+         return -PAL_ERROR_INVAL;
+ 
+     if (!(handle->flags & PAL_HANDLE_FD_READABLE))
+@@ -92,12 +113,22 @@ static int64_t dev_read(PAL_HANDLE handle, uint64_t offset, uint64_t size, void*
+     if (handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_DENIED;
+ 
+-    int64_t bytes = DO_SYSCALL(read, handle->dev.fd, buffer, size);
++    if (!handle->dev.realpath) {
++        /* tty doesn't have offsets */
++        if (offset)
++            return -PAL_ERROR_INVAL;
++
++        int64_t bytes = DO_SYSCALL(read, handle->dev.fd, buffer, size);
++        return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
++    }
++
++    /* host devices use offset */
++    int64_t bytes = DO_SYSCALL(pread64, handle->dev.fd, buffer, size, offset);
+     return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
+ }
+ 
+ static int64_t dev_write(PAL_HANDLE handle, uint64_t offset, uint64_t size, const void* buffer) {
+-    if (offset || handle->hdr.type != PAL_TYPE_DEV)
++    if (handle->hdr.type != PAL_TYPE_DEV)
+         return -PAL_ERROR_INVAL;
+ 
+     if (!(handle->flags & PAL_HANDLE_FD_WRITABLE))
+@@ -106,7 +137,17 @@ static int64_t dev_write(PAL_HANDLE handle, uint64_t offset, uint64_t size, cons
+     if (handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_DENIED;
+ 
+-    int64_t bytes = DO_SYSCALL(write, handle->dev.fd, buffer, size);
++    if (!handle->dev.realpath) {
++        /* tty doesn't have offsets */
++        if (offset)
++            return -PAL_ERROR_INVAL;
++
++        int64_t bytes = DO_SYSCALL(write, handle->dev.fd, buffer, size);
++        return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
++    }
++
++    /* host devices use offset */
++    int64_t bytes = DO_SYSCALL(pwrite64, handle->dev.fd, buffer, size, offset);
+     return bytes < 0 ? unix_to_pal_error(bytes) : bytes;
+ }
+ 
+@@ -118,11 +159,49 @@ static int dev_close(PAL_HANDLE handle) {
+     int ret = 0;
+     if (handle->dev.fd != PAL_IDX_POISON && handle->dev.fd != 0 && handle->dev.fd != 1) {
+         ret = DO_SYSCALL(close, handle->dev.fd);
++        free(handle->dev.realpath);
+     }
+     handle->dev.fd = PAL_IDX_POISON;
+     return ret < 0 ? unix_to_pal_error(ret) : 0;
+ }
+ 
++static int dev_delete(PAL_HANDLE handle, enum pal_delete_mode delete_mode) {
++    if (handle->hdr.type != PAL_TYPE_DEV)
++        return -PAL_ERROR_INVAL;
++
++    if (delete_mode != PAL_DELETE_ALL)
++        return -PAL_ERROR_INVAL;
++
++    if (handle->dev.realpath) {
++        int ret = DO_SYSCALL(unlink, handle->dev.realpath);
++        return ret < 0 ? unix_to_pal_error(ret) : ret;
++    }
++    return 0;
++}
++
++static int dev_map(PAL_HANDLE handle, void* addr, pal_prot_flags_t prot, uint64_t offset,
++                   uint64_t size) {
++    if (handle->hdr.type != PAL_TYPE_DEV)
++        return -PAL_ERROR_INVAL;
++
++    assert(IS_ALLOC_ALIGNED(offset) && IS_ALLOC_ALIGNED(size));
++
++    uint64_t dummy;
++    if (__builtin_add_overflow(offset, size, &dummy)) {
++        return -PAL_ERROR_INVAL;
++    }
++
++    if (!handle->dev.realpath)
++        return -PAL_ERROR_INVAL;
++
++    addr = (void*)DO_SYSCALL(mmap, addr, size, PAL_PROT_TO_LINUX(prot), MAP_SHARED | MAP_FIXED,
++                             handle->dev.fd, offset);
++    if (IS_PTR_ERR(addr))
++        return unix_to_pal_error(PTR_TO_ERR(addr));
++
++    return 0;
++}
++
+ static int dev_flush(PAL_HANDLE handle) {
+     if (handle->hdr.type != PAL_TYPE_DEV)
+         return -PAL_ERROR_INVAL;
+@@ -162,7 +241,7 @@ static int dev_attrquery(const char* type, const char* uri, PAL_STREAM_ATTR* att
+ }
+ 
+ static int dev_attrquerybyhdl(PAL_HANDLE handle, PAL_STREAM_ATTR* attr) {
+-    if (handle->hdr.type != PAL_TYPE_DEV)
++    if (handle->hdr.type != PAL_TYPE_DEV || handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_INVAL;
+ 
+     if (handle->dev.fd == 0 || handle->dev.fd == 1) {
+@@ -180,23 +259,25 @@ static int dev_attrquerybyhdl(PAL_HANDLE handle, PAL_STREAM_ATTR* attr) {
+         attr->pending_size = stat_buf.st_size;
+     }
+ 
+-    attr->handle_type  = PAL_TYPE_DEV;
+-    attr->nonblocking  = handle->dev.nonblocking;
++    attr->handle_type = PAL_TYPE_DEV;
++    attr->nonblocking = handle->dev.nonblocking;
+     return 0;
+ }
+ 
+-/* this dummy function is implemented to support opening TTY devices with O_TRUNC flag */
+ static int64_t dev_setlength(PAL_HANDLE handle, uint64_t length) {
+-    if (handle->hdr.type != PAL_TYPE_DEV)
++    if (handle->hdr.type != PAL_TYPE_DEV || handle->dev.fd == PAL_IDX_POISON)
+         return -PAL_ERROR_INVAL;
+ 
+-    if (!(handle->dev.fd == 0 || handle->dev.fd == 1))
+-        return -PAL_ERROR_NOTSUPPORT;
+-
+-    if (length != 0)
+-        return -PAL_ERROR_INVAL;
+-
+-    return 0;
++    if (!handle->dev.realpath) {
++        /* TTY devices opened with O_TRUNC flag */
++        if (length != 0)
++            return -PAL_ERROR_INVAL;
++        return 0;
++    }
++    int ret = DO_SYSCALL(ftruncate, handle->dev.fd, length);
++    if (ret < 0)
++        return unix_to_pal_error(ret);
++    return (int64_t)length;
+ }
+ 
+ struct handle_ops g_dev_ops = {
+@@ -204,6 +285,8 @@ struct handle_ops g_dev_ops = {
+     .read           = &dev_read,
+     .write          = &dev_write,
+     .close          = &dev_close,
++    .delete         = &dev_delete,
++    .map            = &dev_map,
+     .setlength      = &dev_setlength,
+     .flush          = &dev_flush,
+     .attrquery      = &dev_attrquery,
+diff --git a/pal/src/host/linux/pal_host.h b/pal/src/host/linux/pal_host.h
+index b5336da5..9c580a02 100644
+--- a/pal/src/host/linux/pal_host.h
++++ b/pal/src/host/linux/pal_host.h
+@@ -51,6 +51,7 @@ typedef struct {
+ 
+         struct {
+             PAL_IDX fd;
++            char* realpath;
+             bool nonblocking;
+         } dev;
+ 
+diff --git a/pal/src/host/linux/pal_memory.c b/pal/src/host/linux/pal_memory.c
+index 2fb25e9a..94ce3805 100644
+--- a/pal/src/host/linux/pal_memory.c
++++ b/pal/src/host/linux/pal_memory.c
+@@ -211,6 +211,9 @@ int init_memory_bookkeeping(void) {
+     g_pal_public_state.memory_address_start = (void*)start_addr;
+     g_pal_public_state.memory_address_end = (void*)end_addr;
+ 
++    g_pal_public_state.shared_address_start = g_pal_public_state.memory_address_start;
++    g_pal_public_state.shared_address_end = g_pal_public_state.memory_address_end;
++
+     g_vdso_start = proc_maps_info.vdso_start;
+     g_vdso_end = proc_maps_info.vdso_end;
+     return 0;
+diff --git a/pal/src/host/linux/pal_streams.c b/pal/src/host/linux/pal_streams.c
+index d1204246..4d9d46d5 100644
+--- a/pal/src/host/linux/pal_streams.c
++++ b/pal/src/host/linux/pal_streams.c
+@@ -54,7 +54,10 @@ int handle_serialize(PAL_HANDLE handle, void** data) {
+             /* pipes have no fields to serialize */
+             break;
+         case PAL_TYPE_DEV:
+-            /* devices have no fields to serialize */
++            if (handle->dev.realpath) {
++                field = handle->dev.realpath;
++                field_size = strlen(handle->dev.realpath) + 1;
++            }
+             break;
+         case PAL_TYPE_DIR:
+             field = handle->dir.realpath;
+@@ -118,8 +121,21 @@ int handle_deserialize(PAL_HANDLE* handle, const void* data, size_t size) {
+         case PAL_TYPE_PIPESRV:
+         case PAL_TYPE_PIPECLI:
+             break;
+-        case PAL_TYPE_DEV:
++        case PAL_TYPE_DEV: {
++            assert(hdl_size <= size);
++
++            size_t path_size = size - hdl_size;
++            if (path_size) {
++                char* path = malloc(path_size);
++                if (!path) {
++                    free(hdl);
++                    return -PAL_ERROR_NOMEM;
++                }
++                memcpy(path, (const char*)data + hdl_size, path_size);
++                hdl->dev.realpath = path;
++            }
+             break;
++        }
+         case PAL_TYPE_DIR: {
+             assert(hdl_size < size);
+ 
+-- 
+2.34.1
+

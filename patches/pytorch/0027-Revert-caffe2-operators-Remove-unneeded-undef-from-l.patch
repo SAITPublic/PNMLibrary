@@ -1,0 +1,38 @@
+From 9941e1e4c49a92a9dafb78d7a5217c1a0d8e56e5 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 12 Nov 2021 10:31:21 +0900
+Subject: [PATCH 027/128] Revert "[caffe2/operators] Remove unneeded undef from
+ lengths_reducer_ops_axdimm.cc"
+
+This reverts commit 65f0247208bdfa33e384b675c88adac54e7a4ca0.
+
+Apparently FBGEMM include flags are not included in AXDIMM build command,
+disable 'USE_FBGEMM' in source lengths_reducer_ops_axdimm.cc file.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 05a18ad5..079e2fe5 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -1,10 +1,13 @@
+-#include "api/axdimm.h"
++#undef USE_FBGEMM
++#include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/core/context.h"
+ #include "caffe2/core/operator.h"
+ #include "caffe2/operators/lengths_reducer_ops.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ #include "caffe2/utils/math.h"
+ 
++#include "api/axdimm.h"
++
+ namespace caffe2 {
+ 
+ // A templated class that implements SparseLengths[Sum,WeightedSum,Mean] for
+-- 
+2.34.1
+

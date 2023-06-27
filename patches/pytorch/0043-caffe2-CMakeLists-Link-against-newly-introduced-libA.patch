@@ -1,0 +1,62 @@
+From 6bc0275e41cf70b79fb6d6b6d66072adffe91166 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 26 May 2022 10:52:22 +0900
+Subject: [PATCH 043/128] [caffe2/CMakeLists] Link against newly introduced
+ libAxdimmAI.so
+
+Now AXDIMM control library for DLRM is called libAxdimmAI.so, reflect this
+in linkage command. Also, include pathes for AXDIMM API have changed, handle
+this as well.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ caffe2/CMakeLists.txt                          | 2 +-
+ caffe2/operators/lengths_reducer_ops_axdimm.cc | 3 ++-
+ caffe2/python/pybind_state_axdimm.cc           | 2 +-
+ 3 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/caffe2/CMakeLists.txt b/caffe2/CMakeLists.txt
+index bdfc61c1..25011eac 100644
+--- a/caffe2/CMakeLists.txt
++++ b/caffe2/CMakeLists.txt
+@@ -1373,7 +1373,7 @@ target_include_directories(torch_cpu SYSTEM PRIVATE "${Caffe2_DEPENDENCY_INCLUDE
+ 
+ if(USE_AXDIMM)
+   target_link_libraries(torch_axdimm PRIVATE ${Caffe2_AXDIMM_DEPENDENCY_LIBS})
+-  target_link_libraries(torch_axdimm PUBLIC "${CMAKE_AXDIMM_ROOT_PATH}/build/drivers/libAxdimm.so")
++  target_link_libraries(torch_axdimm PUBLIC "${CMAKE_AXDIMM_ROOT_PATH}/build/drivers/libAxdimmAI.so")
+   target_include_directories(torch_axdimm PRIVATE ${Caffe2_AXDIMM_INCLUDE})
+ endif()
+ 
+diff --git a/caffe2/operators/lengths_reducer_ops_axdimm.cc b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+index 84df39da..3e7a4eed 100644
+--- a/caffe2/operators/lengths_reducer_ops_axdimm.cc
++++ b/caffe2/operators/lengths_reducer_ops_axdimm.cc
+@@ -5,9 +5,10 @@
+ #include "caffe2/operators/segment_reduction_op.h"
+ #include "caffe2/utils/math.h"
+ 
++#include "ai/api/axdimm.h"
++
+ #include <algorithm>
+ #include <vector>
+-#include "api/axdimm.h"
+ 
+ namespace caffe2 {
+ 
+diff --git a/caffe2/python/pybind_state_axdimm.cc b/caffe2/python/pybind_state_axdimm.cc
+index 4ba2b735..cf5ec54c 100644
+--- a/caffe2/python/pybind_state_axdimm.cc
++++ b/caffe2/python/pybind_state_axdimm.cc
+@@ -14,7 +14,7 @@
+ #include "caffe2/operators/operator_fallback_axdimm.h"
+ #include "caffe2/python/pybind_state_registry.h"
+ 
+-#include "api/axdimm.h"
++#include "ai/api/axdimm.h"
+ 
+ #include <fcntl.h>
+ #include <sys/mman.h>
+-- 
+2.34.1
+

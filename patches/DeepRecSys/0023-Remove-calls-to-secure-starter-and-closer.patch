@@ -1,0 +1,55 @@
+From 0e0c321ec7c645e84bba681b7b1b8a298e55fcb2 Mon Sep 17 00:00:00 2001
+From: Aleksandr Korzun <a.korzun@partner.samsung.com>
+Date: Mon, 10 Oct 2022 15:56:08 +0300
+Subject: [PATCH 23/33] Remove calls to secure starter and closer.
+
+References: AXDIMM-323
+
+Signed-off-by: Aleksandr Korzun <a.korzun@partner.samsung.com>
+---
+ DeepRecSys.py | 15 +++++----------
+ 1 file changed, 5 insertions(+), 10 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index 1300ef9..69290e9 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -141,18 +141,16 @@ def DeepRecSys():
+     dtype_in_bytes = 4 if args.sls_dtype in ["int32", "float32"] \
+       else exit("(axdimm) sls_dtype: {0} is not supported.".format(args.sls_dtype))
+ 
+-    tables_descriptor = 0
+     if args.sls_accel:
+       ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+ 
+-      if args.use_secndp_algo:
+-        tables_descriptor = workspace.SecureAxdimmStarter(args.table_weight_path, ln_emb,
+-                                                          args.arch_sparse_feature_size * dtype_in_bytes)
+-      else:
++      if args.share_tables:
+         tables_descriptor = workspace.AxdimmStarter(args.table_weight_path, ln_emb,
+                                                     args.arch_sparse_feature_size * dtype_in_bytes,
+                                                     args.mem_preference,
+                                                     args.share_tables)
++      else:
++        tables_descriptor = None
+ 
+     # Setup single request Queue and multiple response queues
+     requestQueue    = Queue(maxsize=1024)
+@@ -287,11 +285,8 @@ def DeepRecSys():
+ 
+     status = 0
+     # [AXDIMM caffe2 backend] Destroy AXDIMM for parent process.
+-    if args.sls_accel:
+-      if args.use_secndp_algo:
+-        status = workspace.SecureAxdimmCloser()
+-      else:
+-        status = workspace.AxdimmCloser()
++    if args.sls_accel and args.share_tables:
++      status = workspace.AxdimmCloser()
+ 
+     if (status != 0):
+         print("(axdimm) axd_closer didn't operate properly.")
+-- 
+2.34.1
+

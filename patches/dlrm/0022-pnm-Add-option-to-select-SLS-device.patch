@@ -1,0 +1,145 @@
+From 54f387f5fe5d79efc54c440e457bd7b34f99d395 Mon Sep 17 00:00:00 2001
+From: "y.lavrinenko" <y.lavrinenko@samsung.com>
+Date: Tue, 4 Jul 2023 01:57:40 -0400
+Subject: [PATCH 22/23] [pnm] Add option to select SLS device
+
+The `--sls_device_interface` option was added to select which type of
+device should be used for SLS operation. The possible option is:
+ - AXDIMM
+ - CXL
+
+Resolve: MCS23-1292
+---
+ dlrm_s_pytorch.py | 12 ++++++++++--
+ pnm_utils.py      | 17 +++++++++++++----
+ run_test.sh       |  8 +++++++-
+ test_pnm_op.py    |  3 ++-
+ 4 files changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/dlrm_s_pytorch.py b/dlrm_s_pytorch.py
+index 7f7c22b..acaaa89 100644
+--- a/dlrm_s_pytorch.py
++++ b/dlrm_s_pytorch.py
+@@ -265,10 +265,11 @@ class DLRM_Net(nn.Module):
+ 
+         if from_file:
+             op = EmbeddingBagPnm(create_pnm_tensor_from_file(self.pnm_tensor_type, self.weights_path, torch.float32,
+-                                                             torch.tensor(rows, dtype=torch.int32), len(rows), m))
++                                                             torch.tensor(rows, dtype=torch.int32), len(rows), m, 
++                                                             args.sls_device_interface))
+         else:
+             torch_ten = torch.from_numpy(np.asarray(pnm_weights))
+-            op = EmbeddingBagPnm(create_pnm_tensor(self.pnm_tensor_type, torch_ten))
++            op = EmbeddingBagPnm(create_pnm_tensor(self.pnm_tensor_type, torch_ten, args.sls_device_interface))
+         return op, v_W_l
+ 
+     def create_emb(self, m, ln, weighted_pooling=None):
+@@ -1116,6 +1117,10 @@ def run():
+                              "Warming up may be useful in order to get stable results "
+                              "because of e.g caching effects of the code under benchmark.",
+                         default=1)
++    
++    sls_dev_interfaces = {"AXDIMM" : PnmDeviceInterface.AXDIMM, "CXL" : PnmDeviceInterface.CXL}
++    parser.add_argument("--sls_device_interface", action="store", type=str, choices=sls_dev_interfaces.keys(), 
++                        default="AXDIMM", help="The device type for SLS operation.")
+ 
+     global args
+     global nbatches
+@@ -1123,6 +1128,9 @@ def run():
+     global writer
+     args = parser.parse_args()
+ 
++    # Convert device interface to id
++    args.sls_device_interface = sls_dev_interfaces[args.sls_device_interface]
++
+     if args.dataset_multiprocessing:
+         assert float(sys.version[:3]) > 3.7, "The dataset_multiprocessing " + \
+         "flag is susceptible to a bug in Python 3.7 and under. " + \
+diff --git a/pnm_utils.py b/pnm_utils.py
+index 0a40a46..6d3b2f4 100644
+--- a/pnm_utils.py
++++ b/pnm_utils.py
+@@ -23,6 +23,13 @@ class PnmAllocPreference(enum.Enum):
+ 
+     def __str__(self):
+         return self.name
++    
++class PnmDeviceInterface(enum.Enum):
++    AXDIMM = 0
++    CXL = 1
++
++    def __str__(self):
++        return self.name
+ 
+ def get_enum(enum_class, name):
+     val = getattr(enum_class, str(name), None)
+@@ -31,16 +38,18 @@ def get_enum(enum_class, name):
+ 
+     return val
+ 
+-def create_pnm_tensor_from_file(tensor_type, path, scalar_type, rows, num_tables, sp_size, alloc_pref = PnmAllocPreference.distribute):
++def create_pnm_tensor_from_file(tensor_type, path, scalar_type, rows, num_tables, sp_size, device_type, alloc_pref = PnmAllocPreference.distribute):
+     with_tag = True if "tagged" in str(tensor_type) else False
+     tensor_type = to_internal_type.get(get_enum(PnmTensorType, tensor_type).name)
+     alloc_pref_val = get_enum(PnmAllocPreference, alloc_pref).value
++    device_type_val = get_enum(PnmDeviceInterface, device_type).value
+ 
+-    return torch.ops.pnm.create_tensor(tensor_type, path, scalar_type, rows, num_tables, sp_size, alloc_pref_val, with_tag)
++    return torch.ops.pnm.create_tensor(tensor_type, path, scalar_type, rows, num_tables, sp_size, device_type_val, alloc_pref_val, with_tag)
+ 
+-def create_pnm_tensor(tensor_type, weights, alloc_pref = PnmAllocPreference.distribute):
++def create_pnm_tensor(tensor_type, weights, device_type, alloc_pref = PnmAllocPreference.distribute):
+     with_tag = True if "tagged" in str(tensor_type) else False
+     tensor_type = to_internal_type.get(get_enum(PnmTensorType, tensor_type).name)
+     alloc_pref_val = get_enum(PnmAllocPreference, alloc_pref).value
++    device_type_val = get_enum(PnmDeviceInterface, device_type).value
+ 
+-    return torch.ops.pnm.create_tensor(tensor_type, weights, weights.size(0), weights.size(1), weights.size(2), alloc_pref_val, with_tag)
++    return torch.ops.pnm.create_tensor(tensor_type, weights, weights.size(0), weights.size(1), weights.size(2), device_type_val, alloc_pref_val, with_tag)
+diff --git a/run_test.sh b/run_test.sh
+index 02776ce..1802629 100755
+--- a/run_test.sh
++++ b/run_test.sh
+@@ -17,6 +17,7 @@ pnm_tensor_type="simple"
+ script_run_command="python3"
+ script_dir=$(dirname "$0")
+ warmup_runs=1
++sls_device_interface='AXDIMM'
+ 
+ while [ "$#" -ne 0 ]
+ do
+@@ -37,6 +38,10 @@ do
+         shift
+         warmup_runs=$1
+         ;;
++    "--sls_device_interface")
++        shift
++        sls_device_interface=$1
++        ;;
+ esac
+     shift
+ done
+@@ -53,4 +58,5 @@ fi
+ $script_run_command $script_dir/dlrm_s_pytorch.py --arch-embedding-size="$embedding_size" --arch-mlp-bot="$arch_mlp_bot" --arch-mlp-top="$arch_mlp_top" \
+                             --arch-sparse-feature-size="$sparse_feature_size" --mini-batch-size="$mini_batch_size" --num-indices-per-lookup-fixed="$num_indices_per_lookup_fixed" \
+                             --num-indices-per-lookup="$num_indices_per_lookup" --arch-interaction-op="$interaction_op" --num-batches="$num_batches" \
+-                            --use-pnm "$pnm_tensor_type" --weights-path "$weights_path" --warmup_runs=$warmup_runs --inference-only
++                            --use-pnm "$pnm_tensor_type" --weights-path "$weights_path" --warmup_runs=$warmup_runs --inference-only \
++                            --sls_device_interface "$sls_device_interface"
+diff --git a/test_pnm_op.py b/test_pnm_op.py
+index b7e68a7..2889858 100644
+--- a/test_pnm_op.py
++++ b/test_pnm_op.py
+@@ -139,7 +139,8 @@ class PnmEmbeddingsTest:
+         offsets_tensor = torch.tensor(self.offsets, dtype=torch.int32)
+         for tensor_type in self.tensor_types:
+             log.info(f"Loading weights for tensor type: {tensor_type}, scalar type: {self.embedding_scalar_type_name}")
+-            op = EmbeddingBagPnm(create_pnm_tensor(tensor_type, self.tables))
++            AXDIMM_ID = PnmDeviceInterface.AXDIMM #Test only with SLS_AXDIMM device until SLS_CXL complete
++            op = EmbeddingBagPnm(create_pnm_tensor(tensor_type, self.tables, AXDIMM_ID))
+             log.info("Running PNM...")
+             with profiler.profile(with_stack=True, profile_memory=True) as pnm_prof:
+                 pnm_res = op(indices_tensor, offsets_tensor)
+-- 
+2.34.1
+
