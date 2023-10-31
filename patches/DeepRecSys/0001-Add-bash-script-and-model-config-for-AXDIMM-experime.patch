@@ -1,7 +1,7 @@
 From 54cb1708bf6a1a891b634a9be9a3e415f63dab85 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 11 Feb 2022 18:28:09 +0900
-Subject: [PATCH 01/33] Add bash script and model config for AXDIMM experiments
+Subject: [PATCH 01/34] Add bash script and model config for AXDIMM experiments
 
 * run_DeepRecSys_axdimm.sh is a copy of run_DeepRecSys.sh with some parameters
   changed.

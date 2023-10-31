@@ -1,7 +1,7 @@
 From 3ff42a227f41bc5d757951320c5b3e43d4c27ec6 Mon Sep 17 00:00:00 2001
 From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
 Date: Tue, 5 Jul 2022 12:38:54 +0300
-Subject: [PATCH 057/128] [core API] Add necessary headers for use core API
+Subject: [PATCH 057/135] [core API] Add necessary headers for use core API
 
 Refers to AXDIMM-258
 

@@ -1,7 +1,7 @@
 From af7a1ea2807254f8312506746a09250b0dd73fa8 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Mon, 24 Oct 2022 23:28:24 +0300
-Subject: [PATCH 079/128] [aten,axdimm,torch] Added precompiled operation
+Subject: [PATCH 079/135] [aten,axdimm,torch] Added precompiled operation
  support for embedding bag axdimm operator
 
 Resolves: AXDIMM-452

@@ -23,8 +23,6 @@
 
 #include <unistd.h>
 
-#include <cstdio>
-
 namespace tools::ctl {
 
 inline void check_privileges() {

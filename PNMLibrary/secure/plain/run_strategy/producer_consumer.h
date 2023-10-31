@@ -15,10 +15,10 @@
 
 #include "common/threads/producer_consumer.h"
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 template <typename ThreadCreationStrategy>
-using SLSProducerConsumer =
+using SlsProducerConsumer =
     pnm::threads::ProducerConsumer<ThreadCreationStrategy>;
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif //_PRODUCER_CONSUMER_RUNNER_H_

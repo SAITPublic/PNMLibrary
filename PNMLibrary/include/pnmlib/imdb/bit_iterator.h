@@ -17,7 +17,7 @@
 #include <iterator>
 
 namespace pnm::views {
-template <typename T, typename C> struct bitview_iterator {
+template <typename T, typename C> struct bit_iterator {
 public:
   using iterator_category = std::forward_iterator_tag;
   using value_type = T;
@@ -25,14 +25,14 @@ public:
   using pointer = T;
   using reference = T;
 
-  constexpr bitview_iterator(const C &base, uint64_t index)
+  constexpr bit_iterator(const C &base, uint64_t index)
       : base_{base}, index_{index} {}
 
-  constexpr bool operator!=(const bitview_iterator &rhs) const {
+  constexpr bool operator!=(const bit_iterator &rhs) const {
     return index_ != rhs.index_;
   }
 
-  constexpr bool operator==(const bitview_iterator &rhs) const {
+  constexpr bool operator==(const bit_iterator &rhs) const {
     return index_ == rhs.index_;
   }
 

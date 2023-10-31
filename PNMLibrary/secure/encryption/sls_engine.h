@@ -32,7 +32,7 @@
 #include <utility>
 #include <vector>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 /*! \brief The class instance perform encryption/decription process of
  * raw tables.
  */
@@ -48,7 +48,8 @@ public:
    * The OTPBytes stands for of bytes in W_c constant.
    * The sizeof(EntryType) stands for bytes in W_e constant.
    */
-  using otp_type = FixedVector<EntryType, OTPBytes / sizeof(EntryType)>;
+  using otp_type =
+      pnm::types::FixedVector<EntryType, OTPBytes / sizeof(EntryType)>;
   using typename CryptoEngine::key_type;
 
   explicit EncryptionEngine(uint32_t version) : CryptoEngine(version) {}
@@ -229,14 +230,15 @@ public:
                                 BinaryOp op) const {
     // Preallocated buffer for OTPs
     std::vector<EntryType> buffer(std::distance(begin, end) * init.size());
-    auto buffer_view = pnm::make_view(buffer);
+    auto buffer_view = pnm::views::make_view(buffer);
 
     static constexpr auto OTP_SIZE = OTPBytes / sizeof(EntryType);
-    generate_otp_vec(0x00, version_, pnm::make_view(begin, end), OTP_SIZE,
-                     init.size() / OTP_SIZE, aes_engine_, buffer_view);
+    generate_otp_vec(0x00, version_, pnm::views::make_view(begin, end),
+                     OTP_SIZE, init.size() / OTP_SIZE, aes_engine_,
+                     buffer_view);
 
-    auto otps_rows = pnm::make_rowwise_view(buffer_view.begin(),
-                                            buffer_view.end(), init.size());
+    auto otps_rows = pnm::views::make_rowwise_view(
+        buffer_view.begin(), buffer_view.end(), init.size());
 
     return std::accumulate(otps_rows.begin(), otps_rows.end(), init, op);
   }
@@ -265,6 +267,6 @@ private:
   using CryptoEngine::aes_engine_;
   using CryptoEngine::version_;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif

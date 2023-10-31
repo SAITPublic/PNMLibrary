@@ -1,7 +1,7 @@
 From a24251750b16a59f1a67d6a0d6dd2106ef6b01f8 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Wed, 5 Jul 2023 10:47:44 +0000
-Subject: [PATCH 125/161] [sls_resource] Synchronize allocator and process
+Subject: [PATCH 125/225] [sls_resource] Synchronize allocator and process
  manager
 
 After refactoring code to keep only single allocations, the descriptors

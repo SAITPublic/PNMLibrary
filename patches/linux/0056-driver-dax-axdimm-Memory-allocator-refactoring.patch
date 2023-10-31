@@ -1,7 +1,7 @@
 From fc322ef54bf7101d4185e7898cfc9287b2a0773e Mon Sep 17 00:00:00 2001
 From: Petr Bred <p.bred@samsung.com>
 Date: Wed, 12 Oct 2022 17:05:44 +0300
-Subject: [PATCH 056/161] [driver/dax/axdimm] Memory allocator: refactoring
+Subject: [PATCH 056/225] [driver/dax/axdimm] Memory allocator: refactoring
 
 * Replace memory allocation concept with objects package.
 Actually there is a confusion between the request for a pack

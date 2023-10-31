@@ -1,7 +1,7 @@
 From 4d045580b37119102e1ffe3aa7e4b7aa6d190f50 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Wed, 1 Mar 2023 19:45:30 +0300
-Subject: [PATCH 105/128] [aten][caffe2] Change status codes -> exceptions
+Subject: [PATCH 105/135] [aten][caffe2] Change status codes -> exceptions
 
 We are moving away from status codes, and now will be using exceptions
 for handling errors. Reflect the changes here.

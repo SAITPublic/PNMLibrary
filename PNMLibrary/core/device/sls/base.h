@@ -15,27 +15,24 @@
 #ifndef _SLS_BASE_DEVICE_H_
 #define _SLS_BASE_DEVICE_H_
 
-#include "constants.h"
-#include "control.h"
 #include "memblockhandler/base.h"
-#include "rank_memory.h"
+#include "utils/constants.h"
 
 #include "common/compiler_internal.h"
 #include "common/file_descriptor_holder.h"
 #include "common/timer.h"
 #include "common/topology_constants.h"
 
+#include "pnmlib/sls/control.h"
+
 #include "pnmlib/core/device.h"
 #include "pnmlib/core/sls_cunit_info.h"
 
 #include <linux/sls_resources.h>
 
-#include <atomic>
-#include <bitset>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -46,31 +43,19 @@ namespace pnm::sls::device {
 
 class BaseDevice : public Device {
 public:
-  static constexpr auto bit_mask_size = 64ULL;
-  using bit_mask = std::bitset<bit_mask_size>;
-
-  // Set of predefined values to control SLS device
-  // For detail see confluence page:
-  // https://confluence.samsungds.net/display/NP/SLS+operation+on+CXL+device
-  static constexpr uint32_t SLS_ENABLE_VALUE = 0xCAFE;
-  static constexpr uint32_t SLS_DISABLE_VALUE = 0;
-  static constexpr uint32_t SLS_CONTROL_SWITCHED_VALUE = 0x10001;
-
-  BaseDevice(Device::Type dev_type, const std::filesystem::path &data_path);
-
+  BaseDevice(BusType type, const std::filesystem::path &data_path);
   ~BaseDevice() override = default;
   BaseDevice(const BaseDevice &) = delete;
   BaseDevice &operator=(const BaseDevice &) = delete;
-  static std::unique_ptr<BaseDevice> make_device(Device::Type dev_type);
+  static std::unique_ptr<BaseDevice> make_device();
 
-  Type get_device_type() const final { return dev_type_; }
+  Type get_device_type() const override { return Device::Type::SLS; }
 
   const auto &mem_block_handler() const { return mem_block_handler_; }
 
-  volatile std::atomic<uint32_t> *control_switch_register(uint8_t compute_unit);
-  volatile std::atomic<uint32_t> *exec_sls_register(uint8_t compute_unit);
-  volatile std::atomic<uint32_t> *
-  psum_poll_register(uint8_t compute_unit) const;
+  uint32_t *control_switch_register(uint8_t compute_unit);
+  uint32_t *exec_sls_register(uint8_t compute_unit);
+  uint32_t *psum_poll_register(uint8_t compute_unit) const;
 
   void write_inst_block(uint8_t compute_unit, const uint8_t *buf_in,
                         size_t write_size) {
@@ -103,13 +88,14 @@ public:
   size_t get_min_block_size(sls_mem_blocks_e block_type) const {
     return mem_block_handler_->get_min_block_size(block_type);
   }
+
   size_t get_base_memory_size() const {
     return mem_block_handler_->get_base_memory_size();
   }
 
-  int get_devmem_fd() const final { return *data_fd_; }
+  int get_devmem_fd() const override { return *data_fd_; }
 
-  int get_resource_fd() const final { return *control_fd_; }
+  int get_resource_fd() const override { return *control_fd_; }
 
   auto get_acquisition_timeout() const {
     return control_.get_acquisition_timeout();
@@ -120,7 +106,7 @@ public:
   }
 
   auto get_compute_unit_info(uint8_t compute_unit,
-                             SlsComputeUnitInfo key) const {
+                             pnm::sls::ComputeUnitInfo key) const {
     return control_.get_compute_unit_info(compute_unit, key);
   }
 
@@ -133,46 +119,38 @@ public:
     read_poll(compute_unit, POLL_INST_NUM_OFFSET, buf_out, POLL_INST_NUM_SIZE);
   }
 
-  bool acquire_cunit_for_write_from_range(uint8_t *compute_unit,
-                                          bit_mask cunit_mask);
-  bool acquire_cunit_for_read(uint8_t compute_unit) const;
-  void release_cunit_for_write(uint8_t compute_unit) const;
-  void release_cunit_for_read(uint8_t compute_unit) const;
+  bool acquire_cunit_from_range(uint8_t *compute_unit, cunit cunit_mask);
+  void release_cunit(uint8_t compute_unit) const;
 
 private:
-  using packs_to_objects = RankMemory::packs_to_objects;
-
   pnm::utils::FileDescriptorHolder control_fd_;
   pnm::utils::FileDescriptorHolder data_fd_;
 
-  std::unique_ptr<ISLSMemBlockHandler> mem_block_handler_;
-
-  uint8_t acquire_idle_cunit_from_range(bit_mask cunit_mask) const;
-
-  void setup_sim();
+  uint8_t acquire_idle_cunit_from_range(cunit cunit_mask) const;
 
   mutable std::vector<pnm::utils::tsan_mutex> tsan_mutexes_;
 
-  // [TODO: MCS23-1393] Remove these functions
-  std::function<void(uint8_t)> exec_trace_;
-  std::function<void(uint8_t)> clear_buffer_;
-
-protected:
   static constexpr size_t POLL_INST_NUM_SIZE = 4;
   Control control_;
-  const Device::Type dev_type_;
 
-  void reset_impl(ResetOptions options) final;
+protected:
+  std::unique_ptr<ISlsMemBlockHandler> mem_block_handler_;
+  BusType bus_type_;
 
-  void set_resource_cleanup_impl(bool state) const final {
+private:
+  size_t memory_size_impl() const override { return get_base_memory_size(); }
+
+  void reset_impl(ResetOptions options) override;
+
+  void set_resource_cleanup_impl(bool state) const override {
     control_.set_resource_cleanup(state);
   }
 
-  bool get_resource_cleanup_impl() const final {
+  bool get_resource_cleanup_impl() const override {
     return control_.get_resource_cleanup();
   }
 
-  uint64_t get_leaked_impl() const final { return control_.get_leaked(); }
+  uint64_t get_leaked_impl() const override { return control_.get_leaked(); }
 };
 
 } // namespace pnm::sls::device

@@ -16,6 +16,8 @@
 #include "core/device/imdb/base.h"
 #include "core/operation/internal.h"
 
+#include "common/memory/atomic.h"
+
 #include "pnmlib/imdb/libimdb.h"
 
 #include "pnmlib/core/device.h"
@@ -23,6 +25,7 @@
 #include "pnmlib/common/error.h"
 #include "pnmlib/common/misc_utils.h"
 
+#include <atomic>
 #include <cstdint>
 #include <thread>
 
@@ -53,13 +56,13 @@ void Runner::run_and_wait(volatile ThreadCSR *CSR) {
   auto *status = utils::as_vatomic<uint32_t>(&CSR->THREAD_STATUS);
 
   // Workaround to be sure that we will start waiting the result.
-  // [TODO: @y-lavrinenko] Remove when simulator core will use cv.
   if constexpr (PNM_PLATFORM != HARDWARE) {
     status->store(THREAD_STATUS_BUSY);
   }
 
   auto *control = utils::as_vatomic<uint32_t>(&CSR->THREAD_CTRL);
-  control->store(control->load() | THREAD_CTRL_START);
+  pnm::memory::hw_atomic_store(&CSR->THREAD_CTRL,
+                               control->load() | THREAD_CTRL_START);
 
   while (status->load() == THREAD_STATUS_BUSY) {
     std::this_thread::yield();

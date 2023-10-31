@@ -36,6 +36,8 @@ private:
 
   void run_impl(pnm::InternalOperator &op) override;
 
+  void init_impl() override{};
+
   device::BaseDevice *device_;
 };
 

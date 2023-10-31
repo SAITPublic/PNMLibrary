@@ -1,7 +1,7 @@
 From f24ea004e9bee9ca1d1ec3136e18e00f155c1587 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Wed, 14 Jun 2023 18:43:25 +0300
-Subject: [PATCH 120/161] [pnm][sysfs] Export SLS configuration constants via
+Subject: [PATCH 120/225] [pnm][sysfs] Export SLS configuration constants via
  sysfs
 
 The main SLS constants that define the execution environment (memory

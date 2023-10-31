@@ -33,11 +33,11 @@
 #include <utility>
 #include <vector>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
-/*! \brief Tables preprocessor for DLRM embedded tables.
- * @tparam T is an embedded entry type
- * @tparam Reader is a class for reading embedded tables
+/*! \brief Tables preprocessor for DLRM embedding tables.
+ * @tparam T is an embedding entry type
+ * @tparam Reader is a class for reading embedding tables
  * @tparam Writer is a class for offloading encrypted tables
  * */
 template <typename T, typename Reader, typename Writer>
@@ -82,8 +82,8 @@ private:
     return hash;
   }
 
-  using EEngine_t = sls::secure::EncryptionEngine<T>;
-  using VEngine_t = sls::secure::VerificationEngine<>;
+  using EEngine_t = pnm::sls::secure::EncryptionEngine<T>;
+  using VEngine_t = pnm::sls::secure::VerificationEngine<>;
 
   size_t const tables_count_;
   uint32_t const sparse_feature_size_;
@@ -124,7 +124,7 @@ DLRMPreprocessor<T, Reader, Writer>::load_impl(void *out_ptr,
       // Perform line-by-line encryption
       for (auto it = slice.begin(); it != slice.end();
            it += sparse_feature_size_) {
-        pnm::uint128_t tag{};
+        pnm::types::uint128_t tag{};
         if (include_tag) {
           tag = verification_engine.generate_mac(it, it + sparse_feature_size_,
                                                  slice_offset);
@@ -152,6 +152,6 @@ DLRMPreprocessor<T, Reader, Writer>::load_impl(void *out_ptr,
       std::move(encryption_engine), std::move(verification_engine),
       std::move(table_offsets), sparse_feature_size_);
 }
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // SLS_DLRM_PREPROCESSOR_H

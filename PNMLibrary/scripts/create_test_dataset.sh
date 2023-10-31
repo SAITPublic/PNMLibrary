@@ -73,9 +73,9 @@ check_and_create(){
 check_and_create_table(){
   table_name=$1
   shift
-  if [ ! -f "$table_name/embedded.bin" ]
+  if [ ! -f "$table_name/embedding.bin" ]
   then
-    echo "Embedded tables $table_name not found. Creating..."
+    echo "Embedding tables $table_name not found. Creating..."
     create_tables "$table_name" "$@"
     if [ ! $? ]
     then
@@ -85,7 +85,7 @@ check_and_create_table(){
       printf "\t\tDone.\n"
     fi
   else
-    echo "Embedded table $table_name exists. Skipping...";
+    echo "Embedding table $table_name exists. Skipping...";
   fi
 }
 

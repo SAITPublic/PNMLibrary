@@ -1,7 +1,7 @@
 From 45c0911345aec4f57e11f1f0de53fc9beefe3754 Mon Sep 17 00:00:00 2001
 From: Petr Bred <p.bred@samsung.com>
 Date: Sun, 17 Apr 2022 18:38:44 +0300
-Subject: [PATCH 023/161] [drivers/dax/axdimm] add device reset ioctl support
+Subject: [PATCH 023/225] [drivers/dax/axdimm] add device reset ioctl support
 
 Resolves: AXDIMM-136
 

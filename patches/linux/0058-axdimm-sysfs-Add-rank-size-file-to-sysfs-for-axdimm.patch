@@ -1,7 +1,7 @@
 From c22e25b8a79b9fd14dbab24fdd2ec28053f3b5a8 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Mon, 24 Oct 2022 16:13:31 +0000
-Subject: [PATCH 058/161]  [axdimm][sysfs] Add rank size file to sysfs for
+Subject: [PATCH 058/225]  [axdimm][sysfs] Add rank size file to sysfs for
  axdimm.
 
 This file is situated at `/sys/bus/dax/devices/dax0.0/ranks/i/size`.

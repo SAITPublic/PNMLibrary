@@ -1,0 +1,449 @@
+From f6f4f782e69e1d9eb1e93d130c8eef881034e0c2 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Mon, 11 Sep 2023 23:02:19 +0300
+Subject: [PATCH 180/225] [alloc] Separate allocator's mutex from its data
+
+Required in order to pass KCSAN tests.
+
+KCSAN got triggered because we annotate it to track
+'alloc' pointer by ASSERT_EXCLUSIVE_ACCESS macro,
+and the same time this pointer is dereferenced by
+concurrent threads in order to get mutex lock.
+
+Resolves: MCS23-1428
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/pnm/sls_resource/allocator.c |   4 +-
+ include/linux/pnm_alloc.h            |  26 ++---
+ lib/pnm/pnm_alloc.c                  | 144 ++++++++++++++-------------
+ 3 files changed, 93 insertions(+), 81 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index 6f07d9004..05e7950c4 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -99,7 +99,7 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 
+ 	lock_sls_allocator();
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc.props);
+ 
+ 		if (kreq.cunit == SLS_ALLOC_ANY_CUNIT)
+ 			kreq.cunit = pnm_alloc_most_free_pool(&alloc);
+@@ -155,7 +155,7 @@ static int deallocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 
+ 	lock_sls_allocator();
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc.props);
+ 
+ 		err = deallocate_memory_unsafe(kreq);
+ 		if (unlikely(err)) {
+diff --git a/include/linux/pnm_alloc.h b/include/linux/pnm_alloc.h
+index 1d1f92962..d6496ae0e 100644
+--- a/include/linux/pnm_alloc.h
++++ b/include/linux/pnm_alloc.h
+@@ -10,19 +10,21 @@
+ #include <linux/types.h>
+ 
+ struct pnm_alloc {
+-	/* Allocator granularity in bytes, the number should be a power of 2 */
+-	uint64_t gran;
+-	/* Should we align size relative to granularity */
+-	bool aligned;
++	struct pnm_alloc_properties {
++		/* Allocator granularity in bytes, the number should be a power of 2 */
++		uint64_t gran;
++		/* Should we align size relative to granularity */
++		bool aligned;
++		uint8_t nr_pools;
++		/* GenAlloc memory pools, each pool has it's own virtual
++		 * range, currently this range is not bound to the real memory by PA,
++		 * Pool range: [reserved_indent, pool_size - reserved_indent]
++		 */
++		struct gen_pool **pools;
++		/* Raw VA ranges for each pool */
++		struct range *ranges;
++	} props;
+ 	struct mutex lock;
+-	uint8_t nr_pools;
+-	/* GenAlloc memory pools, each pool has it's own virtual
+-	 * range, currently this range is not bound to the real memory by PA,
+-	 * Pool range: [reserved_indent, pool_size - reserved_indent]
+-	 */
+-	struct gen_pool **pools;
+-	/* Raw VA ranges for each pool */
+-	struct range *ranges;
+ };
+ 
+ void pnm_alloc_lock(struct pnm_alloc *alloc);
+diff --git a/lib/pnm/pnm_alloc.c b/lib/pnm/pnm_alloc.c
+index 2894e767e..5dd010227 100644
+--- a/lib/pnm/pnm_alloc.c
++++ b/lib/pnm/pnm_alloc.c
+@@ -46,27 +46,27 @@ void pnm_alloc_reset_lock(struct pnm_alloc *alloc)
+ }
+ EXPORT_SYMBOL(pnm_alloc_reset_lock);
+ 
+-static int set_granularity(struct pnm_alloc *alloc, uint64_t gran)
++static int set_granularity(struct pnm_alloc_properties *props, uint64_t gran)
+ {
+ 	if (unlikely(!is_power_of_2(gran))) {
+ 		PNM_ERR("Memory granularity should be a power of 2!\n");
+ 		return -EINVAL;
+ 	}
+-	alloc->gran = gran;
++	props->gran = gran;
+ 	return 0;
+ }
+ 
+-static int init_pool(struct pnm_alloc *alloc, uint8_t idx)
++static int init_pool(struct pnm_alloc_properties *props, uint8_t idx)
+ {
+-	struct range range = alloc->ranges[idx];
++	struct range range = props->ranges[idx];
+ 	struct gen_pool *pool =
+-		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
++		gen_pool_create(ilog2(props->gran), NUMA_NO_NODE);
+ 	int err_code;
+-	uint64_t start = range.start, sz = range_len(&alloc->ranges[idx]);
++	uint64_t start = range.start, sz = range_len(&props->ranges[idx]);
+ 
+ 	if (unlikely(!pool)) {
+ 		PNM_ERR("gen_pool_create failed for pool[%hhu], granularity = [%llu]\n",
+-			idx, alloc->gran);
++			idx, props->gran);
+ 		return -ENOMEM;
+ 	}
+ 
+@@ -79,7 +79,7 @@ static int init_pool(struct pnm_alloc *alloc, uint8_t idx)
+ 	 * the allocator fail.
+ 	 */
+ 	if (!start)
+-		start += alloc->gran;
++		start += props->gran;
+ 
+ 	err_code = gen_pool_add(pool, start, sz, NUMA_NO_NODE);
+ 	if (unlikely(err_code < 0)) {
+@@ -90,8 +90,8 @@ static int init_pool(struct pnm_alloc *alloc, uint8_t idx)
+ 	}
+ 
+ 	PNM_INF("Memory pool[%hhu] initialized: granularity=[%llu], start=[%llu], size=[%llu]\n",
+-		idx, alloc->gran, start, sz);
+-	alloc->pools[idx] = pool;
++		idx, props->gran, start, sz);
++	props->pools[idx] = pool;
+ 
+ 	return 0;
+ }
+@@ -99,7 +99,9 @@ static int init_pool(struct pnm_alloc *alloc, uint8_t idx)
+ int pnm_alloc_pool_malloc(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
+ 			  uint64_t *addr)
+ {
+-	if (idx >= alloc->nr_pools) {
++	struct pnm_alloc_properties *props = &alloc->props;
++
++	if (idx >= props->nr_pools) {
+ 		PNM_ERR("Pool[%hhu] doesn't exist.\n", idx);
+ 		return -EINVAL;
+ 	}
+@@ -109,10 +111,10 @@ int pnm_alloc_pool_malloc(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
+ 		return -EINVAL;
+ 	}
+ 
+-	if (alloc->aligned)
+-		sz = ALIGN(sz, alloc->gran);
++	if (props->aligned)
++		sz = ALIGN(sz, props->gran);
+ 
+-	*addr = gen_pool_alloc(alloc->pools[idx], sz);
++	*addr = gen_pool_alloc(props->pools[idx], sz);
+ 
+ 	if (unlikely(!*addr)) {
+ 		PNM_ERR("Pool[%hhu]: no free memory for object with size = [%llu]\n",
+@@ -121,8 +123,8 @@ int pnm_alloc_pool_malloc(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
+ 	}
+ 
+ 	/* Align if reserved indent there is before, see init_pool func */
+-	if (!alloc->ranges[idx].start)
+-		*addr -= alloc->gran;
++	if (!props->ranges[idx].start)
++		*addr -= props->gran;
+ 
+ 	return 0;
+ }
+@@ -131,17 +133,19 @@ EXPORT_SYMBOL(pnm_alloc_pool_malloc);
+ int pnm_alloc_pool_free(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
+ 			uint64_t *addr)
+ {
+-	if (idx >= alloc->nr_pools) {
++	struct pnm_alloc_properties *props = &alloc->props;
++
++	if (idx >= props->nr_pools) {
+ 		PNM_ERR("Pool[%hhu] doesn't exist.\n", idx);
+ 		return -EINVAL;
+ 	}
+ 
+ 	/* Align if reserved indent there is before, see init_pool func */
+-	if (!alloc->ranges[idx].start)
+-		*addr += alloc->gran;
++	if (!props->ranges[idx].start)
++		*addr += props->gran;
+ 
+-	if (alloc->aligned)
+-		sz = ALIGN(sz, alloc->gran);
++	if (props->aligned)
++		sz = ALIGN(sz, props->gran);
+ 
+ 	/*
+ 	 * [TODO: @e-kutovoi] This check doesn't save against pointers
+@@ -154,13 +158,13 @@ int pnm_alloc_pool_free(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
+ 	 * valid allocations in here, or calling into process manager
+ 	 * before this call.
+ 	 */
+-	if (unlikely(!gen_pool_has_addr(alloc->pools[idx], *addr, sz))) {
++	if (unlikely(!gen_pool_has_addr(props->pools[idx], *addr, sz))) {
+ 		PNM_ERR("The object at %llu of size %llu from pool[%u] doesn't exist\n",
+ 			*addr, sz, idx);
+ 		return -EINVAL;
+ 	}
+ 
+-	gen_pool_free(alloc->pools[idx], *addr, sz);
++	gen_pool_free(props->pools[idx], *addr, sz);
+ 
+ 	return 0;
+ }
+@@ -174,13 +178,13 @@ static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+ 	chunk->end_addr = chunk->start_addr - 1;
+ }
+ 
+-static void cleanup_pools(struct pnm_alloc *alloc)
++static void cleanup_pools(struct pnm_alloc_properties *props)
+ {
+ 	uint8_t idx;
+ 	struct gen_pool *pool;
+ 
+-	for (idx = 0; idx < alloc->nr_pools; ++idx) {
+-		pool = alloc->pools[idx];
++	for (idx = 0; idx < props->nr_pools; ++idx) {
++		pool = props->pools[idx];
+ 		if (unlikely(!pool)) {
+ 			PNM_WRN("Trying to cleanup memory pool[%hhu] that was not created\n",
+ 				idx);
+@@ -201,23 +205,23 @@ static void cleanup_pools(struct pnm_alloc *alloc)
+ 		gen_pool_destroy(pool);
+ 		PNM_INF("Memory pool[%hhu] is destroyed\n", idx);
+ 	}
+-	kfree(alloc->pools);
++	kfree(props->pools);
+ }
+ 
+-static int init_pools(struct pnm_alloc *alloc)
++static int init_pools(struct pnm_alloc_properties *props)
+ {
+ 	uint8_t idx;
+ 	int err_code;
+ 
+-	alloc->pools =
+-		kcalloc(alloc->nr_pools, sizeof(alloc->pools[0]), GFP_KERNEL);
+-	if (!alloc->pools)
++	props->pools =
++		kcalloc(props->nr_pools, sizeof(props->pools[0]), GFP_KERNEL);
++	if (!props->pools)
+ 		return -ENOMEM;
+ 
+-	for (idx = 0; idx < alloc->nr_pools; ++idx) {
+-		err_code = init_pool(alloc, idx);
++	for (idx = 0; idx < props->nr_pools; ++idx) {
++		err_code = init_pool(props, idx);
+ 		if (unlikely(err_code)) {
+-			cleanup_pools(alloc);
++			cleanup_pools(props);
+ 			return err_code;
+ 		}
+ 	}
+@@ -225,55 +229,56 @@ static int init_pools(struct pnm_alloc *alloc)
+ 	return 0;
+ }
+ 
+-static int init_ranges(struct pnm_alloc *alloc, struct range *ranges)
++static int init_ranges(struct pnm_alloc_properties *props, struct range *ranges)
+ {
+ 	uint8_t idx;
+ 
+-	alloc->ranges =
+-		kcalloc(alloc->nr_pools, sizeof(alloc->ranges[0]), GFP_KERNEL);
+-	if (!alloc->ranges)
++	props->ranges =
++		kcalloc(props->nr_pools, sizeof(props->ranges[0]), GFP_KERNEL);
++	if (!props->ranges)
+ 		return -ENOMEM;
+ 
+-	for (idx = 0; idx < alloc->nr_pools; ++idx)
+-		alloc->ranges[idx] = ranges[idx];
++	for (idx = 0; idx < props->nr_pools; ++idx)
++		props->ranges[idx] = ranges[idx];
+ 
+ 	return 0;
+ }
+ 
+-static void cleanup_ranges(struct pnm_alloc *alloc)
++static void cleanup_ranges(struct pnm_alloc_properties *props)
+ {
+-	kfree(alloc->ranges);
++	kfree(props->ranges);
+ }
+ 
+ int pnm_alloc_init(struct pnm_alloc *alloc, uint64_t gran, uint8_t nr_pools,
+ 		   struct range *ranges)
+ {
+-	int err = set_granularity(alloc, gran);
++	struct pnm_alloc_properties *props = &alloc->props;
++	int err = set_granularity(props, gran);
+ 
+ 	if (err)
+ 		return err;
+ 
+-	alloc->aligned = false;
++	props->aligned = false;
+ 	mutex_init(&alloc->lock);
+-	alloc->nr_pools = nr_pools;
+-	err = init_ranges(alloc, ranges);
+-	return err ? err : init_pools(alloc);
++	props->nr_pools = nr_pools;
++	err = init_ranges(props, ranges);
++	return err ? err : init_pools(props);
+ }
+ EXPORT_SYMBOL(pnm_alloc_init);
+ 
+ int pnm_alloc_reset(struct pnm_alloc *alloc)
+ {
+ 	pnm_alloc_reset_lock(alloc);
+-	cleanup_pools(alloc);
+-	return init_pools(alloc);
++	cleanup_pools(&alloc->props);
++	return init_pools(&alloc->props);
+ }
+ EXPORT_SYMBOL(pnm_alloc_reset);
+ 
+ void pnm_alloc_cleanup(struct pnm_alloc *alloc)
+ {
+ 	pnm_alloc_reset_lock(alloc);
+-	cleanup_pools(alloc);
+-	cleanup_ranges(alloc);
++	cleanup_pools(&alloc->props);
++	cleanup_ranges(&alloc->props);
+ 	mutex_destroy(&alloc->lock);
+ }
+ EXPORT_SYMBOL(pnm_alloc_cleanup);
+@@ -281,11 +286,12 @@ EXPORT_SYMBOL(pnm_alloc_cleanup);
+ uint8_t pnm_alloc_most_free_pool(struct pnm_alloc *alloc)
+ {
+ 	uint8_t idx, res_idx = 0;
++	struct pnm_alloc_properties *props = &alloc->props;
+ 	uint64_t pool_free_space,
+-		max_free_space = gen_pool_avail(alloc->pools[0]);
++		max_free_space = gen_pool_avail(props->pools[0]);
+ 
+-	for (idx = 1; idx < alloc->nr_pools; ++idx) {
+-		pool_free_space = gen_pool_avail(alloc->pools[idx]);
++	for (idx = 1; idx < props->nr_pools; ++idx) {
++		pool_free_space = gen_pool_avail(props->pools[idx]);
+ 		if (max_free_space < pool_free_space) {
+ 			max_free_space = pool_free_space;
+ 			res_idx = idx;
+@@ -298,11 +304,12 @@ EXPORT_SYMBOL(pnm_alloc_most_free_pool);
+ uint64_t pnm_alloc_total_sz_pool(struct pnm_alloc *alloc, uint8_t idx)
+ {
+ 	uint64_t sz = 0;
++	struct pnm_alloc_properties *props = &alloc->props;
+ 
+ 	pnm_alloc_lock(alloc);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+-		sz = gen_pool_size(alloc->pools[idx]);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*props);
++		sz = gen_pool_size(props->pools[idx]);
+ 	}
+ 	pnm_alloc_unlock(alloc);
+ 
+@@ -313,13 +320,14 @@ EXPORT_SYMBOL(pnm_alloc_total_sz_pool);
+ uint64_t pnm_alloc_total_sz(struct pnm_alloc *alloc)
+ {
+ 	uint64_t sz = 0;
++	struct pnm_alloc_properties *props = &alloc->props;
+ 	uint8_t idx;
+ 
+ 	pnm_alloc_lock(alloc);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+-		for (idx = 0; idx < alloc->nr_pools; ++idx)
+-			sz += gen_pool_size(alloc->pools[idx]);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*props);
++		for (idx = 0; idx < props->nr_pools; ++idx)
++			sz += gen_pool_size(props->pools[idx]);
+ 	}
+ 	pnm_alloc_unlock(alloc);
+ 
+@@ -330,11 +338,12 @@ EXPORT_SYMBOL(pnm_alloc_total_sz);
+ uint64_t pnm_alloc_free_sz_pool(struct pnm_alloc *alloc, uint8_t idx)
+ {
+ 	uint64_t sz = 0;
++	struct pnm_alloc_properties *props = &alloc->props;
+ 
+ 	pnm_alloc_lock(alloc);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+-		sz = gen_pool_avail(alloc->pools[idx]);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*props);
++		sz = gen_pool_avail(props->pools[idx]);
+ 	}
+ 	pnm_alloc_unlock(alloc);
+ 
+@@ -345,13 +354,14 @@ EXPORT_SYMBOL(pnm_alloc_free_sz_pool);
+ uint64_t pnm_alloc_free_sz(struct pnm_alloc *alloc)
+ {
+ 	uint64_t sz = 0;
++	struct pnm_alloc_properties *props = &alloc->props;
+ 	uint8_t idx;
+ 
+ 	pnm_alloc_lock(alloc);
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
+-		for (idx = 0; idx < alloc->nr_pools; ++idx)
+-			sz += gen_pool_avail(alloc->pools[idx]);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*props);
++		for (idx = 0; idx < props->nr_pools; ++idx)
++			sz += gen_pool_avail(props->pools[idx]);
+ 	}
+ 	pnm_alloc_unlock(alloc);
+ 
+@@ -364,7 +374,7 @@ uint64_t pnm_alloc_granularity(struct pnm_alloc *alloc)
+ 	uint64_t gran;
+ 
+ 	pnm_alloc_lock(alloc);
+-	gran = alloc->gran;
++	gran = alloc->props.gran;
+ 	pnm_alloc_unlock(alloc);
+ 
+ 	return gran;
+@@ -373,12 +383,12 @@ EXPORT_SYMBOL(pnm_alloc_granularity);
+ 
+ void pnm_alloc_set_force_aligned(struct pnm_alloc *alloc, bool alloc_aligned)
+ {
+-	alloc->aligned = alloc_aligned;
++	alloc->props.aligned = alloc_aligned;
+ }
+ EXPORT_SYMBOL(pnm_alloc_set_force_aligned);
+ 
+ bool pnm_alloc_get_force_aligned(struct pnm_alloc *alloc)
+ {
+-	return alloc->aligned;
++	return alloc->props.aligned;
+ }
+ EXPORT_SYMBOL(pnm_alloc_get_force_aligned);
+-- 
+2.34.1
+

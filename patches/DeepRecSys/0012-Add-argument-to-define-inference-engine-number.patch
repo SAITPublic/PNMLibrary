@@ -1,7 +1,7 @@
 From 62d60e44d9edb054999c4739c3170a90c9e89d80 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Mon, 11 Jul 2022 13:31:30 +0300
-Subject: [PATCH 12/33] Add argument to define inference engine number
+Subject: [PATCH 12/34] Add argument to define inference engine number
 
 Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 ---

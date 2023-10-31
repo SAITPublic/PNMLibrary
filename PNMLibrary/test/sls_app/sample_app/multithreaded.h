@@ -18,8 +18,10 @@
 #include "test/sls_app/api/constants.h"
 #include "test/sls_app/api/structs.h"
 
-#include "pnmlib/sls/embedded_tables.h"
+#include "pnmlib/sls/embedding_tables.h"
 #include "pnmlib/sls/sls.h"
+
+#include "pnmlib/core/runner.h"
 
 #include "pnmlib/common/views.h"
 
@@ -37,11 +39,11 @@
 namespace test_app {
 
 template <typename T>
-class SLSTestMultithreaded : private SLSTestStandardHelper<T> {
+class SlsTestMultithreaded : private SlsTestStandardHelper<T> {
 public:
-  using SLSTestStandardHelper<T>::SLSTestStandardHelper;
+  using SlsTestStandardHelper<T>::SlsTestStandardHelper;
 
-  ~SLSTestMultithreaded() override = default;
+  ~SlsTestMultithreaded() override = default;
 
   /**
       @brief Creates threads that run sls operation
@@ -54,7 +56,7 @@ public:
            const std::filesystem::path &root) const;
 
   void print() const {
-    fmt::print("SLSTestMultithreaded\n");
+    fmt::print("SlsTestMultithreaded\n");
     this->print_params();
   }
 
@@ -72,19 +74,21 @@ private:
       4. Golden check for results.
   */
   void worker(std::atomic<int> &visitor_cnt,
-              const pnm::memory::EmbeddedTables *embedded_tables,
+              const pnm::memory::EmbeddingTables *embedding_tables,
               const SlsOpParams &sls_op_params,
               const std::filesystem::path &root) const;
+
+  pnm::Runner runner_{this->ctx_};
 };
 
 template <typename T>
-void SLSTestMultithreaded<T>::run(int num_engines,
+void SlsTestMultithreaded<T>::run(int num_engines,
                                   const std::vector<uint8_t> &tables,
                                   const SlsOpParams &sls_op_params,
                                   const std::filesystem::path &root) const {
 
-  pnm::memory::EmbeddedTables embedded_tables(
-      pnm::view_cast<const uint32_t>(pnm::make_view(tables)),
+  pnm::memory::EmbeddingTables embedding_tables(
+      pnm::views::view_cast<const uint32_t>(pnm::views::make_view(tables)),
       this->model_params_.tables_rows_num,
       this->model_params_.template feature_size_in_bytes<T>(), this->ctx_,
       this->testapp_run_params_.preference);
@@ -93,8 +97,8 @@ void SLSTestMultithreaded<T>::run(int num_engines,
   std::vector<std::future<void>> threads(num_engines);
 
   for (auto &thread : threads) {
-    thread = std::async(std::launch::async, &SLSTestMultithreaded::worker, this,
-                        std::ref(visitor_cnt), &embedded_tables,
+    thread = std::async(std::launch::async, &SlsTestMultithreaded::worker, this,
+                        std::ref(visitor_cnt), &embedding_tables,
                         std::ref(sls_op_params), root);
   }
 
@@ -104,13 +108,13 @@ void SLSTestMultithreaded<T>::run(int num_engines,
 }
 
 template <typename T>
-void SLSTestMultithreaded<T>::worker(
+void SlsTestMultithreaded<T>::worker(
     std::atomic<int> &visitor_cnt,
-    const pnm::memory::EmbeddedTables *embedded_tables,
+    const pnm::memory::EmbeddingTables *embedding_tables,
     const SlsOpParams &sls_op_params, const std::filesystem::path &root) const {
 
-  sls_start_profiling();
-  auto sls_op = this->create_sls_op(embedded_tables);
+  pnm::profile::sls_start_profiling();
+  auto sls_op = this->create_sls_op(embedding_tables);
 
   --visitor_cnt;
   while (visitor_cnt > 0) {
@@ -122,7 +126,7 @@ void SLSTestMultithreaded<T>::worker(
   const double error_ratio = this->perform_golden_check(psum_res, root);
   EXPECT_LE(error_ratio, kmismatch_ratio_threshold_val);
 
-  sls_report_profile();
+  pnm::profile::sls_report_profile();
 }
 
 } // namespace test_app

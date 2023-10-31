@@ -1,0 +1,4 @@
+#!/bin/sh
+
+ln -s /usr/local/etc/bash_completion.d/pnm_ctl /etc/bash_completion.d/
+echo 'Bash completion for pnm_ctl has been installed. You may need to restart your shell for changes to take effect.'

@@ -1,7 +1,7 @@
 From 7183a2a551c600b03572b4c5780b7a72a3ee8172 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Wed, 29 Jun 2022 19:14:19 +0300
-Subject: [PATCH 054/128] [secure] Add option to enable MAC verification
+Subject: [PATCH 054/135] [secure] Add option to enable MAC verification
 
 Add `with_tag` option to operator's arguments set. This option allows to enable
 tag verification process to confirm data consistence and correctness.

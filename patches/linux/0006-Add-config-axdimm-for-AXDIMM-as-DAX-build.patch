@@ -1,7 +1,7 @@
 From a968b9507caf443a4ad6a09a6c8ae648a95a3a95 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 24 Nov 2021 14:07:58 +0900
-Subject: [PATCH 006/161] Add 'config-axdimm' for 'AXDIMM as DAX' build
+Subject: [PATCH 006/225] Add 'config-axdimm' for 'AXDIMM as DAX' build
 
 Just copy it as 'cp -v config-axdimm .config' and build as usual.
 

@@ -75,22 +75,22 @@ public:
   // data size in bytes
   size_t size() const noexcept { return len_; }
 
-  template <typename T> pnm::common_view<T> get_view() const & noexcept {
-    return pnm::make_view<T>(reinterpret_cast<T *>(this->data()),
-                             reinterpret_cast<T *>(this->data()) +
-                                 this->size() / sizeof(T));
+  template <typename T> pnm::views::common<T> get_view() const & noexcept {
+    return pnm::views::make_view<T>(reinterpret_cast<T *>(this->data()),
+                                    reinterpret_cast<T *>(this->data()) +
+                                        this->size() / sizeof(T));
   }
 
   template <typename T>
-  pnm::common_view<T> get_view(size_t size) const & noexcept {
+  pnm::views::common<T> get_view(size_t size) const & noexcept {
     assert(size <= this->size());
-    return pnm::make_view<T>(reinterpret_cast<T *>(this->data()),
-                             reinterpret_cast<T *>(this->data()) +
-                                 size / sizeof(T));
+    return pnm::views::make_view<T>(reinterpret_cast<T *>(this->data()),
+                                    reinterpret_cast<T *>(this->data()) +
+                                        size / sizeof(T));
   }
 
   template <typename T>
-  pnm::common_view<T> get_view() const && noexcept = delete;
+  pnm::views::common<T> get_view() const && noexcept = delete;
 
   explicit operator bool() const noexcept { return data_ptr_ != nullptr; }
 
@@ -136,12 +136,12 @@ public:
   // data size in bytes
   size_t size() const noexcept { return map_data_.size(); }
 
-  template <typename T> pnm::common_view<T> get_view() const & noexcept {
+  template <typename T> pnm::views::common<T> get_view() const & noexcept {
     return map_data_.get_view<T>();
   }
 
   template <typename T>
-  pnm::common_view<T> get_view() const && noexcept = delete;
+  pnm::views::common<T> get_view() const && noexcept = delete;
 
   explicit operator bool() const noexcept { return bool(map_data_); }
 

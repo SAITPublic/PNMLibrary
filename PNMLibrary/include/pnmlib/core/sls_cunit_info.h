@@ -19,31 +19,46 @@
 #define SLS_CUNIT_INFO_H
 
 #include <cstddef>
+#include <cstdint>
+
+namespace pnm::sls {
 
 /***** SLS APIs for customer *****/
 
 /** @brief Enumeration of sls sysfs compute unit info */
-enum class SlsComputeUnitInfo : size_t {
+enum class ComputeUnitInfo : uint8_t {
   State = 0,
   AcquisitionCount,
   FreeSize,
   RegionBaseSize,
   RegionBaseOffset,
+  RegionBaseMapSize,
+  RegionBaseMapOffset,
   RegionInstSize,
   RegionInstOffset,
+  RegionInstMapSize,
+  RegionInstMapOffset,
   RegionCfgrSize,
   RegionCfgrOffset,
+  RegionCfgrMapSize,
+  RegionCfgrMapOffset,
   RegionTagsSize,
   RegionTagsOffset,
+  RegionTagsMapSize,
+  RegionTagsMapOffset,
   RegionPsumSize,
   RegionPsumOffset,
+  RegionPsumMapSize,
+  RegionPsumMapOffset,
   Max
 };
 
-constexpr auto cunit_info_to_index(SlsComputeUnitInfo info) {
+constexpr auto cunit_info_to_index(ComputeUnitInfo info) {
   return static_cast<size_t>(info);
 }
 
-constexpr auto cunit_info_length = cunit_info_to_index(SlsComputeUnitInfo::Max);
+constexpr auto cunit_info_length = cunit_info_to_index(ComputeUnitInfo::Max);
+
+} // namespace pnm::sls
 
 #endif // SLS_CUNIT_INFO_H

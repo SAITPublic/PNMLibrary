@@ -27,7 +27,8 @@ namespace pnm::memory {
 class AccessorCore {
 public:
   template <typename T> const T &access(uint64_t index) const {
-    return *reinterpret_cast<const T *>(access_impl(index * sizeof(T)));
+    return *reinterpret_cast<const T *>(
+        access_impl(index * sizeof(T), sizeof(T)));
   }
 
   template <typename T> void store(T value, uint64_t index) {
@@ -43,7 +44,8 @@ public:
 
 private:
   /** @brief Interface to get pointer for the `byte_offset` data byte */
-  virtual const uint8_t *access_impl(uint64_t byte_offset) const = 0;
+  virtual const uint8_t *access_impl(uint64_t byte_offset,
+                                     uint64_t size) const = 0;
 
   virtual VirtualRegion virtual_range_impl() const = 0;
   virtual DeviceRegion phys_range_impl() const = 0;
@@ -54,6 +56,7 @@ private:
                           uint64_t byte_offset) = 0;
 };
 
+template <typename T> class AccessorProxyRef;
 template <typename T> class Buffer;
 
 /** @brief This is a facade class that provides user-friendly access to the
@@ -61,18 +64,19 @@ template <typename T> class Buffer;
 template <typename T> class Accessor {
 public:
   class Iterator;
-  class Reference;
 
   template <typename Core, typename... Args>
   static Accessor create(Args &&...args) {
     return Accessor{std::make_unique<Core>(std::forward<Args>(args)...)};
   }
 
-  Reference at(uint64_t index) { return Reference(*this, index); }
+  AccessorProxyRef<T> at(uint64_t index) {
+    return AccessorProxyRef(*this, index);
+  }
 
   const T &at(uint64_t index) const { return base_->access<T>(index); }
 
-  Reference operator[](uint64_t index) { return at(index); }
+  AccessorProxyRef<T> operator[](uint64_t index) { return at(index); }
 
   const T &operator[](uint64_t index) const { return at(index); }
 
@@ -101,11 +105,12 @@ private:
 };
 
 /** @brief Proxy object to handle complex store process for device memory */
-template <typename T> class Accessor<T>::Reference {
+template <typename T> class AccessorProxyRef {
 public:
-  Reference(Accessor<T> &base, uint64_t index) : base_{&base}, index_{index} {}
+  AccessorProxyRef(Accessor<T> &base, uint64_t index)
+      : base_{&base}, index_{index} {}
 
-  Reference &operator=(T value) {
+  AccessorProxyRef &operator=(T value) {
     base_->store(value, index_);
     return *this;
   }
@@ -123,10 +128,10 @@ private:
 template <typename T> class Accessor<T>::Iterator {
 public:
   using iterator_category = std::random_access_iterator_tag;
-  using value_type = typename Accessor<T>::Reference;
+  using value_type = AccessorProxyRef<T>;
   using difference_type = uint64_t;
-  using reference = typename Accessor<T>::Reference;
-  using pointer = typename Accessor<T>::Reference;
+  using reference = AccessorProxyRef<T>;
+  using pointer = AccessorProxyRef<T>;
 
   Iterator(Accessor<T> &base, uint64_t position)
       : base_{&base}, current_index_{position} {}

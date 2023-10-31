@@ -24,7 +24,11 @@
 
 namespace pnm::utils {
 
+using pnm::profile::get_profiling_flag;
+using pnm::profile::ProfileInfo;
+
 class NamedTimer {
+
   std::string name_;
 
 public:

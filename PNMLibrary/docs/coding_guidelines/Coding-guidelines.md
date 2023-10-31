@@ -14,3 +14,4 @@ Device driver source tree follows Linux kernel coding style (https://www.kernel.
 * [Using ifdefs](Using-ifdefs.md)
 * [TODO comments](TODO-comments.md)
 * [Braces around statements](Braces-around-statements.md)
+* [Final classes and methods](Final_classes_and_methods.md)

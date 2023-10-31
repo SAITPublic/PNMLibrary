@@ -105,7 +105,7 @@ private:
   Labels global_section_;
 };
 
-/*! Class for loading embedded tables and indices.
+/*! Class for loading embedding tables and indices.
  * @tparam T -- table's entry type*/
 template <typename T> class TestLoader {
 public:
@@ -126,10 +126,10 @@ protected:
   void load_all(const std::filesystem::path &root,
                 const std::string &indices_set_name) {
     TimeStatistics t("LOAD TEST DATA");
-    fmt::print("Loading embedded tables...\n");
+    fmt::print("Loading embedding tables...\n");
     t.start_section("- Tables load");
     ASSERT_NO_THROW(load_tables(root))
-        << "Fail to load embedded tables! Root: " << root
+        << "Fail to load embedding tables! Root: " << root
         << "\tIndices set name: " << indices_set_name;
     t.end_section("- Tables load");
     static constexpr auto tinfo_str = R"(Done. Load {} bytes.
@@ -162,7 +162,7 @@ Tables structure:
   }
 
   void load_tables(const std::filesystem::path &root) {
-    auto thandler = sls::tests::get_test_tables_mmap(root);
+    auto thandler = tools::gen::sls::get_test_tables_mmap(root);
     auto table_view = thandler.mapped_file.get_view<uint8_t>();
     tables_ = std::vector<uint8_t>(table_view.begin(), table_view.end());
     tables_meta_ = std::move(thandler.info);
@@ -170,7 +170,7 @@ Tables structure:
 
   void load_indices(const std::filesystem::path &root,
                     const std::string &indices_set_name) {
-    auto ihandler = sls::tests::get_test_indices(root, indices_set_name);
+    auto ihandler = tools::gen::sls::get_test_indices(root, indices_set_name);
     auto index_count = std::accumulate(ihandler.info.lengths().begin(),
                                        ihandler.info.lengths().end(), 0ULL);
     indices_.resize(index_count);
@@ -181,7 +181,7 @@ Tables structure:
 
   void load_golden(const std::filesystem::path &root,
                    const std::string &indices_set_name) {
-    auto in = sls::tests::get_golden_vector(root, indices_set_name);
+    auto in = tools::gen::sls::get_golden_vector(root, indices_set_name);
     auto size = stream_size(in);
     golden_.resize(size / sizeof(T));
     in.read(reinterpret_cast<char *>(golden_.data()), size);
@@ -196,10 +196,10 @@ Tables structure:
 
 private:
   std::vector<uint8_t> tables_;
-  TablesInfo tables_meta_;
+  tools::gen::sls::TablesInfo tables_meta_;
 
   std::vector<uint32_t> indices_;
-  IndicesInfo indices_meta_;
+  tools::gen::sls::IndicesInfo indices_meta_;
 
   std::vector<T> golden_;
 };
@@ -213,9 +213,9 @@ struct Utils {
                                   const std::vector<uint8_t> &check,
                                   bool has_tag) {
     auto psum_v =
-        pnm::rowwise_view(psum.data(), psum.data() + psum.size(), cols);
+        pnm::views::rowwise(psum.data(), psum.data() + psum.size(), cols);
     auto golden_v =
-        pnm::rowwise_view(golden.data(), golden.data() + golden.size(), cols);
+        pnm::views::rowwise(golden.data(), golden.data() + golden.size(), cols);
 
     auto ok_entries = 0;
     auto check_row = check.begin();

@@ -1,7 +1,7 @@
 From a565785fec78cb59966007eebce2bcd8e072ebcd Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 3 Dec 2021 11:29:18 +0900
-Subject: [PATCH 011/161] [drivers/dax] Apply AXDIMM enhancements
+Subject: [PATCH 011/225] [drivers/dax] Apply AXDIMM enhancements
 
 * setup DAX ranges for all BASE/CFGR/INST/PSUM blocks, fix 'range.end'
   calculation, add explanatory comment about gap before first range

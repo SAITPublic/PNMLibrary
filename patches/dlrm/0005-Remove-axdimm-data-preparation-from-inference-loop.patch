@@ -1,7 +1,7 @@
 From 391e59145ce72fd59cd56621cdc74e635d07d8c3 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Tue, 18 Oct 2022 19:10:54 +0300
-Subject: [PATCH 05/23] Remove axdimm data preparation from inference loop
+Subject: [PATCH 05/24] Remove axdimm data preparation from inference loop
 
 Improved performance of weights conversion from numpy array
 Indices and offsets preparation moved away from inference loop

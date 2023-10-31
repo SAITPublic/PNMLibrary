@@ -16,6 +16,7 @@
 #include "accessor.h"
 #include "accessor_builder.h"
 #include "context.h"
+#include "shared_region.h"
 
 #include "pnmlib/core/memory.h"
 
@@ -40,21 +41,21 @@ public:
   Buffer(uint64_t size, const ContextHandler &context,
          pnm::property::PropertiesList props = {})
       : context_{context.get()}, props_{std::move(props)}, size_{size},
-        dev_region_{context_->allocator()->allocate(size_ * sizeof(T), props_),
-                    true, getpid()} {
+        dev_region_{
+            context_->allocator()->allocate(size_ * sizeof(T), props_)} {
     if (!context_) {
       throw pnm::error::InvalidArguments(
           "Unable to create accessor to contextless buffer.");
     }
   }
 
-  Buffer(pnm::common_view<T> user_range, const ContextHandler &context,
+  Buffer(pnm::views::common<T> user_range, const ContextHandler &context,
          pnm::property::PropertiesList props = {})
       : context_{context.get()}, user_range_{user_range},
         props_{std::move(props)},
         size_{static_cast<uint64_t>(user_range_.size())},
-        dev_region_{context_->allocator()->allocate(size_ * sizeof(T), props_),
-                    true, getpid()} {
+        dev_region_{
+            context_->allocator()->allocate(size_ * sizeof(T), props_)} {
     if (!context_) {
       throw pnm::error::InvalidArguments(
           "Unable to create accessor to contextless buffer.");
@@ -62,20 +63,20 @@ public:
     copy_to_device();
   }
 
-  Buffer(pnm::common_view<const T> user_range, const ContextHandler &context,
+  Buffer(pnm::views::common<const T> user_range, const ContextHandler &context,
          pnm::property::PropertiesList props = {})
       : context_{context.get()}, props_{std::move(props)},
         size_(static_cast<uint64_t>(user_range.size())),
-        dev_region_{context_->allocator()->allocate(size_ * sizeof(T), props_),
-                    true, getpid()} {
+        dev_region_{
+            context_->allocator()->allocate(size_ * sizeof(T), props_)} {
     if (!context_) {
       throw pnm::error::InvalidArguments(
           "Unable to create accessor to contextless buffer.");
     }
 
     context_->transfer_manager()->copy_to_device(
-        pnm::make_view(const_cast<T *>(user_range.begin()),
-                       const_cast<T *>(user_range.end())),
+        pnm::views::make_view(const_cast<T *>(user_range.begin()),
+                              const_cast<T *>(user_range.end())),
         direct_access());
   }
 
@@ -83,7 +84,7 @@ public:
          pnm::property::PropertiesList props = {})
       : context_{context.get()}, props_{std::move(props)},
         size_{std::visit(DeviceRegionSizeVisitor{}, dev_region) / sizeof(T)},
-        dev_region_{dev_region, false, -1} {}
+        dev_region_{dev_region, -1, false, false} {}
 
   Buffer(const Buffer &other) = delete;
 
@@ -93,11 +94,21 @@ public:
         offloaded_{other.offloaded_}, props_{std::exchange(other.props_, {})},
         size_{other.size_}, dev_region_{std::exchange(other.dev_region_, {})} {}
 
+  Buffer(const SharedRegion &shared_region, const ContextHandler &context,
+         pnm::property::PropertiesList props = {})
+      : context_(context.get()), props_(std::move(props)),
+        dev_region_{
+            context_->allocator()->get_shared_alloc(shared_region.get_region()),
+            -1, false, true} {
+    size_ =
+        std::visit(DeviceRegionSizeVisitor{}, dev_region_.value) / sizeof(T);
+  }
+
   Accessor<T> direct_access() {
     return Accessor<T>{create_accessor_core(dev_region_.value, context_)};
   }
 
-  void bind_user_region(pnm::common_view<T> user_range) {
+  void bind_user_region(pnm::views::common<T> user_range) {
     if (static_cast<uint64_t>(user_range.size()) != size_) {
       throw pnm::error::InvalidArguments(
           "Unable to bind user region with size different from buffer size.");
@@ -153,8 +164,21 @@ public:
     return *this;
   }
 
+  SharedRegion make_shared() {
+    if (dev_region_.is_global) {
+      return SharedRegion{dev_region_.value};
+    }
+
+    SharedRegion shared_region{
+        context_->allocator()->share_region(dev_region_.value)};
+    dev_region_.value = shared_region.get_region();
+    dev_region_.is_global = true;
+    return shared_region;
+  }
+
   ~Buffer() {
-    if (dev_region_.owned && dev_region_.owner_process_id == getpid()) {
+    if ((dev_region_.owned && dev_region_.owner_process_id == getpid()) ||
+        dev_region_.is_global) {
       release();
     }
   }
@@ -177,7 +201,6 @@ private:
 
   struct DeviceRegionWrapper {
     DeviceRegion value;
-    bool owned;
 
     // This field solves double free error when buffers are used in forked
     // processes. After fork we have 2 or more buffers that refer to the same
@@ -187,7 +210,9 @@ private:
     // owner_process_id field. In dtor we compare the current process id with
     // it. If values are equal we make a deallocation, otherwise we just skip.
     // [TODO: MCS23-1212] Remove this field after process manager improvement
-    pid_t owner_process_id;
+    pid_t owner_process_id = getpid();
+    bool owned = true;
+    bool is_global = false;
   };
 
   struct DeviceRegionSizeVisitor {
@@ -196,11 +221,11 @@ private:
     uint64_t operator()(const RankedRegion &reg) {
       return reg.regions.empty() ? 0 : this->operator()(reg.regions[0]);
     }
-  };
+  }; // namespace pnm::memory
 
   Context *context_{nullptr};
 
-  pnm::common_view<std::decay_t<T>> user_range_{};
+  pnm::views::common<std::decay_t<T>> user_range_{};
   bool offloaded_{false};
 
   pnm::property::PropertiesList props_;

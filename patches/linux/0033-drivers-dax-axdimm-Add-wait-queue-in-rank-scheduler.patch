@@ -1,7 +1,7 @@
 From c20becebe79d51ea6b6e2b4c66285fc6d5aedadb Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Mon, 8 Aug 2022 16:26:52 +0300
-Subject: [PATCH 033/161] [drivers/dax/axdimm] Add wait queue in rank scheduler
+Subject: [PATCH 033/225] [drivers/dax/axdimm] Add wait queue in rank scheduler
 
 * Wait queues for rank scheduler introduced in order to
 relax userspace polling for rank. IOCTL call which failed

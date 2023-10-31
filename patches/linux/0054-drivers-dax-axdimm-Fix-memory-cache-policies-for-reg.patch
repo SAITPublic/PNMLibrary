@@ -1,7 +1,7 @@
 From 855e5e6d96f1005f8c4ed0202bd16b43fe674a98 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 21 Oct 2022 11:58:49 +0900
-Subject: [PATCH 054/161] [drivers/dax/axdimm] Fix memory cache policies for
+Subject: [PATCH 054/225] [drivers/dax/axdimm] Fix memory cache policies for
  regions
 
 After introducing TAG region axd_mem_regions_e values changed and check in

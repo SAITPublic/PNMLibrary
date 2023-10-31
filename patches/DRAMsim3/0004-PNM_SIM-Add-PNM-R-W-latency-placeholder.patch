@@ -1,7 +1,7 @@
 From ce99f16e09e1d93c9cfecf4486f4f5ded123fad3 Mon Sep 17 00:00:00 2001
 From: Yoojin <yoojin73.kim@samsung.com>
 Date: Thu, 31 Aug 2023 12:54:39 +0900
-Subject: [PATCH 4/4] [PNM_SIM] Add PNM R/W latency (placeholder)
+Subject: [PATCH 4/6] [PNM_SIM] Add PNM R/W latency (placeholder)
 
 ---
  pnm_sim/src/address_decoder.h |  2 +-

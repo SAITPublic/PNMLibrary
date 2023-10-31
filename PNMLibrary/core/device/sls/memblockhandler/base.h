@@ -13,12 +13,12 @@
 #ifndef _SLS_BASE_MEMBLOCKHANDLER_H_
 #define _SLS_BASE_MEMBLOCKHANDLER_H_
 
-#include "core/device/sls/control.h"
-#include "core/device/sls/memory_map.h"
+#include "core/device/sls/utils/memory_map.h"
 
 #include "common/make_error.h"
+#include "common/topology_constants.h"
 
-#include "pnmlib/core/device.h"
+#include "pnmlib/sls/control.h"
 
 #include <linux/sls_resources.h>
 
@@ -28,10 +28,10 @@
 
 namespace pnm::sls::device {
 
-class ISLSMemBlockHandler {
+class ISlsMemBlockHandler {
 public:
   //[TODO: s-motov] Move init function to ctor
-  void init(const MemInfo &info, int device_fd, Device::Type devtype);
+  void init(const MemInfo &info, int device_fd);
 
   void write_block(sls_mem_blocks_e type, uint8_t compute_unit, uint32_t offset,
                    const uint8_t *buf_in, size_t write_size);
@@ -43,9 +43,9 @@ public:
   size_t get_min_block_size(sls_mem_blocks_e block_type) const;
   size_t get_base_memory_size() const;
 
-  virtual ~ISLSMemBlockHandler() = default;
+  virtual ~ISlsMemBlockHandler() = default;
 
-  static std::unique_ptr<ISLSMemBlockHandler> create(Device::Type devtype);
+  static std::unique_ptr<ISlsMemBlockHandler> create(BusType bus_type);
 
 protected:
   virtual void write_block_impl(const memAddr &mem_addr, uint8_t compute_unit,
@@ -54,8 +54,6 @@ protected:
   virtual void read_block_impl(const memAddr &mem_addr, uint8_t compute_unit,
                                sls_mem_blocks_e block_type, uint32_t offset,
                                uint8_t *buf_out, size_t read_size) = 0;
-
-  virtual uint8_t num_compute_units() const = 0;
 
   virtual void *get_block_ptr(sls_mem_blocks_e type, uint8_t compute_unit,
                               uint32_t offset) = 0;
@@ -66,12 +64,12 @@ private:
   MemMap mem_map_;
 };
 
-template <typename SLSMemBlockHandler>
-class SLSMemBlockHandlerImpl : public ISLSMemBlockHandler {
+template <typename SlsMemBlockHandler>
+class SlsMemBlockHandlerImpl : public ISlsMemBlockHandler {
 private:
   void write_block_impl(const memAddr &mem_addr, uint8_t compute_unit,
                         sls_mem_blocks_e block_type, uint32_t offset,
-                        const uint8_t *buf_in, size_t write_size) final {
+                        const uint8_t *buf_in, size_t write_size) override {
     auto *derived = this->derived();
 
     switch (block_type) {
@@ -104,7 +102,7 @@ private:
 
   void read_block_impl(const memAddr &mem_addr, uint8_t compute_unit,
                        sls_mem_blocks_e block_type, uint32_t offset,
-                       uint8_t *buf_out, size_t read_size) final {
+                       uint8_t *buf_out, size_t read_size) override {
     auto *derived = this->derived();
 
     switch (block_type) {
@@ -134,20 +132,16 @@ private:
     throw pnm::error::make_inval("Block type");
   };
 
-  uint8_t num_compute_units() const final {
-    return this->derived()->num_compute_units_impl();
-  }
-
   void *get_block_ptr(sls_mem_blocks_e type, uint8_t compute_unit,
-                      uint32_t offset) final {
+                      uint32_t offset) override {
     return this->derived()->get_block_ptr_impl(type, compute_unit, offset);
   }
 
 protected:
-  auto *derived() { return static_cast<SLSMemBlockHandler *>(this); }
+  auto *derived() { return static_cast<SlsMemBlockHandler *>(this); }
 
   const auto *derived() const {
-    return static_cast<const SLSMemBlockHandler *>(this);
+    return static_cast<const SlsMemBlockHandler *>(this);
   }
 };
 

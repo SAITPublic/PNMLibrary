@@ -1,0 +1,90 @@
+From 04bc19b9a4797acc89e399173ec3dedc009ca975 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Thu, 28 Sep 2023 20:18:00 +0300
+Subject: [PATCH 133/135] [refactor] Sync with PNMLibrary CamelCase refactor
+
+Refers: MCS23-1650
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ aten/src/ATen/native/pnm/PNMTensor.cpp        | 6 +++---
+ aten/src/ATen/native/pnm/PNMTensor.h          | 4 ++--
+ aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp | 2 +-
+ caffe2/operators/lengths_reducer_ops_pnm.cc   | 4 ++--
+ 4 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.cpp b/aten/src/ATen/native/pnm/PNMTensor.cpp
+index 0ade459b..9a956502 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMTensor.cpp
+@@ -6,11 +6,11 @@
+ 
+ namespace {
+ 
+-::pnm::operations::SLSOperation::Type get_sls_type(const c10::ScalarType& type) {
++::pnm::operations::SlsOperation::Type get_sls_type(const c10::ScalarType& type) {
+   if (type == torch::kFloat32) {
+-    return pnm::operations::SLSOperation::Type::Float;
++    return pnm::operations::SlsOperation::Type::Float;
+   } else if (type == torch::kInt32) {
+-    return pnm::operations::SLSOperation::Type::Uint32;
++    return pnm::operations::SlsOperation::Type::Uint32;
+   } else {
+     TORCH_CHECK(false, "Unsupported scalar type");
+   }
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.h b/aten/src/ATen/native/pnm/PNMTensor.h
+index 238571bc..b90ba06e 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.h
++++ b/aten/src/ATen/native/pnm/PNMTensor.h
+@@ -50,7 +50,7 @@ class PnmTensor : public PnmBaseTensor {
+     return tables_.get();
+   }
+ 
+-  ::pnm::operations::SLSOperation::Type get_sls_type() const {
++  ::pnm::operations::SlsOperation::Type get_sls_type() const {
+     return sls_type_;
+   }
+ 
+@@ -62,7 +62,7 @@ class PnmTensor : public PnmBaseTensor {
+   void load(const void* weights_data);
+ 
+   ::pnm::memory::EmbeddedTablesHandler tables_;
+-  ::pnm::operations::SLSOperation::Type sls_type_{};
++  ::pnm::operations::SlsOperation::Type sls_type_{};
+   ::pnm::Runner runner_;
+ };
+ 
+diff --git a/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp
+index 50f9b0d9..ccb52606 100644
+--- a/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp
+@@ -38,7 +38,7 @@ at::Tensor embedding_bag_forward_simple_impl(
+   const PnmTensor& ten = convert<PnmTensor>(weights);
+   const auto& tables_rows_num = ten.get_tables_rows_num();
+ 
+-  ::pnm::operations::SLSOperation sls_op{
++  ::pnm::operations::SlsOperation sls_op{
+       ten.get_sparse_feature_size(),
+       ::pnm::views::make_view(tables_rows_num),
+       ten.get_tables_layout(),
+diff --git a/caffe2/operators/lengths_reducer_ops_pnm.cc b/caffe2/operators/lengths_reducer_ops_pnm.cc
+index 4de2f98e..08881c3e 100644
+--- a/caffe2/operators/lengths_reducer_ops_pnm.cc
++++ b/caffe2/operators/lengths_reducer_ops_pnm.cc
+@@ -300,11 +300,11 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+     const uint32_t sparse_feature_size =
+         Input(tables_vec_start_idx_).size_from_dim(1);
+ 
+-    pnm::operations::SLSOperation sls_op{
++    pnm::operations::SlsOperation sls_op{
+         sparse_feature_size,
+         pnm::views::make_const_view(tables_sizes_),
+         tables_.get(),
+-        pnm::operations::SLSOperation::Type::Float};
++        pnm::operations::SlsOperation::Type::Float};
+ 
+     // NOTE: After the procedure above the _offset_ variables contain the actual
+     // full sizes
+-- 
+2.34.1
+

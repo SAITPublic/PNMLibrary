@@ -1,7 +1,7 @@
 From 4f189242b4f1d1721ddcf8a99788a608d7df8a21 Mon Sep 17 00:00:00 2001
 From: "s.koval" <s.koval@samsung.com>
 Date: Tue, 26 Jul 2022 10:31:09 +0300
-Subject: [PATCH 063/128] [core API] Memory allocation REPLICATE_ALL strategy
+Subject: [PATCH 063/135] [core API] Memory allocation REPLICATE_ALL strategy
 
 * Support new memory allocation API
 

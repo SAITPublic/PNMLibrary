@@ -1,7 +1,7 @@
 From b684c0f6606f2af88f29e1a4ee396d4cfb84c90d Mon Sep 17 00:00:00 2001
 From: Petr Bred <p.bred@samsung.com>
 Date: Tue, 9 Aug 2022 18:19:38 +0300
-Subject: [PATCH 064/128] [caffe2] Reflect axdimm_write_rank_data API arguments
+Subject: [PATCH 064/135] [caffe2] Reflect axdimm_write_rank_data API arguments
  changes
 
 Signed-off-by: Petr Bred <p.bred@samsung.com>

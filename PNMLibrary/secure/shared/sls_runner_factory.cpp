@@ -12,19 +12,19 @@
 #include <memory>
 #include <type_traits>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 PNM_API std::unique_ptr<IRunner> make_runner(RunnerType type) {
 
   switch (type) {
   case RunnerType::INT:
-    return std::make_unique<ProdConsSLSRunner<int32_t>>();
+    return std::make_unique<ProdConsSlsRunner<int32_t>>();
   case RunnerType::FLOAT:
-    return std::make_unique<ProdConsSLSRunner<uint32_t>>();
+    return std::make_unique<ProdConsSlsRunner<uint32_t>>();
   default:
     throw pnm::error::make_not_sup("Secure runner type({}).",
                                    std::underlying_type_t<RunnerType>(type));
   }
 }
 
-} // namespace sls::secure
+} // namespace pnm::sls::secure

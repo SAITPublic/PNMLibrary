@@ -1,0 +1,217 @@
+From de44651adf5a7df975635d0e792cfca95c884d6e Mon Sep 17 00:00:00 2001
+From: "bin01.wang" <bin01.wang@samsung.com>
+Date: Tue, 26 Sep 2023 04:52:05 +0800
+Subject: [PATCH 192/225] [PNM][ZSWAP] Fix some defects detected by SVACE
+
+1. Fix one defect in sim.c, and release proc_fs when
+   exception occurs.
+2. Fix another defect in pnm_zswap.c detected by static
+   code analyzing.
+3. modify the incorrect paths of parameters to correct
+   in /pnm/zswap/server/pnm_sim_mode.sh.
+
+Resolve: MCS23-1552
+
+Signed-off-by: bin01.wang <bin01.wang@samsung.com>
+---
+ drivers/pnm/zswap/sim.c                  | 56 ++++++++++++++++++++----
+ mm/pnm/pnm_zswap.c                       |  2 +-
+ scripts/pnm/zswap/server/pnm_sim_mode.sh | 32 ++++++++------
+ 3 files changed, 67 insertions(+), 23 deletions(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 853c726fa..cf09368be 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -656,12 +656,33 @@ static const struct proc_ops pnm_cycle_fops = {
+ 	.proc_write = pnm_proc_write,
+ };
+ 
+-static void init_procfs(void)
+-{
+-	struct proc_dir_entry *proc_fs_pnm;
++/* proc file system for recording zswap bench*/
++static struct proc_dir_entry *proc_fs_pnm, *proc_zswap_bench_file;
+ 
++static int init_procfs(void)
++{
+ 	proc_fs_pnm = proc_mkdir("pnm", NULL);
+-	proc_create("zswap_bench", 0644, proc_fs_pnm, &pnm_cycle_fops);
++	if (!proc_fs_pnm) {
++		pr_err("[pnm_sim] Init the proc fs failed, cannot create pnm directory!");
++		goto create_proc_dir_fail;
++	}
++	proc_zswap_bench_file =
++		proc_create("zswap_bench", 0644, proc_fs_pnm, &pnm_cycle_fops);
++	if (!proc_zswap_bench_file) {
++		pr_err("[pnm_sim] Init the proc fs failed, cannot create zswap_bench file!");
++		goto create_proc_entry_fail;
++	}
++	return 0;
++create_proc_entry_fail:
++	proc_remove(proc_fs_pnm);
++create_proc_dir_fail:
++	return -ENOMEM;
++}
++
++static void release_procfs(void)
++{
++	proc_remove(proc_zswap_bench_file);
++	proc_remove(proc_fs_pnm);
+ }
+ 
+ static void cxl_pnm_sim_shutdown(void)
+@@ -676,6 +697,7 @@ static void cxl_pnm_sim_shutdown(void)
+ 		kthread_stop(pnm_ctrl->decompress[i].task_unit);
+ 
+ 	WRITE_ONCE(sim_is_active, false);
++	release_procfs();
+ }
+ 
+ void cxl_pnm_sim_exit(void)
+@@ -809,10 +831,14 @@ static void pnm_unit_gen(void)
+ 	pnm_ctrl->is_active = true;
+ }
+ 
+-static void pnm_sim_init(void)
++static int pnm_sim_init(void)
+ {
+ 	/* Descriptor for info of PNM device */
+ 	pnm_ctrl = ioremap_cache(PNM_INFO_BASE_ADDR, PNM_INFO_SIZE);
++	if (!pnm_ctrl) {
++		pr_err("[pnm_sim] Init pnm_sim failed, because the result of ioremap_cache is NULL!");
++		return -EIO;
++	}
+ 
+ 	/* TODO: limit num_comp_unit to MAX_UNIT, error check */
+ 	pnm_ctrl->num_compress = num_comp_unit;
+@@ -831,6 +857,7 @@ static void pnm_sim_init(void)
+ 		(void *)HIDDEN_POOL_BASE_ADDR,
+ 		(void *)HIDDEN_POOL_BASE_ADDR + HIDDEN_POOL_SIZE,
+ 		HIDDEN_POOL_SIZE);
++	return 0;
+ }
+ 
+ /* This function is callback to `enabled` kernel module parameter.
+@@ -840,6 +867,7 @@ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ {
+ 	const int rc = param_set_bool(val, kp);
+ 	bool enable_sim;
++	int ret = 0;
+ 
+ 	if (rc)
+ 		return rc;
+@@ -853,13 +881,25 @@ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ 		WRITE_ONCE(sim_is_active, true);
+ 		pr_info("[pnm_sim] pnm simulator engine loaded!\n");
+ 		init_benchmark_data();
+-		init_procfs();
+-		pnm_sim_init();
++		ret = init_procfs();
++		if (ret) {
++			pr_err("[pnm_sim] pnm simulator engine load failed!\n");
++			goto init_procfs_fail;
++		}
++		ret = pnm_sim_init();
++		if (ret) {
++			pr_err("[pnm_sim] pnm simulator engine load failed!\n");
++			goto pnm_sim_init_fail;
++		}
+ 		pnm_unit_gen();
+ 	} else {
+ 		pr_info("[pnm_sim] pnm simulator stopped!\n");
+ 		cxl_pnm_sim_shutdown();
+ 	}
+-
+ 	return 0;
++pnm_sim_init_fail:
++	release_procfs();
++init_procfs_fail:
++	WRITE_ONCE(sim_is_active, false);
++	return -1;
+ }
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index 39fc4bce1..3de58a3b4 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1292,7 +1292,7 @@ static int cxl_zswap_writeback_entry(struct zpool *pool, unsigned long handle)
+ 	struct page *page;
+ 
+ 	struct crypto_acomp_ctx *acomp_ctx;
+-	u8 *src, *dst, *tmp, *instbuf = NULL;
++	u8 *src, *dst, *tmp = NULL, *instbuf = NULL;
+ 	bool pnm_use;
+ 	size_t dlen;
+ 	int ret;
+diff --git a/scripts/pnm/zswap/server/pnm_sim_mode.sh b/scripts/pnm/zswap/server/pnm_sim_mode.sh
+index f90130ebd..3466b5f87 100755
+--- a/scripts/pnm/zswap/server/pnm_sim_mode.sh
++++ b/scripts/pnm/zswap/server/pnm_sim_mode.sh
+@@ -1,6 +1,9 @@
+ #!/bin/bash
+ # SPDX-License-Identifier: GPL-2.0
+ 
++PNM_ZSWAP_SIM=pnm_zswap_sim
++PNM_ZSWAP=pnm_zswap
++
+ ## Fix CPU frequency
+ function set_cpufreq() {
+   for i in {0..63}
+@@ -32,20 +35,21 @@ function set_cpu_offline() {
+ 
+ # Set pnm simulator
+ function set_pnm_sim() {
+-  echo Y > /sys/module/cxl_pnm_drv/parameters/pnm_drv_enabled
++  modprobe $PNM_ZSWAP_SIM
++  echo Y > /sys/module/${PNM_ZSWAP_SIM}/parameters/pnm_drv_enabled
+ 
+   # the number of pnm units
+-  echo 4 > /sys/module/pnm_sim/parameters/num_comp_unit
+-  echo 4 > /sys/module/pnm_sim/parameters/num_dcomp_unit
++  echo 4 > /sys/module/${PNM_ZSWAP_SIM}/parameters/num_comp_unit
++  echo 4 > /sys/module/${PNM_ZSWAP_SIM}/parameters/num_dcomp_unit
+ 
+   # set core affinity of kthreads for pnm units
+-  echo 32 > /sys/module/pnm_sim/parameters/pnm_core
++  echo 32 > /sys/module/${PNM_ZSWAP_SIM}/parameters/pnm_core
+ 
+   # for logging
+-  # echo Y > /sys/module/pnm_sim/parameters/log_enabled
++  # echo Y > /sys/module/${PNM_ZSWAP_SIM}/parameters/log_enabled
+   # echo Y > /sys/module/compress_unit/parameters/log_enabled
+ 
+-  echo Y > /sys/module/pnm_sim/parameters/enabled
++  echo Y > /sys/module/${PNM_ZSWAP_SIM}/parameters/enabled
+ 
+   echo 300 > /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
+   echo 1 > /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress
+@@ -54,18 +58,18 @@ function set_pnm_sim() {
+ 
+ # Set cxl_zswap
+ function set_cxl_zswap() {
+-  echo 1 > /sys/module/cxl_zswap/parameters/cxl_mem_node
+-  echo pnm > /sys/module/cxl_zswap/parameters/pnm_accel
+-  echo 20 > /sys/module/cxl_zswap/parameters/max_pool_percent
+-  echo zbud > /sys/module/cxl_zswap/parameters/zpool
+-  echo 90 > /sys/module/cxl_zswap/parameters/accept_threshold_percent
++  echo 1 > /sys/module/${PNM_ZSWAP}/parameters/cxl_mem_node
++  echo pnm > /sys/module/${PNM_ZSWAP}/parameters/pnm_accel
++  echo 20 > /sys/module/${PNM_ZSWAP}/parameters/max_pool_percent
++  echo zbud > /sys/module/${PNM_ZSWAP}/parameters/zpool
++  echo 90 > /sys/module/${PNM_ZSWAP}/parameters/accept_threshold_percent
+ 
+-  echo Y > /sys/module/cxl_zswap/parameters/pnm_enabled
+-  echo Y > /sys/module/cxl_zswap/parameters/enabled
++  echo Y > /sys/module/${PNM_ZSWAP}/parameters/pnm_enabled
++  echo Y > /sys/module/${PNM_ZSWAP}/parameters/enabled
+ 
+   echo 100 > /proc/sys/vm/swappiness
+ 
+-  grep -R . /sys/kernel/debug/cxl_zswap
++  grep -R . /sys/kernel/debug/${PNM_ZSWAP}
+ }
+ 
+ # Set environment for profiling
+-- 
+2.34.1
+

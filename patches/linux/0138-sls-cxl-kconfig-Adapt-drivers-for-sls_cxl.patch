@@ -1,7 +1,7 @@
 From bf7651befec16bc58dd949d82433b84aedd28876 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Wed, 12 Jul 2023 20:49:38 -0400
-Subject: [PATCH 138/161] [sls][cxl][kconfig] Adapt drivers for sls_cxl
+Subject: [PATCH 138/225] [sls][cxl][kconfig] Adapt drivers for sls_cxl
 
 - Add choice for sls cxl/axdimm bus
 - Adapt get_memory_info for cxl, now we have two contiguous regions,

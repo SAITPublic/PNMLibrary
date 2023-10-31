@@ -1,7 +1,7 @@
 From a76b5ff2a72aae26ae35b08a7e0f17ae2fa4ca53 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Wed, 15 Feb 2023 19:25:40 +0300
-Subject: [PATCH 081/161] [config-axdimm, Kconfig, Makefile] Add build flag to
+Subject: [PATCH 081/225] [config-axdimm, Kconfig, Makefile] Add build flag to
  disable AxDIMM
 
 Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>

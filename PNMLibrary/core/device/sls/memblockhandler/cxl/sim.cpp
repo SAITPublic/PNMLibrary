@@ -28,7 +28,7 @@ namespace pnm::sls::device {
 */
 
 [[maybe_unused]] uint32_t
-CXLSimulatorMemBlockHandler::get_mem_val(uint8_t compute_unit, uint32_t type,
+CxlSimulatorMemBlockHandler::get_mem_val(uint8_t compute_unit, uint32_t type,
                                          uint64_t offset) {
   const uint32_t *pmem =
       reinterpret_cast<uint32_t *>(mem_map()[compute_unit].addr[type]);
@@ -36,14 +36,14 @@ CXLSimulatorMemBlockHandler::get_mem_val(uint8_t compute_unit, uint32_t type,
 }
 
 [[maybe_unused]] uint64_t
-CXLSimulatorMemBlockHandler::get_mem_addr(uint8_t compute_unit, uint32_t type,
+CxlSimulatorMemBlockHandler::get_mem_addr(uint8_t compute_unit, uint32_t type,
                                           uint64_t offset) {
   const uint32_t *pmem =
       reinterpret_cast<uint32_t *>(mem_map()[compute_unit].addr[type]);
   return reinterpret_cast<uint64_t>(&pmem[offset / sizeof(uint32_t)]);
 }
 
-[[maybe_unused]] void CXLSimulatorMemBlockHandler::write_reg(uint8_t *reg_addr,
+[[maybe_unused]] void CxlSimulatorMemBlockHandler::write_reg(uint8_t *reg_addr,
                                                              uint32_t val) {
   *reinterpret_cast<volatile uint32_t *>(reg_addr) = val;
 }

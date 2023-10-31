@@ -1,7 +1,7 @@
 From f0937b179395513afb5647f284270fecafa2326e Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 20 Dec 2021 12:59:22 +0900
-Subject: [PATCH 016/161] [drivers/dax/axdimm] Setup caching flags in mmap
+Subject: [PATCH 016/225] [drivers/dax/axdimm] Setup caching flags in mmap
  handler
 
 Use PAT (Documentation/x86/pat.rst) to setup caching flags for memory regions

@@ -29,11 +29,11 @@
 #include <utility>
 #include <vector>
 
+using pnm::sls::device::topo;
+
 class SequentialAllocator : public ::testing::Test {
 protected:
-  void SetUp() override {
-    ctx_ = pnm::make_context(pnm::Device::Type::IMDB_CXL);
-  }
+  void SetUp() override { ctx_ = pnm::make_context(pnm::Device::Type::IMDB); }
 
   auto &alloc() { return ctx_->allocator(); }
 
@@ -77,7 +77,7 @@ TEST_F(SequentialAllocator, SizeAndAlign) {
 }
 
 TEST(SlsAllocator, AllocationFail) {
-  auto ctx = pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  auto ctx = pnm::make_context(pnm::Device::Type::SLS);
   auto &alloc = ctx->allocator();
 
   EXPECT_THROW(alloc->allocate(0), pnm::error::InvalidArguments);
@@ -85,7 +85,7 @@ TEST(SlsAllocator, AllocationFail) {
 }
 
 TEST(SlsAllocator, AllocateOnes) {
-  auto ctx = pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  auto ctx = pnm::make_context(pnm::Device::Type::SLS);
   auto &alloc = ctx->allocator();
 
   auto get = [](auto &variant) -> pnm::memory::RankedRegion & {
@@ -99,9 +99,9 @@ TEST(SlsAllocator, AllocateOnes) {
         one = alloc->allocate(alloc_size, pnm::memory::property::AllocPolicy{
                                               SLS_ALLOC_REPLICATE_ALL}));
     EXPECT_NO_THROW(std::get<pnm::memory::RankedRegion>(one));
-    EXPECT_EQ(get(one).regions.size(), pnm::device::topo().NumOfRanks);
+    EXPECT_EQ(get(one).regions.size(), topo().NumOfCUnits);
 
-    for (auto i = 0U; i < pnm::device::topo().NumOfRanks; ++i) {
+    for (auto i = 0U; i < topo().NumOfCUnits; ++i) {
       EXPECT_EQ(get(one).regions[i].size, alloc_size);
     }
 
@@ -109,14 +109,15 @@ TEST(SlsAllocator, AllocateOnes) {
 
     ASSERT_NO_THROW(one = alloc->allocate(alloc_size));
     EXPECT_NO_THROW(std::get<pnm::memory::RankedRegion>(one));
-    EXPECT_EQ(get(one).regions.size(), pnm::device::topo().NumOfRanks);
+    EXPECT_EQ(get(one).regions.size(), topo().NumOfCUnits);
 
-    EXPECT_EQ(std::count_if(get(one).regions.begin(), get(one).regions.end(),
-                            [](const auto &e) { return e.location == -1; }),
-              pnm::device::topo().NumOfRanks - 1);
+    EXPECT_EQ(
+        std::count_if(get(one).regions.begin(), get(one).regions.end(),
+                      [](const auto &e) { return !e.location.has_value(); }),
+        topo().NumOfCUnits - 1);
 
     for (auto &r : get(one).regions) {
-      if (r.location != -1) {
+      if (r.location.has_value()) {
         EXPECT_EQ(r.size, alloc_size);
       }
     }
@@ -126,7 +127,7 @@ TEST(SlsAllocator, AllocateOnes) {
 }
 
 TEST(SlsAllocator, AllocateSequence) {
-  auto ctx = pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  auto ctx = pnm::make_context(pnm::Device::Type::SLS);
   auto &alloc = ctx->allocator();
 
   auto get = [](auto &variant) {
@@ -138,7 +139,7 @@ TEST(SlsAllocator, AllocateSequence) {
     pnm::memory::DeviceRegion dregion;
     ASSERT_NO_THROW(dregion = alloc->allocate(i));
     const auto &rref = get(dregion);
-    EXPECT_EQ(rref.regions.size(), pnm::device::topo().NumOfRanks);
+    EXPECT_EQ(rref.regions.size(), topo().NumOfCUnits);
     EXPECT_NO_THROW(alloc->deallocate(dregion));
   }
 
@@ -148,13 +149,13 @@ TEST(SlsAllocator, AllocateSequence) {
         dregion = alloc->allocate(
             i, pnm::memory::property::AllocPolicy{SLS_ALLOC_REPLICATE_ALL}));
     const auto &rref = get(dregion);
-    EXPECT_EQ(rref.regions.size(), pnm::device::topo().NumOfRanks);
+    EXPECT_EQ(rref.regions.size(), topo().NumOfCUnits);
     EXPECT_NO_THROW(alloc->deallocate(dregion));
   }
 }
 
 TEST(SlsAllocator, DeferredDeallocation) {
-  auto ctx = pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  auto ctx = pnm::make_context(pnm::Device::Type::SLS);
   auto &alloc = ctx->allocator();
 
   auto get = [](auto &variant) {
@@ -168,15 +169,7 @@ TEST(SlsAllocator, DeferredDeallocation) {
     pnm::memory::DeviceRegion dregion;
     ASSERT_NO_THROW(dregion = alloc->allocate(i));
     const auto &rref = get(dregion);
-    EXPECT_EQ(rref.regions.size(), pnm::device::topo().NumOfRanks);
-    regions.emplace_back(std::move(dregion));
-  }
-
-  for (auto i = 1; i <= ALLOCATION_ATTEMPTS; ++i) {
-    pnm::memory::DeviceRegion dregion;
-    ASSERT_NO_THROW(dregion = alloc->allocate(i));
-    const auto &rref = get(dregion);
-    EXPECT_EQ(rref.regions.size(), pnm::device::topo().NumOfRanks);
+    EXPECT_EQ(rref.regions.size(), topo().NumOfCUnits);
     regions.emplace_back(std::move(dregion));
   }
 

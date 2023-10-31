@@ -1,0 +1,141 @@
+From bf5ac9c7ba58eaa48cfd5a42fb2811fa640d5103 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 13 Oct 2023 06:37:40 +0000
+Subject: [PATCH 134/135] [NFC] Rename 'embedded tables' to 'embedding tables'
+
+The correct term for *table of embedding values (embeddings)* is
+"embedding table", not "embedded table", fix this now.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ aten/src/ATen/native/pnm/PNMTensor.cpp      |  2 +-
+ aten/src/ATen/native/pnm/PNMTensor.h        |  6 +++---
+ caffe2/operators/lengths_reducer_ops_pnm.cc | 10 +++++-----
+ caffe2/python/pybind_state_pnm.cc           |  6 +++---
+ 4 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.cpp b/aten/src/ATen/native/pnm/PNMTensor.cpp
+index 9a956502..08409dbf 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMTensor.cpp
+@@ -85,7 +85,7 @@ void PnmTensor::load(const void* weights_data) {
+   tables_size *=
+       sparse_feature_size_ * c10::scalarTypeToTypeMeta(scalar_type_).itemsize();
+ 
+-  tables_ = ::pnm::memory::EmbeddedTables::create(
++  tables_ = ::pnm::memory::EmbeddingTables::create(
+       ::pnm::views::make_view(static_cast<const uint8_t*>(weights_data), tables_size),
+       tables_rows_num_,
+       sparse_feature_size_ * c10::scalarTypeToTypeMeta(scalar_type_).itemsize(),
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.h b/aten/src/ATen/native/pnm/PNMTensor.h
+index b90ba06e..d32c56e6 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.h
++++ b/aten/src/ATen/native/pnm/PNMTensor.h
+@@ -1,7 +1,7 @@
+ #ifndef __PNM_TENSOR__
+ #define __PNM_TENSOR__
+ 
+-#include <pnmlib/sls/embedded_tables.h>
++#include <pnmlib/sls/embedding_tables.h>
+ #include <pnmlib/sls/operation.h>
+ #include <pnmlib/sls/sls.h>
+ 
+@@ -46,7 +46,7 @@ class PnmTensor : public PnmBaseTensor {
+       ::pnm::Device::Type device_type,
+       sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL);
+ 
+-  const ::pnm::memory::EmbeddedTables* get_tables_layout() const {
++  const ::pnm::memory::EmbeddingTables* get_tables_layout() const {
+     return tables_.get();
+   }
+ 
+@@ -61,7 +61,7 @@ class PnmTensor : public PnmBaseTensor {
+  private:
+   void load(const void* weights_data);
+ 
+-  ::pnm::memory::EmbeddedTablesHandler tables_;
++  ::pnm::memory::EmbeddingTablesHandler tables_;
+   ::pnm::operations::SlsOperation::Type sls_type_{};
+   ::pnm::Runner runner_;
+ };
+diff --git a/caffe2/operators/lengths_reducer_ops_pnm.cc b/caffe2/operators/lengths_reducer_ops_pnm.cc
+index 08881c3e..f87964cf 100644
+--- a/caffe2/operators/lengths_reducer_ops_pnm.cc
++++ b/caffe2/operators/lengths_reducer_ops_pnm.cc
+@@ -8,7 +8,7 @@
+ #include <pnmlib/common/error.h>
+ #include <pnmlib/common/views.h>
+ #include <pnmlib/core/runner.h>
+-#include <pnmlib/sls/embedded_tables.h>
++#include <pnmlib/sls/embedding_tables.h>
+ #include <pnmlib/sls/operation.h>
+ #include <pnmlib/sls/sls.h>
+ 
+@@ -166,13 +166,13 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+       LoadTables();
+     } else {
+       tables_.reset(
+-          reinterpret_cast<pnm::memory::EmbeddedTables*>(tables_descr));
++          reinterpret_cast<pnm::memory::EmbeddingTables*>(tables_descr));
+ 
+       // Take context from existed embedded tables
+       CAFFE_ENFORCE_EQ(
+           static_cast<int>(tables_->buffers().front().context()->type()),
+           static_cast<int>(device_type),
+-          "Embedded tables context mismatch!");
++          "Embedding tables context mismatch!");
+     }
+ 
+     runner_ = std::make_unique<pnm::Runner>(pnm_ctx_);
+@@ -375,7 +375,7 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+         static_cast<sls_user_preferences>(this->template GetSingleArgument<int>(
+             "mem_preference", SLS_ALLOC_AUTO));
+ 
+-    tables_ = pnm::memory::EmbeddedTables::create(
++    tables_ = pnm::memory::EmbeddingTables::create(
+         pnm::views::make_view<const uint8_t>(
+             static_cast<const uint8_t*>(data), tables_size * sizeof(T)),
+         rows,
+@@ -409,7 +409,7 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+   pnm::ContextHandler pnm_ctx_ = nullptr;
+   std::unique_ptr<pnm::Runner> runner_ = nullptr;
+ 
+-  pnm::memory::EmbeddedTablesHandler tables_ = nullptr;
++  pnm::memory::EmbeddingTablesHandler tables_ = nullptr;
+ 
+   bool private_tables_ = false;
+ };
+diff --git a/caffe2/python/pybind_state_pnm.cc b/caffe2/python/pybind_state_pnm.cc
+index ef3d49bc..4fb6ae52 100644
+--- a/caffe2/python/pybind_state_pnm.cc
++++ b/caffe2/python/pybind_state_pnm.cc
+@@ -14,7 +14,7 @@
+ #include "caffe2/operators/operator_fallback_pnm.h"
+ #include "caffe2/python/pybind_state_registry.h"
+ 
+-#include <pnmlib/sls/embedded_tables.h>
++#include <pnmlib/sls/embedding_tables.h>
+ #include <pnmlib/sls/sls.h>
+ 
+ #include <fcntl.h>
+@@ -24,7 +24,7 @@
+ namespace {
+ 
+ static pnm::ContextHandler pnm_ctx;
+-static pnm::memory::EmbeddedTablesHandler tables;
++static pnm::memory::EmbeddingTablesHandler tables;
+ 
+ } // namespace
+ 
+@@ -81,7 +81,7 @@ void addPNMGlobalMethods(py::module& m) {
+             throw std::runtime_error("Fail to mmap embedded tables' source");
+           }
+ 
+-          tables = pnm::memory::EmbeddedTables::create(
++          tables = pnm::memory::EmbeddingTables::create(
+               pnm::views::make_view(addr, file_size),
+               table_entry,
+               row_size_in_bytes,
+-- 
+2.34.1
+

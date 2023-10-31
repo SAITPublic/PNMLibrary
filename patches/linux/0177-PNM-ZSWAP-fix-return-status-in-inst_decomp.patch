@@ -1,0 +1,32 @@
+From 482f520ae996719a3632134279016b73f85f011a Mon Sep 17 00:00:00 2001
+From: "xiao.lan" <xiao.lan@samsung.com>
+Date: Wed, 13 Sep 2023 01:14:55 +0800
+Subject: [PATCH 177/225] [PNM][ZSWAP]fix return status in inst_decomp
+
+when inst_decomp reading the results, return status value should be
+modified READ_ONCE(pnm_ctrl->decompress[pnm_id].commit.status) instead
+of READ_ONCE(pnm_ctrl->compress[pnm_id].commit.status).
+
+Resolve:MCS23-1552
+
+Signed-off-by: xiao.lan <xiao.lan@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 46bbefae0..bd54c1256 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -241,7 +241,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 
+ 			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].done, false);
+ 			return READ_ONCE(
+-				pnm_ctrl->compress[pnm_id].commit.status);
++				pnm_ctrl->decompress[pnm_id].commit.status);
+ 		}
+ 	} while (ktime_before(ktime_get(), kdeadline));
+ 
+-- 
+2.34.1
+

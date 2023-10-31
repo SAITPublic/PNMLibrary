@@ -30,7 +30,7 @@ void alloc_dealloc_fixed(benchmark::State &state) {
 
   std::vector<pnm::memory::DeviceRegion> regions;
 
-  auto context = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  auto context = pnm::make_context(pnm::Device::Type::IMDB);
   auto &allocator = context->allocator();
   const auto &device = *context->device()->as<pnm::imdb::device::BaseDevice>();
 

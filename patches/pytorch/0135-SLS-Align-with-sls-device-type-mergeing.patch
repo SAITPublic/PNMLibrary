@@ -1,0 +1,281 @@
+From 20a1cfd15cea8dd279499a917bbf4f56c7322c54 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 10 Oct 2023 15:36:15 +0000
+Subject: [PATCH 135/135] [SLS] Align with sls device type mergeing
+
+Resolves: MCS23-1641, MCS23-1293
+
+Signed-off by: Savelii Motov <s.motov@samsung.com>
+---
+ aten/src/ATen/native/pnm/PNMBaseTensor.h     |  6 ++----
+ aten/src/ATen/native/pnm/PNMSecureTensor.cpp |  6 ------
+ aten/src/ATen/native/pnm/PNMTensor.cpp       |  6 ------
+ aten/src/ATen/native/pnm/PNMTensor.h         |  3 ---
+ aten/src/ATen/native/pnm/ops/Factory.cpp     |  8 ++------
+ caffe2/operators/lengths_reducer_ops_pnm.cc  | 15 +--------------
+ caffe2/python/pybind_state_pnm.cc            | 12 +-----------
+ 7 files changed, 6 insertions(+), 50 deletions(-)
+
+diff --git a/aten/src/ATen/native/pnm/PNMBaseTensor.h b/aten/src/ATen/native/pnm/PNMBaseTensor.h
+index 93e58368..9d38991d 100644
+--- a/aten/src/ATen/native/pnm/PNMBaseTensor.h
++++ b/aten/src/ATen/native/pnm/PNMBaseTensor.h
+@@ -50,7 +50,6 @@ class PnmBaseTensor {
+       PnmTensorType tensor_type,
+       uint32_t num_tables,
+       uint32_t sparse_feature_size,
+-      ::pnm::Device::Type device_type,
+       sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL)
+       : weights_path_(weights_path),
+         scalar_type_(scalar_type),
+@@ -58,7 +57,7 @@ class PnmBaseTensor {
+         sparse_feature_size_(sparse_feature_size),
+         preference_(preference),
+         type_(tensor_type),
+-        context_(::pnm::make_context(device_type)) {
++        context_(::pnm::make_context(::pnm::Device::Type::SLS)) {
+     TORCH_CHECK(
+         tables_rows_num.scalar_type() == torch::kInt32,
+         "Weights rows sizes must be int32 tensor");
+@@ -90,14 +89,13 @@ class PnmBaseTensor {
+       uint32_t num_tables,
+       uint32_t features_per_table,
+       uint32_t sparse_feature_size,
+-      ::pnm::Device::Type device_type,
+       sls_user_preferences preference)
+       : scalar_type_(weights.scalar_type()),
+         num_tables_(num_tables),
+         sparse_feature_size_(sparse_feature_size),
+         preference_(preference),
+         type_(tensor_type),
+-        context_(::pnm::make_context(device_type)) {
++        context_(::pnm::make_context(::pnm::Device::Type::SLS)) {
+     TORCH_CHECK(weights.is_contiguous(), "Weights tensor must be contiguous");
+     TORCH_CHECK(features_per_table > 0, "Features per table must be > 0");
+     check_params();
+diff --git a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+index 81c52ce7..6bd4f739 100644
+--- a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+@@ -13,9 +13,6 @@ namespace at {
+ namespace native {
+ namespace pnm {
+ 
+-// SLS secure doesn't support device selection in PNM library and works only
+-// with SLS_AXDIMM so we use SLS_AXDIMM device type to construct tensor context
+-//[TODO: @y-lavrinenko] Forward device type from external object
+ PnmSecureTensor::PnmSecureTensor(
+     const std::string& weights_path,
+     const c10::ScalarType& scalar_type,
+@@ -32,7 +29,6 @@ PnmSecureTensor::PnmSecureTensor(
+           tensor_type,
+           num_tables,
+           sparse_feature_size,
+-          ::pnm::Device::Type::SLS_AXDIMM,
+           preference),
+       with_tag_(with_tag) {
+   load(mmap_weights_file());
+@@ -52,7 +48,6 @@ PnmSecureTensor::PnmSecureTensor(
+           num_tables,
+           features_per_table,
+           sparse_feature_size,
+-          ::pnm::Device::Type::SLS_AXDIMM,
+           preference),
+       with_tag_(with_tag) {
+   check_params(weights);
+@@ -70,7 +65,6 @@ PnmSecureTensor::PnmSecureTensor(
+           weights.sizes()[0],
+           weights.sizes()[1],
+           weights.sizes()[2],
+-          ::pnm::Device::Type::SLS_AXDIMM,
+           preference),
+       with_tag_(with_tag) {
+   check_params(weights);
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.cpp b/aten/src/ATen/native/pnm/PNMTensor.cpp
+index 08409dbf..f2767c8b 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMTensor.cpp
+@@ -24,7 +24,6 @@ namespace pnm {
+ 
+ PnmTensor::PnmTensor(
+     const at::Tensor& weights,
+-    ::pnm::Device::Type device_type,
+     sls_user_preferences preference)
+     : PnmBaseTensor(
+           weights,
+@@ -32,7 +31,6 @@ PnmTensor::PnmTensor(
+           weights.sizes()[0],
+           weights.sizes()[1],
+           weights.sizes()[2],
+-          device_type,
+           preference) {
+   TORCH_CHECK(weights.dim() == 3, "Pnm tensor dimensions must be equal to 3");
+   load(weights.data_ptr());
+@@ -43,7 +41,6 @@ PnmTensor::PnmTensor(
+     uint32_t num_tables,
+     uint32_t features_per_table,
+     uint32_t sparse_feature_size,
+-    ::pnm::Device::Type device_type,
+     sls_user_preferences preference)
+     : PnmBaseTensor(
+           weights,
+@@ -51,7 +48,6 @@ PnmTensor::PnmTensor(
+           num_tables,
+           features_per_table,
+           sparse_feature_size,
+-          device_type,
+           preference) {
+   load(weights.data_ptr());
+ }
+@@ -62,7 +58,6 @@ PnmTensor::PnmTensor(
+     const at::Tensor& tables_rows_num,
+     uint32_t num_tables,
+     uint32_t sparse_feature_size,
+-    ::pnm::Device::Type device_type,
+     sls_user_preferences preference)
+     : PnmBaseTensor(
+           weights_path,
+@@ -71,7 +66,6 @@ PnmTensor::PnmTensor(
+           PnmTensorType::PNM_SIMPLE,
+           num_tables,
+           sparse_feature_size,
+-          device_type,
+           preference) {
+   load(mmap_weights_file());
+ }
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.h b/aten/src/ATen/native/pnm/PNMTensor.h
+index d32c56e6..cda3cbe1 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.h
++++ b/aten/src/ATen/native/pnm/PNMTensor.h
+@@ -26,7 +26,6 @@ class PnmTensor : public PnmBaseTensor {
+  public:
+   PnmTensor(
+       const at::Tensor& weights,
+-      ::pnm::Device::Type device_type = ::pnm::Device::Type::SLS_AXDIMM,
+       ::sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL);
+ 
+   PnmTensor(
+@@ -34,7 +33,6 @@ class PnmTensor : public PnmBaseTensor {
+       uint32_t num_tables,
+       uint32_t features_per_table,
+       uint32_t sparse_feature_size,
+-      ::pnm::Device::Type device_type,
+       sls_user_preferences preference);
+ 
+   PnmTensor(
+@@ -43,7 +41,6 @@ class PnmTensor : public PnmBaseTensor {
+       const at::Tensor& tables_rows_num,
+       uint32_t num_tables,
+       uint32_t sparse_feature_size,
+-      ::pnm::Device::Type device_type,
+       sls_user_preferences preference = SLS_ALLOC_DISTRIBUTE_ALL);
+ 
+   const ::pnm::memory::EmbeddingTables* get_tables_layout() const {
+diff --git a/aten/src/ATen/native/pnm/ops/Factory.cpp b/aten/src/ATen/native/pnm/ops/Factory.cpp
+index a8606157..e0afbe1d 100644
+--- a/aten/src/ATen/native/pnm/ops/Factory.cpp
++++ b/aten/src/ATen/native/pnm/ops/Factory.cpp
+@@ -79,7 +79,6 @@ at::Tensor create_tensor_from_weights(
+     int64_t num_tables,
+     int64_t features_per_table,
+     int64_t sparse_feature_size,
+-    int64_t device_type,
+     int64_t allocation_preference,
+     c10::optional<bool> with_tag = {}) {
+   std::shared_ptr<PnmBaseTensor> tensor;
+@@ -91,7 +90,6 @@ at::Tensor create_tensor_from_weights(
+           num_tables,
+           features_per_table,
+           sparse_feature_size,
+-          static_cast<::pnm::Device::Type>(device_type),
+           static_cast<sls_user_preferences>(allocation_preference));
+       break;
+     case PnmTensorType::PNM_SECURE:
+@@ -120,7 +118,6 @@ at::Tensor create_tensor_from_file(
+     const at::Tensor& tables_rows_num,
+     int64_t num_tables,
+     int64_t sparse_feature_size,
+-    int64_t device_type,
+     int64_t allocation_preference,
+     c10::optional<bool> with_tag = {}) {
+   std::shared_ptr<PnmBaseTensor> tensor;
+@@ -133,7 +130,6 @@ at::Tensor create_tensor_from_file(
+           tables_rows_num,
+           num_tables,
+           sparse_feature_size,
+-          static_cast<::pnm::Device::Type>(device_type),
+           static_cast<sls_user_preferences>(allocation_preference));
+       break;
+     case PnmTensorType::PNM_SECURE:
+@@ -156,10 +152,10 @@ at::Tensor create_tensor_from_file(
+ TORCH_LIBRARY(pnm, m) {
+   m.def(TORCH_SELECTIVE_SCHEMA(
+       "pnm::create_tensor.from_weights(str tensor_type_name, Tensor weights, int num_tables, int features_per_table,"
+-      "int sparse_feature_size, int device_type, int allocation_preference, bool? with_tag = False) -> Tensor"));
++      "int sparse_feature_size, int allocation_preference, bool? with_tag = False) -> Tensor"));
+   m.def(TORCH_SELECTIVE_SCHEMA(
+       "pnm::create_tensor.from_file(str tensor_type_name, str weights_file_path, ScalarType scalar_type,"
+-      "Tensor tables_rows_num, int num_tables, int sparse_feature_size, int device_type, int allocation_preference, bool? with_tag = False) -> Tensor"));
++      "Tensor tables_rows_num, int num_tables, int sparse_feature_size, int allocation_preference, bool? with_tag = False) -> Tensor"));
+ }
+ 
+ TORCH_LIBRARY_IMPL(pnm, CPU, m) {
+diff --git a/caffe2/operators/lengths_reducer_ops_pnm.cc b/caffe2/operators/lengths_reducer_ops_pnm.cc
+index f87964cf..69658662 100644
+--- a/caffe2/operators/lengths_reducer_ops_pnm.cc
++++ b/caffe2/operators/lengths_reducer_ops_pnm.cc
+@@ -153,26 +153,13 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+ 
+     private_tables_ = tables_descr == 0;
+ 
+-    auto device_type =
+-        static_cast<pnm::Device::Type>(this->template GetSingleArgument<int>(
+-            "device_type", static_cast<int>(pnm::Device::Type::SLS_AXDIMM)));
+-    CAFFE_ENFORCE(
+-        device_type == pnm::Device::Type::SLS_AXDIMM ||
+-            device_type == pnm::Device::Type::SLS_CXL,
+-        "Invalid SLS device type. Device type should be SLS_CXL or SLS_AXDIMM.");
+-    pnm_ctx_ = pnm::make_context(device_type);
++    pnm_ctx_ = pnm::make_context(pnm::Device::Type::SLS);
+ 
+     if (private_tables_) {
+       LoadTables();
+     } else {
+       tables_.reset(
+           reinterpret_cast<pnm::memory::EmbeddingTables*>(tables_descr));
+-
+-      // Take context from existed embedded tables
+-      CAFFE_ENFORCE_EQ(
+-          static_cast<int>(tables_->buffers().front().context()->type()),
+-          static_cast<int>(device_type),
+-          "Embedding tables context mismatch!");
+     }
+ 
+     runner_ = std::make_unique<pnm::Runner>(pnm_ctx_);
+diff --git a/caffe2/python/pybind_state_pnm.cc b/caffe2/python/pybind_state_pnm.cc
+index 4fb6ae52..d364e544 100644
+--- a/caffe2/python/pybind_state_pnm.cc
++++ b/caffe2/python/pybind_state_pnm.cc
+@@ -48,18 +48,8 @@ void addPNMGlobalMethods(py::module& m) {
+          const std::vector<uint32_t>& table_entry,
+          uint32_t row_size_in_bytes,
+          uint32_t mem_preference,
+-         uint32_t device_type,
+          bool use_shared_tables) -> uintptr_t {
+-        const auto cvt_device_type =
+-            static_cast<::pnm::Device::Type>(device_type);
+-        if (cvt_device_type != pnm::Device::Type::SLS_CXL &&
+-            cvt_device_type != pnm::Device::Type::SLS_AXDIMM) {
+-          LOG(ERROR) << "Device type should be SLS_CXL or SLS_AXDIMM. Get: "
+-                     << device_type;
+-          throw std::runtime_error("Invalid SLS device type.");
+-        }
+-
+-        pnm_ctx = pnm::make_context(cvt_device_type);
++        pnm_ctx = pnm::make_context(::pnm::Device::Type::SLS);
+ 
+         if (use_shared_tables) {
+           LOG(INFO) << "Allocated shared tables with memory preference id: "
+-- 
+2.34.1
+

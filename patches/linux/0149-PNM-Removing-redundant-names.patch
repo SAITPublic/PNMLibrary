@@ -1,7 +1,7 @@
 From 3b3b89a95524862bc45515b530420248bf41a383 Mon Sep 17 00:00:00 2001
 From: Petr Bred <p.bred@samsung.com>
 Date: Wed, 26 Jul 2023 09:26:16 +0300
-Subject: [PATCH 149/161] [PNM] Removing redundant names
+Subject: [PATCH 149/225] [PNM] Removing redundant names
 
 * Introduce clang-format for PNM part with simple headers rule only
 

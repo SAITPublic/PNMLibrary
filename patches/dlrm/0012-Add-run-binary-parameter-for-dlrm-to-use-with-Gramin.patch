@@ -1,7 +1,7 @@
 From 816ed60a0ba19e4e7fd1b1e1669f6de662ea305c Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Wed, 16 Nov 2022 23:42:40 +0300
-Subject: [PATCH 12/23] Add run binary parameter for dlrm to use with Gramine
+Subject: [PATCH 12/24] Add run binary parameter for dlrm to use with Gramine
 
 Resolves: AXDIMM-343
 

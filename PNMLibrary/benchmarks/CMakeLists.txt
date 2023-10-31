@@ -20,6 +20,10 @@ option(INSTALL_GTEST OFF)
 
 FetchContent_MakeAvailable(benchmark googletest)
 
+# [TODO: s-lavrentiev] Temporary work around for tidy-18 error
+# with 'AnalyzeTemporaryDtors' keyword
+file(REMOVE ${benchmark_SOURCE_DIR}/.clang-tidy)
+
 include(GoogleTest)
 enable_testing()
 

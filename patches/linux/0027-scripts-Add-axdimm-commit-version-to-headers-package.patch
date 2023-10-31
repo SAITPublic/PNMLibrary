@@ -1,7 +1,7 @@
 From e585b4a900b63bd5fd13b3035d3d11c9ad0e577b Mon Sep 17 00:00:00 2001
 From: "n.enin" <n.enin@samsung.com>
 Date: Wed, 3 Aug 2022 10:01:15 +0300
-Subject: [PATCH 027/161] [scripts] Add axdimm commit version to headers
+Subject: [PATCH 027/225] [scripts] Add axdimm commit version to headers
  package (#7)
 
 Signed-off-by: Nikita Enin <n.enin@samsung.com>

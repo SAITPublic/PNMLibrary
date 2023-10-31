@@ -71,8 +71,6 @@ using TimerMsT =
 using TimerUsT =
     Timer<std::chrono::microseconds, std::chrono::high_resolution_clock>;
 
-} // namespace pnm::profile
-
 class ProfileInfo {
   int64_t total_time_;
   unsigned int counter_;
@@ -116,9 +114,11 @@ inline bool &get_profiling_flag() {
 
 inline void start_profiling() {
   get_profiling_flag() = true;
-  ProfileInfo::profiling_info() = {};
+  pnm::profile::ProfileInfo::profiling_info() = {};
 }
 
 inline void end_profiling() { get_profiling_flag() = false; }
+
+} // namespace pnm::profile
 
 #endif // PNM_PROFILE_H

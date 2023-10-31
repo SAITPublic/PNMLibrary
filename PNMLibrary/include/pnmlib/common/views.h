@@ -20,14 +20,14 @@
 #include <cstddef>
 #include <iterator>
 
-namespace pnm {
+namespace pnm::views {
 /*! \brief Common view that refer to a constant contiguous sequence of data T.*/
-template <typename T> class common_view {
+template <typename T> class common {
 public:
   using value_type = T;
 
-  common_view() = default;
-  common_view(T *begin, T *end) : begin_{begin}, end_{end} {}
+  common() = default;
+  common(T *begin, T *end) : begin_{begin}, end_{end} {}
 
   auto begin() { return begin_; }
   auto end() { return end_; }
@@ -52,38 +52,35 @@ private:
 };
 
 template <typename T> inline auto make_view(T *first, T *last) {
-  return common_view<T>{first, last};
+  return common<T>{first, last};
 }
 
 template <typename T> inline auto make_view(T *first, size_t size) {
-  return common_view<T>{first, first + size};
+  return common<T>{first, first + size};
 }
 
 template <typename C> inline auto make_view(const C &c) {
-  return common_view<const typename C::value_type>{c.data(),
-                                                   c.data() + c.size()};
+  return common<const typename C::value_type>{c.data(), c.data() + c.size()};
 }
 
 template <typename C> inline auto make_view(C &c) {
-  return common_view<typename C::value_type>{c.data(), c.data() + c.size()};
+  return common<typename C::value_type>{c.data(), c.data() + c.size()};
 }
 
 template <typename C> inline auto make_const_view(C &c) {
   return make_view(const_cast<const C &>(c));
 }
 
-template <typename D, typename S> inline auto view_cast(common_view<S> view) {
+template <typename D, typename S> inline auto view_cast(common<S> view) {
   return make_view(reinterpret_cast<D *>(view.begin()),
                    reinterpret_cast<D *>(view.end()));
 }
 
-template <typename D, typename S>
-inline auto view_const_cast(common_view<S> view) {
+template <typename D, typename S> inline auto view_const_cast(common<S> view) {
   return make_view(const_cast<D *>(view.begin()), const_cast<D *>(view.end()));
 }
 
-template <typename T>
-inline auto advance_view(common_view<T> view, off_t offset) {
+template <typename T> inline auto advance_view(common<T> view, off_t offset) {
   if (offset > 0) {
     assert(static_cast<uint64_t>(offset) < static_cast<uint64_t>(view.size()) &&
            "View overflow detected! Check offset parameter for "
@@ -98,9 +95,9 @@ inline auto advance_view(common_view<T> view, off_t offset) {
  * false otherwise.
  */
 template <typename T>
-inline bool operator==(const common_view<T> &lhs, const common_view<T> &rhs) {
+inline bool operator==(const common<T> &lhs, const common<T> &rhs) {
   return std::equal(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
 }
-} // namespace pnm
+} // namespace pnm::views
 
 #endif // PNM_VIEWS_H

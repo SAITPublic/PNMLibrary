@@ -1,7 +1,7 @@
 From b959597f9d0a64578f24b95b705cd5cf4c42dadc Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 9 May 2023 11:11:10 +0000
-Subject: [PATCH 21/23] Rename AXDIMM -> PNM to reflect pytorch changes
+Subject: [PATCH 21/24] Rename AXDIMM -> PNM to reflect pytorch changes
 
 * Perform massive AXDIMM -> PNM renaming to reflect respective pytorch
   changes and generalize DLRM usage.

@@ -13,8 +13,9 @@
 #ifndef _SLS_MEMBLOCKHANDLER_BLOCK_OPS_H_
 #define _SLS_MEMBLOCKHANDLER_BLOCK_OPS_H_
 
-#include "core/device/sls/memory_map.h"
-#include "core/memory/barrier.h"
+#include "core/device/sls/utils/memory_map.h"
+
+#include "common/memory/barrier.h"
 
 #include <linux/sls_resources.h>
 
@@ -57,11 +58,11 @@ template <bool FLUSH_BEFORE = false> struct RawBlockReader {
     const uint8_t *const end = begin + read_size;
 
     if constexpr (FLUSH_BEFORE) {
-      flush(begin, read_size);
+      pnm::memory::flush(begin, read_size);
     }
 
     std::copy(begin, end, buf_out);
-    mfence();
+    pnm::memory::mfence();
   }
 };
 

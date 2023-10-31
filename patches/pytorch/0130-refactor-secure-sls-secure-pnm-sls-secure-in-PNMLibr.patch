@@ -1,0 +1,132 @@
+From 13d8abe797e601e30fb55ca85b0ecf122075036e Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Mon, 11 Sep 2023 12:31:44 +0300
+Subject: [PATCH 130/135] [refactor][secure] sls::secure -> pnm::sls::secure in
+ PNMLibrary
+
+Refers to MCS23-1358
+
+Signed-off-by: Nataliia Cherepanova nataly.cher@partner.samsung.com
+---
+ aten/src/ATen/native/pnm/PNMSecureTensor.cpp    |  6 +++---
+ aten/src/ATen/native/pnm/PNMSecureTensor.h      |  4 ++--
+ caffe2/operators/lengths_reducer_ops_sec_pnm.cc |  4 ++--
+ caffe2/operators/lengths_reducer_ops_sec_pnm.h  | 12 ++++++------
+ 4 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+index 5272b371..81c52ce7 100644
+--- a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+@@ -87,15 +87,15 @@ void PnmSecureTensor::load(const void* weights_data) {
+   TORCH_INTERNAL_ASSERT(weights_data, "Weights data can't be null");
+   if (type_ == PnmTensorType::PNM_SECURE) {
+     if (scalar_type_ == torch::kFloat32) {
+-      runner_ = ::sls::secure::make_runner(::sls::secure::RunnerType::FLOAT);
++      runner_ = ::pnm::sls::secure::make_runner(::pnm::sls::secure::RunnerType::FLOAT);
+     } else {
+-      runner_ = ::sls::secure::make_runner(::sls::secure::RunnerType::INT);
++      runner_ = ::pnm::sls::secure::make_runner(::pnm::sls::secure::RunnerType::INT);
+     }
+   }
+ 
+   const auto& rows_view = ::pnm::views::make_view(std::cref(tables_rows_num_).get());
+ 
+-  ::sls::secure::DeviceArguments args(::sls::secure::UntrustedDeviceParams{
++  ::pnm::sls::secure::DeviceArguments args(::pnm::sls::secure::UntrustedDeviceParams{
+       .rows = rows_view,
+       .sparse_feature_size = sparse_feature_size_,
+       .with_tag = with_tag_,
+diff --git a/aten/src/ATen/native/pnm/PNMSecureTensor.h b/aten/src/ATen/native/pnm/PNMSecureTensor.h
+index 3f281a0e..7ce521fb 100644
+--- a/aten/src/ATen/native/pnm/PNMSecureTensor.h
++++ b/aten/src/ATen/native/pnm/PNMSecureTensor.h
+@@ -46,7 +46,7 @@ class PnmSecureTensor : public PnmBaseTensor {
+     return with_tag_;
+   }
+ 
+-  ::sls::secure::IRunner& get_runner() const {
++  ::pnm::sls::secure::IRunner& get_runner() const {
+     return *runner_;
+   }
+ 
+@@ -67,7 +67,7 @@ class PnmSecureTensor : public PnmBaseTensor {
+   void check_params(const at::Tensor& weights) const;
+   void load(const void* weights_data);
+ 
+-  std::shared_ptr<::sls::secure::IRunner> runner_;
++  std::shared_ptr<::pnm::sls::secure::IRunner> runner_;
+   bool with_tag_;
+ };
+ 
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_pnm.cc b/caffe2/operators/lengths_reducer_ops_sec_pnm.cc
+index 73bc0d7e..b40dc36c 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_pnm.cc
++++ b/caffe2/operators/lengths_reducer_ops_sec_pnm.cc
+@@ -11,7 +11,7 @@ REGISTER_PNM_OPERATOR(
+     PNMSecureSparseLengthsReductionOpVec<
+         float,
+         TensorTypes<float, at::Half>,
+-        ::sls::secure::RunnerType::FLOAT>);
++        ::pnm::sls::secure::RunnerType::FLOAT>);
+ 
+ // Dummy
+ REGISTER_CPU_OPERATOR(SecureSparseLengthsSumVec, NoDefaultEngineOp<CPUContext>);
+@@ -22,7 +22,7 @@ REGISTER_PNM_OPERATOR(
+     PNMSecureSparseLengthsReductionOpVec<
+         int32_t,
+         TensorTypes<int32_t>,
+-        ::sls::secure::RunnerType::INT>);
++        ::pnm::sls::secure::RunnerType::INT>);
+ 
+ // Dummy
+ REGISTER_CPU_OPERATOR(
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_pnm.h b/caffe2/operators/lengths_reducer_ops_sec_pnm.h
+index 7fa3821f..3181beaf 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_pnm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_pnm.h
+@@ -28,7 +28,7 @@ namespace caffe2 {
+ template <
+     typename T, // output type
+     typename InputTypes, // supported input types, such as TensorTypes<float>
+-    sls::secure::RunnerType runner_type>
++    pnm::sls::secure::RunnerType runner_type>
+ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+  public:
+   USE_OPERATOR_FUNCTIONS(PNMContext);
+@@ -178,7 +178,7 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+     const auto memory_preference = this->template GetSingleArgument<int>(
+         "mem_preference", SLS_ALLOC_AUTO);
+ 
+-    sls::secure::DeviceArguments args(sls::secure::UntrustedDeviceParams{
++    pnm::sls::secure::DeviceArguments args(pnm::sls::secure::UntrustedDeviceParams{
+         .rows = rows,
+         .sparse_feature_size = sparse_feature_size,
+         .with_tag = with_tag_,
+@@ -209,11 +209,11 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+   std::vector<uint8_t> tag_checks_;
+   std::vector<secure_core_value_type> psum_buffer_;
+ 
+-  std::unique_ptr<sls::secure::IRunner> runner_ =
+-      sls::secure::make_runner(runner_type);
++  std::unique_ptr<pnm::sls::secure::IRunner> runner_ =
++      pnm::sls::secure::make_runner(runner_type);
+ };
+ 
+-template <typename T, typename InputTypes, sls::secure::RunnerType runner_type>
++template <typename T, typename InputTypes, pnm::sls::secure::RunnerType runner_type>
+ void PNMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+     init_from_file() {
+   block_size_ = this->template GetSingleArgument<int>("num_tables", 0);
+@@ -270,7 +270,7 @@ void PNMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+   close(fd);
+ }
+ 
+-template <typename T, typename InputTypes, sls::secure::RunnerType runner_type>
++template <typename T, typename InputTypes, pnm::sls::secure::RunnerType runner_type>
+ void PNMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+     init_from_input() {
+   // Setup input pointers for tables/indices/lengths. The input comes in
+-- 
+2.34.1
+

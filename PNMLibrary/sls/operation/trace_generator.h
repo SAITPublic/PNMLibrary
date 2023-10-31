@@ -16,7 +16,7 @@
 #include "ir.h"
 #include "trace_generator_core.h"
 
-#include "hw/axdimm_hw_config.h"
+#include "hw/pnm_hw_instr_constants.h"
 
 #include <cstdint>
 #include <iterator>
@@ -73,13 +73,14 @@ private:
     uint64_t header = 0;
     // 64B: VSIZE = 0, 128B: VSIZE = 1, 256B: VSIZE = 2
     header |= (bytes_per_row_ / 128) &
-              INSTR_HEADER_VSIZE_MASK; // [4:0] -- sparse feature size
-    header |= is_tagged << INSTR_HEADER_TAGBIT_POS; // [8] --  is for TAGGED SLS
+              hw::INSTR_HEADER_VSIZE_MASK; // [4:0] -- sparse feature size
+    header |=
+        is_tagged << hw::INSTR_HEADER_TAGBIT_POS; // [8] --  is for TAGGED SLS
 
     trace_.front() = header;
   }
 
-  void set_trace_end() { trace_.back() |= 1UL << INSTR_TRACE_END_OFFSET; }
+  void set_trace_end() { trace_.back() |= 1UL << hw::INSTR_TRACE_END_OFFSET; }
 
   void compile() {
     auto compile_func = [this](InstructionIR instruction) {

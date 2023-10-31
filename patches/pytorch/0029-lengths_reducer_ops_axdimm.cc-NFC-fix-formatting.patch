@@ -1,7 +1,7 @@
 From 656d7bbbfb11824d5ac2ec9fb2766c335741d9fb Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 15 Nov 2021 10:24:13 +0900
-Subject: [PATCH 029/128] [lengths_reducer_ops_axdimm.cc] NFC: fix formatting
+Subject: [PATCH 029/135] [lengths_reducer_ops_axdimm.cc] NFC: fix formatting
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

@@ -26,6 +26,8 @@
 #include <stdexcept>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Generate indices for each batch randomly in range [0, table_size) */
 class RandomIndicesGen : public IIndicesGenerator {
 private:
@@ -52,5 +54,7 @@ private:
     return indices;
   }
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_RANDOM_GENERATOR_H

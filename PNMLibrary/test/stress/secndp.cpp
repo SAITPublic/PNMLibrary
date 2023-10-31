@@ -26,7 +26,6 @@
 #include "pnmlib/secure/untrusted_sls_params.h"
 
 #include "pnmlib/core/device.h"
-#include "pnmlib/core/sls_device.h"
 
 #include "pnmlib/common/error.h"
 #include "pnmlib/common/views.h"
@@ -42,11 +41,16 @@
 #include <thread>
 #include <vector>
 
+using namespace tools::gen::sls;
+
 inline constexpr size_t workers_count = 8;
 
+inline constexpr bool use_tags = true;
+
 using sls_element_type = uint32_t;
-using SlsRunner = sls::secure::ProdConsSLSRunner<sls_element_type>;
+using SlsRunner = pnm::sls::secure::ProdConsSlsRunner<sls_element_type>;
 using MemoryWriter = SlsRunner::ExecutorType::sls_device_type::MemoryWriter;
+using pnm::sls::device::topo;
 
 struct TableParam {
   size_t row_size;
@@ -54,14 +58,13 @@ struct TableParam {
   static constexpr size_t column_count = 64;
 
   static TableParam calculate() {
-    const auto device = SlsDevice::make(pnm::Device::Type::SLS_CXL);
+    const auto device = pnm::Device::make_device(pnm::Device::Type::SLS);
 
-    const auto size_per_worker = device.base_memory_size() /
-                                 pnm::device::topo().NumOfRanks / workers_count;
+    const auto size_per_worker =
+        device->memory_size() / topo().NumOfCUnits / workers_count;
 
-    const uint32_t sparse_ft_full_size =
-        sls::secure::io_traits<MemoryWriter>::memory_size<sls_element_type>(
-            column_count, true);
+    const uint32_t sparse_ft_full_size = pnm::sls::secure::io_traits<
+        MemoryWriter>::memory_size<sls_element_type>(column_count, true);
 
     const TableParam table_param{
         .row_size = size_per_worker / sparse_ft_full_size / count,
@@ -72,7 +75,7 @@ struct TableParam {
 };
 
 struct RunnerContext {
-  std::unique_ptr<sls::secure::IRunner> runner;
+  std::unique_ptr<pnm::sls::secure::IRunner> runner;
   std::vector<sls_element_type> psum;
   std::vector<uint8_t> row_checks;
 };
@@ -82,6 +85,11 @@ TEST(SecNdp, Stress) {
     GTEST_SKIP() << "This tests allocate all SLS memory and TSan increase "
                     "memory consumption explicitly to x8 times"
                  << '\n';
+  }
+
+  if (use_tags &&
+      pnm::sls::device::topo().Bus == pnm::sls::device::BusType::CXL) {
+    GTEST_SKIP() << "SLS-CXL HW does not support tags\n";
   }
 
   const auto table_param = TableParam::calculate();
@@ -101,16 +109,16 @@ TEST(SecNdp, Stress) {
   auto igen = IndicesGeneratorFactory::default_factory().create("random");
   const auto indices = igen->create(iinfo, tinfo);
 
-  const sls::secure::UntrustedDeviceParams sls_device_params{
-      .rows = pnm::make_view(tinfo.rows()),
+  const pnm::sls::secure::UntrustedDeviceParams sls_device_params{
+      .rows = pnm::views::make_view(tinfo.rows()),
       .sparse_feature_size = tinfo.cols(),
-      .with_tag = true,
+      .with_tag = use_tags,
       .preference = SLS_ALLOC_REPLICATE_ALL,
   };
 
   std::vector<RunnerContext> contexts;
 
-  auto device_arguments = sls::secure::DeviceArguments(sls_device_params);
+  auto device_arguments = pnm::sls::secure::DeviceArguments(sls_device_params);
   auto requests_count = tinfo.num_tables() * iinfo.minibatch_size();
   for (;;) {
     try {
@@ -122,8 +130,9 @@ TEST(SecNdp, Stress) {
 
       ctx.runner->init(&device_arguments);
 
-      ctx.runner->load_tables(emb_tables.data(), pnm::make_view(tinfo.rows()),
-                              tinfo.cols(), true);
+      ctx.runner->load_tables(emb_tables.data(),
+                              pnm::views::make_view(tinfo.rows()), tinfo.cols(),
+                              use_tags);
 
     } catch (pnm::error::OutOfMemory &e) {
       contexts.pop_back();
@@ -151,10 +160,10 @@ TEST(SecNdp, Stress) {
           }
 
           const bool verification_result = runner->run(
-              iinfo.minibatch_size(), pnm::make_view(iinfo.lengths()),
-              pnm::make_view(indices),
-              pnm::view_cast<uint8_t>(pnm::make_view(psum)),
-              pnm::make_view(row_checks));
+              iinfo.minibatch_size(), pnm::views::make_view(iinfo.lengths()),
+              pnm::views::make_view(indices),
+              pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)),
+              pnm::views::make_view(row_checks));
 
           EXPECT_TRUE(verification_result);
         });

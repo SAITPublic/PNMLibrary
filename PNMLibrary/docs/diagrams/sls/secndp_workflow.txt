@@ -3,7 +3,7 @@ partition "SecNDPSlsSequential"{
     start
 
     :Load test data
-    (Embedded tables, indices);
+    (Embedding tables, indices);
 
     :Create SecureRunner (runner);
 
@@ -14,7 +14,7 @@ partition "SecNDPSlsSequential"{
     **runner.load_tables(...)**;
 
     :Prepare data for SLS
-    (create SLSOperation);
+    (create SlsOperation);
 
     while (**N** iteration)
         :Run SLS and decrypt result
@@ -33,7 +33,7 @@ partition "SecNDPSlsMultiThreads"{
     split
 
     :Load test data
-    (Embedded tables, indices);
+    (Embedding tables, indices);
 
     :Create SecureRunner (runner);
 
@@ -44,7 +44,7 @@ partition "SecNDPSlsMultiThreads"{
     **runner.load_tables(...)**;
 
     :Prepare data for SLS
-    (create SLSOperation);
+    (create SlsOperation);
 
     while (**N** iteration)
         :Run SLS and decrypt result
@@ -56,7 +56,7 @@ partition "SecNDPSlsMultiThreads"{
 
     split again
     :Load test data
-        (Embedded tables, indices);
+        (Embedding tables, indices);
 
         :Create SecureRunner (runner);
 
@@ -67,7 +67,7 @@ partition "SecNDPSlsMultiThreads"{
         **runner.load_tables(...)**;
 
         :Prepare data for SLS
-        (create SLSOperation);
+        (create SlsOperation);
 
         while (**N** iteration)
             :Run SLS and decrypt result
@@ -79,7 +79,7 @@ partition "SecNDPSlsMultiThreads"{
 
     split again
         :Load test data
-        (Embedded tables, indices);
+        (Embedding tables, indices);
 
         :Create SecureRunner (runner);
 
@@ -90,7 +90,7 @@ partition "SecNDPSlsMultiThreads"{
         **runner.load_tables(...)**;
 
         :Prepare data for SLS
-        (create SLSOperation);
+        (create SlsOperation);
 
         while (**N** iteration)
             :Run SLS and decrypt result
@@ -117,7 +117,7 @@ partition "SecNDPSlsMultiProcesses"{
    (Semaphore sync);
 
    :Load test data
-   (Embedded tables, indices);
+   (Embedding tables, indices);
 
    :Create SecureRunner (runner);
 
@@ -128,7 +128,7 @@ partition "SecNDPSlsMultiProcesses"{
    **runner.load_tables(...)**;
 
    :Prepare data for SLS
-   (create SLSOperation);
+   (create SlsOperation);
 
    while (**N** iteration)
        :Run SLS and decrypt result
@@ -149,7 +149,7 @@ partition "SecNDPSlsMultiProcesses"{
        (Semaphore sync);
 
        :Load test data
-       (Embedded tables, indices);
+       (Embedding tables, indices);
 
        :Create SecureRunner (runner);
 
@@ -160,7 +160,7 @@ partition "SecNDPSlsMultiProcesses"{
        **runner.load_tables(...)**;
 
        :Prepare data for SLS
-       (create SLSOperation);
+       (create SlsOperation);
 
        while (**N** iteration)
            :Run SLS and decrypt result

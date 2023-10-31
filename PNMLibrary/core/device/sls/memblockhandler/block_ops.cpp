@@ -12,11 +12,11 @@
 
 #include "block_ops.h"
 
-#include "core/device/sls/memory_map.h"
-#include "core/device/sls/rank_address.h"
-#include "core/memory/barrier.h"
+#include "core/device/sls/utils/memory_map.h"
+#include "core/device/sls/utils/rank_address.h"
 
 #include "common/make_error.h"
+#include "common/memory/barrier.h"
 
 #include <linux/sls_resources.h>
 
@@ -35,7 +35,7 @@ void UnsupportedBlockWriter::operator()(
     [[maybe_unused]] uint32_t offset, [[maybe_unused]] const uint8_t *buf_in,
     [[maybe_unused]] size_t write_size) const {
   // Every write to a readonly block is an error.
-  const char *const block_name = sls_mem_blocks_name[block_type];
+  const auto block_name = sls_mem_blocks_name[block_type];
   throw pnm::error::make_not_sup("'{}'", block_name);
 }
 
@@ -47,7 +47,7 @@ void UnsupportedBlockReader::operator()(
     [[maybe_unused]] uint32_t offset, [[maybe_unused]] uint8_t *buf_out,
     [[maybe_unused]] size_t read_size) const {
   // Every read is an error.
-  const char *const block_name = sls_mem_blocks_name[block_type];
+  const auto block_name = sls_mem_blocks_name[block_type];
   throw pnm::error::make_not_sup("'{}'", block_name);
 }
 
@@ -61,7 +61,7 @@ void RawBlockWriter::operator()(const memAddr &mem_addr,
   const uint8_t *const begin = buf_in;
   const uint8_t *const end = buf_in + write_size;
   std::copy(begin, end, mem_addr.addr[block_type] + offset);
-  mfence();
+  pnm::memory::mfence();
 }
 
 // RankedBlockWriter impl.
@@ -72,9 +72,9 @@ void RankedBlockWriter::operator()(const memAddr &mem_addr,
                                    const uint8_t *buf_in,
                                    size_t write_size) const {
   const InterleavedPointer ptr(mem_addr.addr[block_type],
-                               rank_to_ha(compute_unit));
+                               cunit_to_ha(compute_unit));
 
-  device::memcpy_interleaved(buf_in, write_size, ptr + offset);
+  memcpy_interleaved(buf_in, write_size, ptr + offset);
 }
 
 // RankedBlockReader impl.
@@ -84,7 +84,7 @@ void RankedBlockReader::operator()(const memAddr &mem_addr,
                                    sls_mem_blocks_e block_type, uint32_t offset,
                                    uint8_t *buf_out, size_t read_size) const {
   const InterleavedPointer ptr(mem_addr.addr[block_type],
-                               rank_to_ha(compute_unit));
+                               cunit_to_ha(compute_unit));
   memcpy_interleaved(ptr + offset, read_size, buf_out);
 }
 

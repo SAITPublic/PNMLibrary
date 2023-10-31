@@ -11,9 +11,9 @@
 
 #include "channel_accessor.h"
 
-#include "core/device/sls/control.h"
-
 #include "common/mapped_file.h"
+
+#include "pnmlib/sls/control.h"
 
 #include "pnmlib/core/device.h"
 #include "pnmlib/core/memory.h"
@@ -43,17 +43,17 @@ ChannelAccessorCore::ChannelAccessorCore(const DeviceRegion &region,
   const auto mem_info = ctrl_context.get_mem_info();
 
   for (auto i = 0UL; i < virtual_region_.size(); ++i) {
-    base_offsets_[i] = mem_info[i][SLS_BLOCK_BASE].offset;
+    base_offsets_[i] = mem_info[i][SLS_BLOCK_BASE].map_offset;
   }
 
   for (auto i = 0U; i < virtual_region_.size(); ++i) {
-    if (region_.regions[i].location != -1) {
+    if (region_.regions[i].location.has_value()) {
       vregion_data_[i] = pnm::utils::MappedData(
           device_->get_devmem_fd(),
           pnm::utils::fast_align_up(region_.regions[i].size, ::page_size),
           "device",
           region_.regions[i].start +
-              base_offsets_[region_.regions[i].location]);
+              base_offsets_[*region_.regions[i].location]);
       virtual_region_[i] =
           vregion_data_[i].get_view<uint8_t>(region_.regions[i].size);
       data_size_ = region_.regions[i].size;
@@ -61,7 +61,10 @@ ChannelAccessorCore::ChannelAccessorCore(const DeviceRegion &region,
   }
 }
 
-const uint8_t *ChannelAccessorCore::access_impl(uint64_t byte_offset) const {
+// size field is unused due to WC caching policy
+const uint8_t *
+ChannelAccessorCore::access_impl(uint64_t byte_offset,
+                                 [[maybe_unused]] uint64_t size) const {
   for (const auto &vchannel_region : virtual_region_) {
     if (!vchannel_region.empty()) {
       // Here we assume that data are same in all channels

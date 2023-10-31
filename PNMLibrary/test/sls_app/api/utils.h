@@ -13,17 +13,11 @@
 #ifndef _SLS_TEST_UTILS_H
 #define _SLS_TEST_UTILS_H
 
-#include <fmt/core.h>
-
-#include <linux/sls_resources.h>
-
 #include <cerrno>
-#include <cstdio>
 #include <fstream>
 #include <ios>
 #include <iosfwd>
 #include <limits>
-#include <stdexcept>
 #include <string>
 
 #define CHECK_RETVAL_EQ(func, expected_retval)                                 \
@@ -33,21 +27,6 @@
   } while (false)
 
 namespace test_app {
-
-inline std::string preference_to_str(sls_user_preferences pref) {
-  switch (pref) {
-  case SLS_ALLOC_AUTO:
-    return "AUTO";
-  case SLS_ALLOC_REPLICATE_ALL:
-    return "REPLICATE_ALL";
-  case SLS_ALLOC_DISTRIBUTE_ALL:
-    return "DISTRIBUTE_ALL";
-  case SLS_ALLOC_SINGLE:
-    return "SINGLE";
-  };
-  throw std::runtime_error(fmt::format("Invalid memory user preference: {}\n",
-                                       static_cast<int>(pref)));
-}
 
 inline unsigned long get_mem_avail_in_bytes() {
   static constexpr auto MEMINFO_FILE = "/proc/meminfo";

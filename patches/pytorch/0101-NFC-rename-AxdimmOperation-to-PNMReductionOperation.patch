@@ -1,7 +1,7 @@
 From a90a5f3bf1cd665eeaf33c9b2f74b08341db29e3 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 10 Feb 2023 18:24:17 +0900
-Subject: [PATCH 101/128] NFC: rename AxdimmOperation to PNMReductionOperation
+Subject: [PATCH 101/135] NFC: rename AxdimmOperation to PNMReductionOperation
 
 Reflect corresponding change in axdimm_driver.
 

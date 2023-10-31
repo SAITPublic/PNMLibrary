@@ -1,7 +1,7 @@
 From 57fe7211f0ecd7cebb72139744f13ca853bd374c Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 26 Nov 2021 13:43:48 +0900
-Subject: [PATCH 008/161] [drivers/dax] Fix wrong 'pgoff' calculation for
+Subject: [PATCH 008/225] [drivers/dax] Fix wrong 'pgoff' calculation for
  AXDIMM ranges
 
 Move 'pgoff' updating code into the proper place (just after calculating)

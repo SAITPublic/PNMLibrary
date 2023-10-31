@@ -1,7 +1,7 @@
 From 548a0d6fe7b3a2d1a580f7df9bf39dbf1a84c230 Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Wed, 2 Nov 2022 11:38:50 +0300
-Subject: [PATCH 066/161] [drivers/dax/axdimm] Correct process release by
+Subject: [PATCH 066/225] [drivers/dax/axdimm] Correct process release by
  resource manager
 
 Relates: AXDIMM-451

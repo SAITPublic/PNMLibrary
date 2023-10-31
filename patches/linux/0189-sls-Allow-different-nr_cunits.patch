@@ -1,0 +1,173 @@
+From b4a06de9741522adf4d583e4f2fa1b4202edb293 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 5 Sep 2023 14:46:39 +0000
+Subject: [PATCH 189/225] [sls] Allow different nr_cunits
+
+Currently we have cunit as abstraction of ranks and channels
+This patch change cunit interleaving numeration from [0,2],[1,3]
+to [0,1],[2,3]
+This model allow us change nr_cunits for experiments
+
+Resolves: MCS23-1544
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/mem_info.c | 80 +++++++++++++++++++----------
+ 1 file changed, 53 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/mem_info.c b/drivers/pnm/sls_resource/mem_info.c
+index e7c8d65f2..ad1b92771 100644
+--- a/drivers/pnm/sls_resource/mem_info.c
++++ b/drivers/pnm/sls_resource/mem_info.c
+@@ -2,19 +2,27 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "mem_info.h"
++#include "log.h"
+ #include "topo/params.h"
+ 
+ #include <linux/module.h>
+ #include <linux/slab.h>
+ 
++#define NR_REGIONS_TOPO_EXPR(nr_regions_per_cunit)                      \
++	((sls_topo()->dev_type == SLS_AXDIMM ? sls_topo()->nr_cs :      \
++					       sls_topo()->nr_cunits) * \
++	 (nr_regions_per_cunit))
++
+ const struct sls_mem_info *sls_create_mem_info(void)
+ {
+-	const size_t nr_regions = sls_topo()->nr_cs * SLS_BLOCK_MAX;
++	const size_t nr_regions = NR_REGIONS_TOPO_EXPR(SLS_BLOCK_MAX);
+ 	struct sls_mem_info *mem_info = NULL;
+ 	size_t start = 0;
+ 	enum sls_mem_blocks_e type;
+ 	uint8_t idx;
+ 
++	SLS_DBG("Building sls mem_info\n");
++
+ 	mem_info =
+ 		kzalloc(struct_size(mem_info, regions, nr_regions), GFP_KERNEL);
+ 
+@@ -48,10 +56,10 @@ void sls_destroy_mem_info(const struct sls_mem_info *mem_info)
+ EXPORT_SYMBOL(sls_destroy_mem_info);
+ 
+ static inline void make_cunit_regions(uint64_t nr_regions_per_cunit,
++				      int nr_interleaved_cu,
+ 				      struct sls_mem_cunit_region *dst_regions,
+ 				      const struct sls_mem_region *src_regions)
+ {
+-	const int cunits_per_cs = sls_topo()->nr_cunits / sls_topo()->nr_cs;
+ 	const struct sls_mem_region *src = src_regions;
+ 	struct sls_mem_cunit_region *dst = dst_regions;
+ 	uint8_t r = 0;
+@@ -59,15 +67,19 @@ static inline void make_cunit_regions(uint64_t nr_regions_per_cunit,
+ 	for (r = 0; r < nr_regions_per_cunit; ++r) {
+ 		dst[r].type = src[r].type;
+ 		dst[r].map_range = dst[r].range = src[r].range;
+-		dst[r].range.end = dst[r].range.start +
+-				   range_len(&src[r].range) / cunits_per_cs - 1;
++		dst[r].range.end =
++			dst[r].range.start +
++			range_len(&dst[r].map_range) / nr_interleaved_cu -
++			1; // struct range is closed
+ 	}
+ }
+ 
+-static inline void apply_interleaving(uint64_t nr_regions_per_cunit, u64 cs,
++static inline void apply_interleaving(uint64_t nr_regions_per_cunit,
++				      uint64_t cunit,
+ 				      struct sls_mem_cunit_region *dst)
+ {
+-	const size_t interleaving = cs * sls_topo()->interleaving_stride;
++	const size_t interleaving =
++		(cunit % sls_topo()->nr_cs) * sls_topo()->interleaving_stride;
+ 	uint8_t r = 0;
+ 
+ 	for (r = 0; r < nr_regions_per_cunit; ++r) {
+@@ -76,6 +88,37 @@ static inline void apply_interleaving(uint64_t nr_regions_per_cunit, u64 cs,
+ 	}
+ }
+ 
++static void make_cunit_info(uint64_t nr_regions_per_cunit,
++			    struct sls_mem_cunit_info *mem_cunit_info,
++			    const struct sls_mem_info *mem_info)
++{
++	const struct sls_mem_region *src = NULL;
++	struct sls_mem_cunit_region *dst = NULL;
++	const int nr_cu = sls_topo()->nr_cunits;
++	const int nr_interleaved_cu =
++		sls_topo()->dev_type == SLS_AXDIMM ? NR_CUNITS_PER_CS : 1;
++	int cu = 0, interleaved_cu = 0;
++
++	/* Here we create compute units layout according to interleaving model */
++	for (cu = 0; cu < nr_cu; ++cu) {
++		interleaved_cu = cu / nr_interleaved_cu;
++
++		/* choose device regions array */
++		src = &mem_info->regions[interleaved_cu * nr_regions_per_cunit];
++
++		/* choose cunit regions array */
++		dst = &mem_cunit_info->regions[cu * nr_regions_per_cunit];
++
++		/* form cunit address layout */
++		make_cunit_regions(nr_regions_per_cunit, nr_interleaved_cu, dst,
++				   src);
++
++		/* apply cunit interleaving */
++		if (sls_topo()->dev_type == SLS_AXDIMM)
++			apply_interleaving(nr_regions_per_cunit, cu, dst);
++	}
++}
++
+ const struct sls_mem_cunit_info *
+ sls_create_mem_cunit_info(const struct sls_mem_info *mem_info)
+ {
+@@ -83,9 +126,8 @@ sls_create_mem_cunit_info(const struct sls_mem_info *mem_info)
+ 	const uint64_t nr_regions_per_cunit = SLS_BLOCK_MAX;
+ 	const uint64_t nr_regions = nr_regions_per_cunit * nr_cunits;
+ 	struct sls_mem_cunit_info *mem_cunit_info = NULL;
+-	const struct sls_mem_region *src = NULL;
+-	struct sls_mem_cunit_region *dst = NULL;
+-	uint8_t cu = 0, cs = 0;
++
++	SLS_DBG("Building sls mem cunit info\n");
+ 
+ 	mem_cunit_info = kzalloc(
+ 		struct_size(mem_cunit_info, regions, nr_regions), GFP_KERNEL);
+@@ -96,23 +138,7 @@ sls_create_mem_cunit_info(const struct sls_mem_info *mem_info)
+ 	mem_cunit_info->nr_cunits = nr_cunits;
+ 	mem_cunit_info->nr_regions = nr_regions;
+ 
+-	/* Here we create compute units layout */
+-	for (cu = 0; cu < nr_cunits; ++cu) {
+-		/* get cs from cunit */
+-		cs = cu % sls_topo()->nr_cs;
+-
+-		/* choose cunit regions array */
+-		dst = &mem_cunit_info->regions[cu * nr_regions_per_cunit];
+-
+-		/* choose device regions array */
+-		src = &mem_info->regions[cs * nr_regions_per_cunit];
+-
+-		/* form cunit address layout */
+-		make_cunit_regions(nr_regions_per_cunit, dst, src);
+-
+-		/* apply cunit interleaving */
+-		apply_interleaving(nr_regions_per_cunit, cs, dst);
+-	}
++	make_cunit_info(nr_regions_per_cunit, mem_cunit_info, mem_info);
+ 
+ 	return mem_cunit_info;
+ }
+@@ -125,7 +151,7 @@ EXPORT_SYMBOL(sls_destroy_mem_cunit_info);
+ 
+ uint64_t sls_get_memory_size(void)
+ {
+-	const size_t nr_regions = sls_topo()->nr_cs * SLS_BLOCK_MAX;
++	const size_t nr_regions = NR_REGIONS_TOPO_EXPR(SLS_BLOCK_MAX);
+ 	uint64_t size = 0;
+ 	uint8_t idx;
+ 
+-- 
+2.34.1
+

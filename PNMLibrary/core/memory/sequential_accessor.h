@@ -40,7 +40,8 @@ private:
     return page_size;
   }
 
-  const uint8_t *access_impl(uint64_t byte_offset) const override;
+  const uint8_t *access_impl(uint64_t byte_offset,
+                             uint64_t size) const override;
 
   VirtualRegion virtual_range_impl() const override;
 

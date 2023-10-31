@@ -1,0 +1,136 @@
+From 7d4ec9f9f7620f432e4c85734bed1d3a1dc8bc44 Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Fri, 11 Aug 2023 11:54:23 +0300
+Subject: [PATCH 162/225] [Unified software stack] Add pnm_resources.h
+
+Resolves: MCS23-1024
+
+Signed-off-by: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+---
+ drivers/pnm/class_resource.c        |  6 ++++--
+ include/uapi/linux/imdb_resources.h |  7 ++++---
+ include/uapi/linux/pnm_resources.h  | 17 +++++++++++++++++
+ include/uapi/linux/sls_resources.h  | 10 ++++++----
+ 4 files changed, 31 insertions(+), 9 deletions(-)
+ create mode 100644 include/uapi/linux/pnm_resources.h
+
+diff --git a/drivers/pnm/class_resource.c b/drivers/pnm/class_resource.c
+index c73e69d4c..5fee84129 100644
+--- a/drivers/pnm/class_resource.c
++++ b/drivers/pnm/class_resource.c
+@@ -9,6 +9,7 @@
+ #include <linux/device/class.h>
+ #include <linux/fs.h>
+ #include <linux/module.h>
++#include <linux/pnm_resources.h>
+ 
+ #define RESOURCE_ACCESS_MODE 0666
+ 
+@@ -48,12 +49,13 @@ static char *devnode_func(struct device *dev, umode_t *mode)
+ 	if (mode)
+ 		*mode = RESOURCE_ACCESS_MODE;
+ 
+-	return kasprintf(GFP_KERNEL, "pnm/%s", dev_name(dev));
++	return kasprintf(GFP_KERNEL, "%s/%s", PNM_RESOURCE_CLASS_NAME,
++			 dev_name(dev));
+ }
+ 
+ static int __init init_pnm_class(void)
+ {
+-	pnm_device_class = class_create(THIS_MODULE, "pnm");
++	pnm_device_class = class_create(THIS_MODULE, PNM_RESOURCE_CLASS_NAME);
+ 	if (IS_ERR(pnm_device_class)) {
+ 		PNM_ERR("Failed to create PNM class\n");
+ 		return PTR_ERR(pnm_device_class);
+diff --git a/include/uapi/linux/imdb_resources.h b/include/uapi/linux/imdb_resources.h
+index b7c3bd82e..9b0248f39 100644
+--- a/include/uapi/linux/imdb_resources.h
++++ b/include/uapi/linux/imdb_resources.h
+@@ -12,6 +12,8 @@
+ #ifndef __IMDB_RESOURCES_H__
+ #define __IMDB_RESOURCES_H__
+ 
++#include <linux/pnm_resources.h>
++
+ #ifdef __KERNEL__
+ #include <linux/types.h>
+ #else
+@@ -20,13 +22,12 @@
+ 
+ // [TODO: y-lavrinenko] Should be merged with libimdb.h when the last is on kernel
+ 
+-#define IMDB_RESOURCE_CLASS_NAME "pnm"
+ #define IMDB_RESOURCE_DEVICE_NAME "imdb_resource"
+ #define IMDB_RESOURCE_DEVICE_PATH \
+-	"/dev/" IMDB_RESOURCE_CLASS_NAME "/" IMDB_RESOURCE_DEVICE_NAME
++	"/dev/" PNM_RESOURCE_CLASS_NAME "/" IMDB_RESOURCE_DEVICE_NAME
+ 
+ #define IMDB_SYSFS_PATH \
+-	"/sys/class/" IMDB_RESOURCE_CLASS_NAME "/" IMDB_RESOURCE_DEVICE_NAME
++	"/sys/class/" PNM_RESOURCE_CLASS_NAME "/" IMDB_RESOURCE_DEVICE_NAME
+ 
+ #define IMDB_THREAD_NUM 3
+ #define IMDB_NUM_OF_RANK 2
+diff --git a/include/uapi/linux/pnm_resources.h b/include/uapi/linux/pnm_resources.h
+new file mode 100644
+index 000000000..342c26c6d
+--- /dev/null
++++ b/include/uapi/linux/pnm_resources.h
+@@ -0,0 +1,17 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++/*
++ * Copyright (C) 2023 Samsung Electronics Co. LTD
++ *
++ * This software is proprietary of Samsung Electronics.
++ * No part of this software, either material or conceptual may be copied or
++ * distributed, transmitted, transcribed, stored in a retrieval system or
++ * translated into any human or computer language in any form by any means,
++ * electronic, mechanical, manual or otherwise, or disclosed to third parties
++ * without the express written permission of Samsung Electronics.
++ */
++#ifndef __PNM_RESOURCES_H__
++#define __PNM_RESOURCES_H__
++
++#define PNM_RESOURCE_CLASS_NAME "pnm"
++
++#endif /* __PNM_RESOURCES_H__ */
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index cfada1822..b66b05386 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -12,6 +12,8 @@
+ #ifndef __SLS_RESOURCES_H__
+ #define __SLS_RESOURCES_H__
+ 
++#include <linux/pnm_resources.h>
++
+ #ifdef __KERNEL__
+ #include <linux/types.h>
+ #else
+@@ -38,19 +40,19 @@
+ /* Data Size (Bytes) */
+ #define DATA_SIZE 4
+ 
+-#define SLS_RESOURCE_CLASS_NAME "pnm"
+ #define SLS_RESOURCE_DEVICE_NAME "sls_resource"
+ 
+ /* Path to SLS resource manager device within /dev */
+ #define SLS_RESOURCE_PATH_INTERNAL \
+-	SLS_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
++	PNM_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
+ 
+ /* Path to SLS resource manager device */
+ #define SLS_RESOURCE_PATH \
+-	"/dev/" SLS_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
++	"/dev/" PNM_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
+ 
+ /* Path to SLS memory device */
+-#define SLS_MEMDEV_PATH "/dev/sls_device"
++#define SLS_MEMDEV_PATH \
++	"/dev/" PNM_RESOURCE_CLASS_NAME "/" SLS_RESOURCE_DEVICE_NAME
+ 
+ /* Path to DAX device */
+ #define DAX_PATH "/dev/dax0.0"
+-- 
+2.34.1
+

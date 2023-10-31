@@ -27,6 +27,8 @@
 #include <stdexcept>
 #include <string>
 
+namespace tools::gen::sls {
+
 void TablesInfo::load_from_file(const std::filesystem::path &path) {
   std::ifstream in(path);
   in.exceptions(std::istream::badbit);
@@ -71,3 +73,5 @@ void TablesInfo::store_to_file(const std::filesystem::path &path) const {
   fmt::print(out, "table_columns = {}\n", cols_);
   fmt::print(out, "table_rows = {}\n", fmt::join(rows(), " "));
 }
+
+} // namespace tools::gen::sls

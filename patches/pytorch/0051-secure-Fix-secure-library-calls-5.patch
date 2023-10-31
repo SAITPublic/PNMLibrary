@@ -1,7 +1,7 @@
 From cc8bf4f37a837f38ccaefc4face46f54d4f483c0 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Tue, 28 Jun 2022 18:51:42 +0300
-Subject: [PATCH 051/128] [secure] Fix secure library calls (#5)
+Subject: [PATCH 051/135] [secure] Fix secure library calls (#5)
 
 Make `init` call compatible with new api.
 

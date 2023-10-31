@@ -13,20 +13,20 @@
 #ifndef _PNM_MEMORY_OBJECT_H_
 #define _PNM_MEMORY_OBJECT_H_
 
-#include <linux/pnm_sls_mem_topology.h>
-
-#include <array>
 #include <cassert>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace pnm::memory {
 
 /** @brief Represents table object for sls operation */
 class MemoryObject {
 public:
-  MemoryObject(uint64_t object_id, uint64_t size_bytes)
-      : object_id_(object_id), size_bytes_(size_bytes) {}
+  MemoryObject(uint64_t object_id, uint64_t size_bytes, uint32_t num_of_rank)
+      : object_id_(object_id), size_bytes_(size_bytes) {
+    offsets_.resize(num_of_rank);
+  }
 
   [[nodiscard]] auto id() const noexcept { return object_id_; }
   [[nodiscard]] auto bytes() const noexcept { return size_bytes_; }
@@ -47,7 +47,7 @@ private:
   //! Size of object in bytes
   uint64_t size_bytes_;
   //! Offsets of object in each rank
-  std::array<std::pair<bool, uint64_t>, NUM_OF_RANK> offsets_ = {};
+  std::vector<std::pair<bool, uint64_t>> offsets_ = {};
 };
 
 } // namespace pnm::memory

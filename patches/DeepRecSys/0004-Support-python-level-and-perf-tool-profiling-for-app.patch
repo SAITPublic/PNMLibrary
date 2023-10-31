@@ -1,7 +1,7 @@
 From 85d4d22621653e3a3ba2137f88c55b1380a222ad Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 15 Feb 2022 16:07:52 +0900
-Subject: [PATCH 04/33] Support python level and perf tool profiling for app
+Subject: [PATCH 04/34] Support python level and perf tool profiling for app
 
 * use '--enable_profiling' switch to enable python level profiling.
 * uncomment respective lines to attach with perf tool:

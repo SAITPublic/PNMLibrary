@@ -89,6 +89,8 @@ public:
 
 } // namespace pnm::utils
 
+void __tsan_release(void *); // MOC to suppress compilation-error without ASAN
+
 #endif // TSAN
 
 #endif /* PNM_COMPILER_INTERNAL_H */

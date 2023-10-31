@@ -12,6 +12,8 @@
 
 #include "scan.h"
 
+#include "common/memory/atomic.h"
+
 #include "pnmlib/imdb/libimdb.h"
 #include "pnmlib/imdb/scan.h"
 #include "pnmlib/imdb/scan_types.h"
@@ -20,10 +22,7 @@
 #include "pnmlib/core/memory.h"
 
 #include "pnmlib/common/error.h"
-#include "pnmlib/common/misc_utils.h"
 
-#include <atomic>
-#include <cstdint>
 #include <type_traits>
 #include <variant>
 
@@ -71,7 +70,7 @@ void ScanOperation::set_output_type(volatile ThreadCSR *ptr) const {
   auto output_flag = frontend_.output_type() == OutputType::BitVector
                          ? THREAD_CTRL_BV
                          : THREAD_CTRL_IV;
-  pnm::utils::as_vatomic<uint32_t>(&ptr->THREAD_CTRL)->store(output_flag);
+  pnm::memory::hw_atomic_store(&ptr->THREAD_CTRL, output_flag);
 
   ptr->THREAD_RES_ADDR = address(frontend_.result());
   ptr->THREAD_RSLT_LMT = frontend_.output_type() == OutputType::BitVector

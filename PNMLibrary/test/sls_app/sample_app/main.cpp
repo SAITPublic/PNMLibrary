@@ -8,7 +8,6 @@
 #include "test/mocks/context/utils.h"
 #include "test/sls_app/api/constants.h"
 #include "test/sls_app/api/structs.h"
-#include "test/sls_app/api/utils.h"
 
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
@@ -63,23 +62,23 @@ constexpr std::array<std::pair<int /*mini_batch_size*/, int /*num_table*/>, 2>
 
 constexpr std::array test_num_idx_values{32};
 
-constexpr std::array test_context_dummy{test::mock::ContextType::DEFAULT};
+constexpr std::array test_context_dummy{test::mock::ContextType::SLS};
 constexpr std::array test_context{
-    test::mock::ContextType::DEFAULT,
+    test::mock::ContextType::SLS,
     test::mock::ContextType::RANDOM_OFFSETS_ALLOCATOR};
 
-class SLSTests
+class SlsTests
     : public testing::TestWithParam<std::tuple<
           std::pair<int /*mini_batch_size*/, int /*num_table*/>,
           std::pair<size_t /*max_num_lookup*/, size_t /*min_num_lookup*/>,
           int /*sparse_feature_size*/, int /*num_idx_values */,
           sls_user_preferences /*preference*/, test::mock::ContextType>> {};
 
-class SLSTestsMP : public SLSTests {};
-class SLSTestsMT : public SLSTests {};
+class SlsTestsMP : public SlsTests {};
+class SlsTestsMT : public SlsTests {};
 
 const auto print_test_name =
-    [](const testing::TestParamInfo<SLSTests::ParamType> &info) {
+    [](const testing::TestParamInfo<SlsTests::ParamType> &info) {
       const int mini_batch_size = std::get<0>(info.param).first;
       const int num_table = std::get<0>(info.param).second;
       const auto [min_num_lookup, max_num_lookup] = std::get<1>(info.param);
@@ -94,8 +93,7 @@ const auto print_test_name =
           "__num_idx_values_{}__min_num_lookup_{}__max_num_lookup_{}"
           "__preference_{}_context_{}",
           mini_batch_size, sparse_feature_size, num_table, num_idx_values,
-          min_num_lookup, max_num_lookup, preference_to_str(preference),
-          context_type_to_str(context_type));
+          min_num_lookup, max_num_lookup, preference, context_type);
     };
 
 template <typename TestClass, typename ParamsGenerator, typename T>
@@ -132,10 +130,10 @@ void RunTest(std::tuple<std::pair<int, int>, std::pair<size_t, size_t>, int,
   runner.run(user_num_engines, tables, sls_op_params, root);
 }
 
-TEST(SLSTestsMP, PsumBufferOverflow) {
+TEST(SlsTestsMP, PsumBufferOverflow) {
   // Set batch size for guaranteed overflow of psum buffer for each table batch
   const uint32_t mini_batch_size =
-      (pnm::device::topo().PSumBufSize /
+      (pnm::sls::device::topo().PSumBufSize /
        (test_sparse_feature_sizes[0] * sizeof(float))) +
       1;
   const uint32_t num_tables = 5;
@@ -152,9 +150,9 @@ TEST(SLSTestsMP, PsumBufferOverflow) {
   // Set small number of lookups to reduce sls execution time
   // Increasing number of lookups for huge batch size will severely slow sls
   // execution
-  const SLSParamsGenerator params_generator;
+  const SlsParamsGenerator params_generator;
 
-  const SLSTestMultiprocess<float> test(batch, model, params_generator);
+  const SlsTestMultiprocess<float> test(batch, model, params_generator);
   test.print();
 
   const PeriodicTablesFiller filler(model, fill);
@@ -165,7 +163,7 @@ TEST(SLSTestsMP, PsumBufferOverflow) {
   test.run(user_num_engines, tables, sls_op_params, root);
 }
 
-TEST(SLSTestsMP, InstructionBufferOverflow) {
+TEST(SlsTestsMP, InstructionBufferOverflow) {
   const uint32_t mini_batch_size = test_batch_sizes_num_tables[0].first;
   const uint32_t num_tables = 5;
   const auto sparse_feature_size = test_sparse_feature_sizes[0];
@@ -181,9 +179,9 @@ TEST(SLSTestsMP, InstructionBufferOverflow) {
   const SlsModelParams model(sparse_feature_size, num_tables, kemb_table_len);
   const SlsTableFillParams<float> fill(num_idx_values);
 
-  const SLSParamsGenerator params_generator;
+  const SlsParamsGenerator params_generator;
 
-  const SLSTestMultiprocess<float> test(batch, model, params_generator);
+  const SlsTestMultiprocess<float> test(batch, model, params_generator);
   test.print();
 
   const PeriodicTablesFiller filler(model, fill);
@@ -194,7 +192,7 @@ TEST(SLSTestsMP, InstructionBufferOverflow) {
   test.run(user_num_engines, tables, sls_op_params, root);
 }
 
-TEST(SLSTestsMP, InstructionBufferOverflowEach3rdTable) {
+TEST(SlsTestsMP, InstructionBufferOverflowEach3rdTable) {
   if constexpr (TSAN) {
     return;
   }
@@ -214,9 +212,9 @@ TEST(SLSTestsMP, InstructionBufferOverflowEach3rdTable) {
   const SlsModelParams model(sparse_feature_size, num_table, kemb_table_len);
   const SlsTableFillParams<float> fill(num_idx_values);
 
-  const SLSParamsGenerator params_generator;
+  const SlsParamsGenerator params_generator;
 
-  const SLSTestMultiprocess<float> test(batch, model, params_generator);
+  const SlsTestMultiprocess<float> test(batch, model, params_generator);
   test.print();
 
   const PeriodicTablesFiller filler(model, fill);
@@ -227,7 +225,7 @@ TEST(SLSTestsMP, InstructionBufferOverflowEach3rdTable) {
   test.run(user_num_engines, tables, sls_op_params, root);
 }
 
-TEST(SLSTestsMP, InstructionBufferOverflowOneTableWithHugeLookups) {
+TEST(SlsTestsMP, InstructionBufferOverflowOneTableWithHugeLookups) {
   const auto batch_size_num_tables = test_batch_sizes_num_tables[0];
   const auto sparse_feature_size = test_sparse_feature_sizes[0];
   const auto num_idx_values = test_num_idx_values[0];
@@ -241,9 +239,9 @@ TEST(SLSTestsMP, InstructionBufferOverflowOneTableWithHugeLookups) {
   const SlsModelParams model(sparse_feature_size, num_tables, kemb_table_len);
   const SlsTableFillParams<float> fill(num_idx_values);
 
-  const SLSParamsGenerator params_generator;
+  const SlsParamsGenerator params_generator;
 
-  const SLSTestMultiprocess<float> test(batch, model, params_generator);
+  const SlsTestMultiprocess<float> test(batch, model, params_generator);
   test.print();
 
   const PeriodicTablesFiller filler(model, fill);
@@ -254,25 +252,25 @@ TEST(SLSTestsMP, InstructionBufferOverflowOneTableWithHugeLookups) {
   test.run(user_num_engines, tables, sls_op_params, root);
 }
 
-TEST_P(SLSTestsMP, MultiProcessF) {
-  RunTest<SLSTestMultiprocess<float>, SLSParamsGenerator, float>(GetParam());
+TEST_P(SlsTestsMP, MultiProcessF) {
+  RunTest<SlsTestMultiprocess<float>, SlsParamsGenerator, float>(GetParam());
 }
 
-TEST_P(SLSTestsMT, MultiThreadedF) {
-  RunTest<SLSTestMultithreaded<float>, SLSParamsGenerator, float>(GetParam());
+TEST_P(SlsTestsMT, MultiThreadedF) {
+  RunTest<SlsTestMultithreaded<float>, SlsParamsGenerator, float>(GetParam());
 }
 
-TEST_P(SLSTestsMP, MultiProcessI) {
-  RunTest<SLSTestMultiprocess<uint32_t>, SLSParamsGenerator, uint32_t>(
+TEST_P(SlsTestsMP, MultiProcessI) {
+  RunTest<SlsTestMultiprocess<uint32_t>, SlsParamsGenerator, uint32_t>(
       GetParam());
 }
-TEST_P(SLSTestsMT, MultiThreadedI) {
-  RunTest<SLSTestMultithreaded<uint32_t>, SLSParamsGenerator, uint32_t>(
+TEST_P(SlsTestsMT, MultiThreadedI) {
+  RunTest<SlsTestMultithreaded<uint32_t>, SlsParamsGenerator, uint32_t>(
       GetParam());
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    TestApp, SLSTestsMP,
+    TestApp, SlsTestsMP,
     /* Generation of all intersections: each as a separate test */
     testing::Combine(testing::ValuesIn(test_batch_sizes_num_tables),
                      testing::ValuesIn(test_min_and_max_num_lookup),
@@ -283,7 +281,7 @@ INSTANTIATE_TEST_SUITE_P(
     print_test_name);
 
 INSTANTIATE_TEST_SUITE_P(
-    TestApp, SLSTestsMT,
+    TestApp, SlsTestsMT,
     /* Generation of all intersections: each as a separate test */
     testing::Combine(testing::ValuesIn(test_batch_sizes_num_tables),
                      testing::ValuesIn(test_min_and_max_num_lookup),

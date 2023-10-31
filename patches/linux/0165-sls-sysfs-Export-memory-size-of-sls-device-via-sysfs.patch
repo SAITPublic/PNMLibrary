@@ -1,0 +1,44 @@
+From 6570e9f7fe9abeba0b15ca467eb48c103235c7ca Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Tue, 22 Aug 2023 11:29:54 +0300
+Subject: [PATCH 165/225] [sls][sysfs] Export memory size of sls device via
+ sysfs
+
+Resolves: MCS23-1503
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/pnm/sls_resource/sysfs.c | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sysfs.c b/drivers/pnm/sls_resource/sysfs.c
+index 4e7a5b21d..1fb5cc6b6 100644
+--- a/drivers/pnm/sls_resource/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs.c
+@@ -107,12 +107,18 @@ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ }
+ static DEVICE_ATTR_WO(reset);
+ 
++static ssize_t size_show(struct device *device, struct device_attribute *attr,
++			 char *buf)
++{
++	uint64_t value = SLS_MEMORY_SIZE;
++
++	return sysfs_emit(buf, "%llu\n", value);
++}
++static DEVICE_ATTR_RO(size);
++
+ static struct attribute *dev_attrs[] = {
+-	&dev_attr_acq_timeout.attr,
+-	&dev_attr_reset.attr,
+-	&dev_attr_leaked.attr,
+-	&dev_attr_cleanup.attr,
+-	NULL,
++	&dev_attr_acq_timeout.attr, &dev_attr_reset.attr, &dev_attr_leaked.attr,
++	&dev_attr_cleanup.attr,	    &dev_attr_size.attr,  NULL,
+ };
+ 
+ static struct attribute_group dev_attr_group = {
+-- 
+2.34.1
+

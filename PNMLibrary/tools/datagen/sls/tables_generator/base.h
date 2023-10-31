@@ -23,6 +23,8 @@
 #include <stdexcept>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Interface for tables generator. */
 class ITablesGenerator {
 public:
@@ -31,8 +33,8 @@ public:
   void create_and_store(const std::filesystem::path &root,
                         const TablesInfo &info) {
     auto data = create(info);
-    const auto tables_path = root / "embedded.bin";
-    const auto info_path = root / "embedded.info";
+    const auto tables_path = root / "embedding.bin";
+    const auto info_path = root / "embedding.info";
     info.store_to_file(info_path);
 
     std::ofstream out(tables_path, std::ios::out | std::ios::binary);
@@ -41,7 +43,7 @@ public:
       out.write(reinterpret_cast<char *>(data.data()), data.size());
     } else {
       throw std::runtime_error(
-          "Unable open embedded table file in write mode.");
+          "Unable open embedding table file in write mode.");
     }
   }
 
@@ -50,4 +52,7 @@ public:
 private:
   virtual std::vector<uint8_t> create_table_impl(const TablesInfo &info) = 0;
 };
+
+} // namespace tools::gen::sls
+
 #endif // SLS_ITABLES_GENERATOR_H

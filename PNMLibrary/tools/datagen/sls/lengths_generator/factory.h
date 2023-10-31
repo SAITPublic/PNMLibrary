@@ -20,11 +20,15 @@
 #include <memory>
 #include <string>
 
+namespace tools::gen::sls {
+
 class LengthsGeneratorFactory
     : public CommonFactory<std::string, std::unique_ptr<ILengthsGenerator>,
                            const std::string &> {
 public:
   static LengthsGeneratorFactory &default_factory();
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_LENGTHS_GEN_FACTORY_H

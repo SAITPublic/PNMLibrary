@@ -14,7 +14,7 @@ There are two ways to generate indices: run CLI app or use API.
 
 ### CLI App
 
-To create indices for the embedded tables set run `create_tables` app. The generator properties and embedded
+To create indices for the embedding tables set run `create_tables` app. The generator properties and embedding
 tables path are specified by command line arguments. The list of argument can be obtained by `-h` (`--help`)
 arg.
 
@@ -44,7 +44,7 @@ The generator names are:
   sequential -- create set of indices with value in range [0, minibatch_size)
 ```
 
-There are at least two arguments required to generate indices set: path to embedded tables and prefix -- string that
+There are at least two arguments required to generate indices set: path to embedding tables and prefix -- string that
 will be used as a prefix for indices and golden vector files. The extra options allow to customise index generation
 process.
 
@@ -53,7 +53,7 @@ process.
 ./create_indices test/ --prefix set_seq -Mb 200 -mb 150 -l 2000 -g sequential -et uint32_t
 ```
 
-The command above will create set of random indices and evaluate golden vector for selected embedded tables and
+The command above will create set of random indices and evaluate golden vector for selected embedding tables and
 generated indices. The number of batches for each table will be random value from range `[-Mb, -mb]`. The number
 of lookups is fixed for all batches and equal to `-l`.
 
@@ -69,8 +69,8 @@ vector (`.golden.bin`). The last file is a text file (`.indices.info`) and conta
 ```shell
 $ ls -l test/
 total 689436
--rw-rw-r-- 1 yalavrinenko yalavrinenko 702238784 мая 16 15:53 embedded.bin
--rw-rw-r-- 1 yalavrinenko yalavrinenko       940 мая 16 15:53 embedded.info
+-rw-rw-r-- 1 yalavrinenko yalavrinenko 702238784 мая 16 15:53 embedding.bin
+-rw-rw-r-- 1 yalavrinenko yalavrinenko       940 мая 16 15:53 embedding.info
 -rw-rw-r-- 1 yalavrinenko yalavrinenko   1650176 мая 16 16:02 set_random.golden.bin
 -rw-rw-r-- 1 yalavrinenko yalavrinenko    206272 мая 16 16:02 set_random.indices.bin
 -rw-rw-r-- 1 yalavrinenko yalavrinenko       626 мая 16 16:02 set_random.indices.info
@@ -79,117 +79,163 @@ total 689436
 -rw-rw-r-- 1 yalavrinenko yalavrinenko       626 мая 16 16:02 set_seq.indices.info
 ```
 
-### Indices generation API
+## Indices generation API
 
-To use API you should build tools library. The API presented by set of classes that allow to generate indices
-and golden vectors. There are several generators and factories to simplify generation process.
-The usage of API was presented in `test/utils_test/indices_gen.cpp`.
+To use API you should build tools library. The API presented by set of classes that allow to generate indices and golden vectors.
+There are several generators and factories to simplify generation process.
 
-There are four steps to generate indices in code:
+## All-in-one function
 
-1. create indices generator (ex. call factory with preregistered builders)
+You can use function `tools::gen::sls::get_or_create_test_indices` from `tools/datagen/sls/utils.h` file.
+It will generate test indices and lengths (if needed) and load it into given vectors.
+Golden vector will be generated (if needed), but won't be loaded.
+Its signature:
 
 ```c++
-auto igen = IndicesGeneratorFactory::default_factory().create("sequential");
+void get_or_create_test_indices(const GeneratorWithOverflowParams &params,
+                                std::vector<uint32_t> &lengths,
+                                std::vector<uint32_t> &indices)
 ```
 
-2. create object with indices structure
+`GeneratorWithOverflowParams`:
 
 ```c++
-class IndicesInfo {
-//.......
-  IndicesInfo(size_t num_lookup, std::vector<size_t> minibatch_sizes);
-//.......
+struct GeneratorWithOverflowParams {
+  size_t max_num_lookup;
+  size_t min_num_lookup;
+  int mini_batch_size;
+  std::filesystem::path root;
+  std::string prefix;
+  std::string generator_lengths_name;
+  std::string overflow_type;
+  std::string generator_indices_name;
+  std::string entry_type;
 };
-
-auto num_lookup = 10;
-std::vector<size_t> minibatch_sizes{5, 6, 7, 8, 9} 
-
-IndicesInfo iinfo(num_lookup, std::move(minibatch_sizes));
 ```
 
-3. create or load structure with embedded tables meta
+Parameters description:
+
+- `params`: input parameters
+  + `min_num_lookup`: Minimum number of lookups for each table
+  + `max_num_lookup`: Maximum number of lookups for each table
+  + `mini_batch_size`: Batch size for each table
+  + `root`: Directory, where files will be generated
+  + `prefix`: Prefix for every file name that will be generated
+  + `generator_lengths_name`: Name of lengths generator. List of supported names:
+    - `"random"`: Random lengths generator
+    - `"random_from_lookups_per_table`: Random table generator with same lengths for every `mini_batch_size`
+  + `overflow_type`: string with overflow type for `"random"` length generator.
+    - `0` - No instruction overflow
+    - `-1` - Instruction overflow in one random table
+    - `n` > 0 - Instruction overflow in each n'th table
+  + `generator_indices_name` - Name of indices generator. List of supported names:
+    - `"random"` - Random indices generator
+    - `"sequential"` - Sequential indices generator
+  + `entry_type` - type of entry in embedding tables. Supported types: `"uint32_t"`, `"uint64_t"`, `"float"`
+- `lengths`: output vector with lengths
+- `indices`: output vector with indices
+
+## Generate indices
+
+There are several steps to generate indices in code:
+
+1. Get or create object with table structure
 
 ```c++
-class TablesInfo {
-//.......
-  TablesInfo(size_t num_tables, size_t cols, std::vector<size_t> rows_in_tables);
-//.......
-};
-
-auto num_tables = 5;
-auto cols = 16;
-std::vector<size_t> rows_in_table{30, 40, 20, 100, 14};
-
-TablesInfo tinfo(num_tables, cols, std::move(rows_in_table));
+const TablesInfo tinfo(num_tables, sparse_feature_size,
+                      std::vector<uint32_t>(num_tables, emb_table_len));
 ```
 
-or
+or use [generated tables](https://github.samsungds.net/SAIT/PNMLibrary/blob/pnm/docs/howto/embedding_tables.md)
 
 ```c++
-auto tables = axdimm::tests::get_test_tables_mmap(root);
-auto tinfo = tables.info;
+auto tables = get_test_tables_mmap(root);
+const TablesInfo &tinfo = tables.info;
 ```
 
-4. call method of `igen` with `iinfo` and `tinfo` objects and required path to the directory with embedded tables
+2. Create length generator
 
 ```c++
-igen->create_and_store(root, "seq_ok", iinfo, tinfo);
+auto length_generator = LengthsGeneratorFactory::default_factory().create(
+        generator_lengths_name, overflow_type);
+```
+
+3. Generate length vector
+
+```c++
+auto lengths =
+     length_generator->create(tinfo.num_tables(), min_num_lookup,
+                              max_num_lookup, mini_batch_size);
+```
+
+4. Create indices generator
+
+```c++
+auto indices_generator = IndicesGeneratorFactory::default_factory().create("sequential");
+```
+
+5. Create object with indices structure using length vector
+
+```c++
+const IndicesInfo info(mini_batch_size, lengths);
+```
+
+6. Call method of `indices_generator` with `iinfo` and `tinfo` objects and required path to the directory with embedding tables
+
+```c++
+indices_generator->create_and_store(root, "iprefix", iinfo, tinfo);
 ```
 
 or if you want keep it in memory
 
 ```c++
-auto indices = igen->create(iinfo, tinfo);
+auto indices = indices_generator->create(iinfo, tinfo);
 ```
 
-To generate golden vector create SLS computer and call `compute_golden_sls` or `compute_and_store_golden_sls` method.
+### Generate golden vector
+
+To generate golden vector create golden vector generator and call `compute_golden_sls` or `compute_and_store_golden_sls` method.
 
 ```c++
-auto indices = axdimm::tests::get_test_indices(root, "seq_ok");
-auto tables = axdimm::tests::get_test_tables_mmap(root);
+auto indices = tools::gen::sls::get_test_indices(root, "iprefix");
+auto tables = tools::gen::sls::get_test_tables_mmap(root);
 
 auto sls_proc = GoldenVecGeneratorFactory::default_factory().create("uint32_t");
-sls_proc->compute_and_store_golden_sls(root, "seq_ok", tables, indices);
+sls_proc->compute_and_store_golden_sls(root, "iprefix", tables, indices);
 ```
 
 or
 
 ```c++
-auto indices = igen->create(iinfo, tinfo);
-auto emb_tables = igen->create(tinfo);
+auto indices = indices_generator->create(iinfo, tinfo);
+auto emb_tables = tables_generator->create(tinfo);
 
 auto sls_proc = GoldenVecGeneratorFactory::default_factory().create("uint32_t");
-auto golden = sls_proc->compute_golden_sls(emb_tables.data(), tables_meta, indices.data(), indices_meta);
+auto golden = sls_proc->compute_golden_sls(emb_tables.data(), tinfo, indices.data(), iinfo);
 ```
 
-Indices are stored as a sequence of 32-bit integer numbers. Firstly the indices for the lookups in the first table
-will be stored, next -- for the second and so on.
-
-A golden vector are stored as an array of values with type `--entry_t` in order:
-
-```
-sls(table_0, batch_00),sls(table_0, batch_01), sls(table_0, batch_02),
-sls(table_1, batch_10),sls(table_1, batch_11), sls(table_1, batch_12), ...
-``` 
-
-### Load indices
+## Load indices
 
 The `get_test_indices` function return structure with indices meta information and open binary stream from
 `<prefix>.indices.bin`
 
 ```c++
-auto indices = axdimm::tests::get_test_indices(root, "seq_ok");
+auto indices = tools::gen::sls::get_test_indices(root, "iprefix");
 ```
+
+### Load golden vector
 
 The golden vector can be loaded by function `get_golden_vector`. This function opens the binary stream for
 `<prefix>.golden.bin`
 
 ```c++
-auto golden = axdimm::tests::get_golden_vector(root, "seq_ok");
+auto golden = tools::gen::sls::get_golden_vector(root, "iprefix");
 ```
 
 ## Internal indices structure
+
+Indices are stored as a sequence of 32-bit integer numbers. Firstly the indices for the lookups in the first table
+will be stored, next -- for the second and so on.
 
 If we were to generate a minibatch of indices for `3 tables`, where we want `2` SLS queries per table and SLS operations
 for each respective table to sum `{4, 3, 4}` indices, then we could do this like so:
@@ -235,3 +281,12 @@ std::vector<uint32_t> lengths = {
   4, 4, // 2 queries on table 2, each one is an operation involving 4 indices
 };
 ```
+
+### Internal golden vector structure
+
+A golden vector are stored as an array of values with type `entry_t` in order:
+
+```
+sls(table_0, batch_00),sls(table_0, batch_01), sls(table_0, batch_02),
+sls(table_1, batch_10),sls(table_1, batch_11), sls(table_1, batch_12), ...
+``` 

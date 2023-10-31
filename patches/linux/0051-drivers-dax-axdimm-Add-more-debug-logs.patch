@@ -1,7 +1,7 @@
 From 265f6d8e4147338d792b16f42e6249c60cfb20e8 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Wed, 28 Sep 2022 17:28:48 +0300
-Subject: [PATCH 051/161] [drivers/dax/axdimm] Add more debug logs.
+Subject: [PATCH 051/225] [drivers/dax/axdimm] Add more debug logs.
 
 Add `AXDIMM_DBG` logs to various places (allocator,
 rank scheduler, init/cleanup functions, ioctl handler).

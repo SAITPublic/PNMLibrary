@@ -1,7 +1,7 @@
 From 9662fa0a00059dc57b86fc49d527029f0888d84f Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 15 Nov 2021 10:03:04 +0900
-Subject: [PATCH 028/128] [lengths_reducer_ops_axdimm.cc] Fix memory leak for
+Subject: [PATCH 028/135] [lengths_reducer_ops_axdimm.cc] Fix memory leak for
  blocked indices/lengths buffers
 
 Do not allocate buffers every time, increase their capacity instead if needed.

@@ -51,11 +51,11 @@ private:
 
 template <typename T = uint32_t> inline auto create_encryption_engine() {
   const char tkey[] = "123456789012345";
-  sls::FixedVector<uint8_t, 16> key{};
+  pnm::types::FixedVector<uint8_t, 16> key{};
   std::copy(tkey, tkey + sizeof(tkey), key.data());
 
-  return std::pair{sls::secure::EncryptionEngine<T>(42, key),
-                   sls::secure::VerificationEngine(0x69, 42, key)};
+  return std::pair{pnm::sls::secure::EncryptionEngine<T>(42, key),
+                   pnm::sls::secure::VerificationEngine(0x69, 42, key)};
 }
 
 #endif // SLS_TEST_EXTRA_H

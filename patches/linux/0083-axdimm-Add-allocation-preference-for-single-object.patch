@@ -1,7 +1,7 @@
 From 29b5b71cd694af56e45e19e9d819bb7b508bdb75 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 9 Feb 2023 14:01:06 +0300
-Subject: [PATCH 083/161] [axdimm] Add allocation preference for single object
+Subject: [PATCH 083/225] [axdimm] Add allocation preference for single object
 
 The allocation preference AXDIMM_ALLOC_SINGLE was introduced to define
 the allocation of single object. The allocation will select the rank

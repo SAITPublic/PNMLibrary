@@ -1,7 +1,7 @@
 From 827c3c63e91cdee4a826f0adc3ec86cd1e911eab Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Tue, 11 Oct 2022 16:44:50 +0300
-Subject: [PATCH 09/27] [axdimm][app] Remove meminfo device from manifest
+Subject: [PATCH 09/29] [axdimm][app] Remove meminfo device from manifest
 
 Remove meminfo from mount path in manifest file.
 ---

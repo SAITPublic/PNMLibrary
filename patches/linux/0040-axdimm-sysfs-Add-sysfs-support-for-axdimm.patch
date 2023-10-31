@@ -1,7 +1,7 @@
 From ac4941599b25cd0a6e14f16c5e87aae9b929dd19 Mon Sep 17 00:00:00 2001
 From: "s.koval" <s.koval@samsung.com>
 Date: Wed, 7 Sep 2022 16:52:09 +0300
-Subject: [PATCH 040/161] [axdimm][sysfs] Add sysfs support for axdimm
+Subject: [PATCH 040/225] [axdimm][sysfs] Add sysfs support for axdimm
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

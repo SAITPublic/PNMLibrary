@@ -14,14 +14,15 @@
 
 #include "context.h"
 
+#include "pnmlib/common/compiler.h"
+
 namespace pnm {
 
-class Runner {
+class PNM_API Runner {
 public:
   Runner() = default;
 
-  explicit Runner(const pnm::ContextHandler &context)
-      : context_{context.get()} {}
+  explicit Runner(const pnm::ContextHandler &context);
 
   template <typename T> void run(T &op) const {
     context_->dispatcher().invoke(op, context_);

@@ -20,6 +20,8 @@
 #include <memory>
 #include <string>
 
+namespace tools::gen::sls {
+
 /*! \brief Fabric for table generators. Call default_factory() method to get
  * fabric with all preregistered generators.*/
 class TablesGeneratorFactory
@@ -28,5 +30,7 @@ class TablesGeneratorFactory
 public:
   static TablesGeneratorFactory &default_factory();
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_GENERATOR_FACTORY_H

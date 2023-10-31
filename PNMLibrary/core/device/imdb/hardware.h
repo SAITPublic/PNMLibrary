@@ -19,7 +19,7 @@
 
 namespace pnm::imdb::device {
 
-class HardwareDevice final : public BaseDevice {
+class HardwareDevice : public BaseDevice {
 public:
   HardwareDevice();
   ~HardwareDevice() override;

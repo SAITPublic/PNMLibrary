@@ -19,9 +19,8 @@
 #include "sls/compute_unit/compute_unit.h"
 #include "sls/operation/reduction_operation.h"
 
-#include "core/memory/barrier.h"
-
 #include "common/log.h"
+#include "common/memory/barrier.h"
 
 #include "pnmlib/core/device.h"
 
@@ -37,14 +36,15 @@
 namespace pnm::sls {
 
 template <typename ComputeUnit>
-class CXLReductionRunner
-    : public ReductionRunner<CXLReductionRunner<ComputeUnit>> {
-  using ReductionRunner<CXLReductionRunner<ComputeUnit>>::device_;
-  using ReductionRunner<CXLReductionRunner<ComputeUnit>>::read_output_buffers;
+class CxlReductionRunner
+    : public ReductionRunner<CxlReductionRunner<ComputeUnit>> {
+  using ReductionRunner<CxlReductionRunner<ComputeUnit>>::device_;
+  using ReductionRunner<CxlReductionRunner<ComputeUnit>>::read_output_buffers;
 
 public:
-  explicit CXLReductionRunner(Device *sls_device)
-      : ReductionRunner<CXLReductionRunner<ComputeUnit>>(sls_device) {}
+  explicit CxlReductionRunner(Device *sls_device, unsigned int num_of_workers)
+      : ReductionRunner<CxlReductionRunner<ComputeUnit>>(sls_device,
+                                                         num_of_workers) {}
 
   void run_on_pack(ReductionOperation &op, uint8_t pack);
 
@@ -58,14 +58,14 @@ private:
 };
 
 template <typename ComputeUnit>
-void CXLReductionRunner<ComputeUnit>::run_on_pack(ReductionOperation &op,
+void CxlReductionRunner<ComputeUnit>::run_on_pack(ReductionOperation &op,
                                                   uint8_t pack) {
   ComputeUnit compute_unit(device_, pack);
-  CXLReductionRunner<ComputeUnit>::process_execs(op, pack, compute_unit);
+  CxlReductionRunner<ComputeUnit>::process_execs(op, pack, compute_unit);
 }
 
 template <typename ComputeUnit>
-void CXLReductionRunner<ComputeUnit>::process_execs(ReductionOperation &op,
+void CxlReductionRunner<ComputeUnit>::process_execs(ReductionOperation &op,
                                                     uint8_t pack,
                                                     ComputeUnit &compute_unit) {
   const auto num_execs = op.get_num_exec_iterations(pack);
@@ -74,8 +74,9 @@ void CXLReductionRunner<ComputeUnit>::process_execs(ReductionOperation &op,
     const auto &trace =
         op.generate_instructions(pack, compute_unit.id(), exec_id);
 
-    compute_unit.write_buffer(BlockType::INST,
-                              view_cast<const uint8_t>(make_view(trace)));
+    compute_unit.write_buffer(
+        BlockType::INST,
+        pnm::views::view_cast<const uint8_t>(pnm::views::make_view(trace)));
 
     reset_output_buffers(compute_unit.id(),
                          op.get_tmp_buffer(pack, exec_id).size());
@@ -91,19 +92,19 @@ void CXLReductionRunner<ComputeUnit>::process_execs(ReductionOperation &op,
 }
 
 template <typename ComputeUnit>
-void CXLReductionRunner<ComputeUnit>::reset_output_buffers(
+void CxlReductionRunner<ComputeUnit>::reset_output_buffers(
     uint8_t cunit_id, uint64_t size) const {
   auto *buffer = device_->mem_block_handler()->get_mem_block_ptr(SLS_BLOCK_PSUM,
                                                                  cunit_id, 0);
   std::fill_n(static_cast<uint8_t *>(buffer), size, 0x0);
   if constexpr (PNM_PLATFORM != FUNCSIM) {
-    flush(buffer, size);
-    mfence();
+    pnm::memory::flush(buffer, size);
+    pnm::memory::mfence();
   }
 }
 
 template <typename ComputeUnit>
-void CXLReductionRunner<ComputeUnit>::nop() const {
+void CxlReductionRunner<ComputeUnit>::nop() const {
   // For some reason, the device will not hang after multiple execs if we
   // make any syscall. So, we just make a NOP ioctl to our resource device.
   // [TODO: @y-lavrinenko] Get rid when we have stable HW

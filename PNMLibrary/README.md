@@ -28,21 +28,29 @@ See [Coding-guidelines.md](docs/coding_guidelines/Coding-guidelines.md)
 
 
 ## Prerequisites
-* [PNM enabled Linux kernel](https://github.samsungds.net/SAIT/PNMLinux/blob/axdimm-v6.1.6/PNM_HOW_TO_BUILD.md) for full support, or ...
-* ... copy [include/uapi/linux/pnm_sls_mem_topology.h](https://github.samsungds.net/SAIT/PNMLinux/blob/axdimm-v6.1.6/include/uapi/linux/pnm_sls_mem_topology.h), [include/uapi/linux/sls_resources.h](https://github.samsungds.net/SAIT/PNMLinux/blob/axdimm-v6.1.6/include/uapi/linux/sls_resources.h) and [include/uapi/linux/imdb_resources.h](https://github.samsungds.net/SAIT/PNMLinux/blob/axdimm-v6.1.6/include/uapi/linux/imdb_resources.h) headers into `/usr/include/linux/` to enable local build.
+* [PNM enabled Linux kernel](https://github.samsungds.net/SAIT/PNMlinux/blob/pnm/PNM_README.md#kernel-build--install) for full support, or ...
+* ... copy [include/uapi/linux/sls_resources.h](https://github.samsungds.net/SAIT/PNMlinux/blob/pnm/include/uapi/linux/sls_resources.h) and [include/uapi/linux/imdb_resources.h](https://github.samsungds.net/SAIT/PNMlinux/blob/pnm/include/uapi/linux/imdb_resources.h) headers into `/usr/include/linux/` to enable local build.
 
-Building is supported currently only on Ubuntu 22.04 with GCC 11 and Clang 14 with CMake 3.16.3, though the most thorough testing is performed against trunk LLVM from [their PPA](apt.llvm.org). Other configurations may work, but without any guarantees.
+Building is supported currently only on Ubuntu 22.04 with GCC 11 and Clang 14 with CMake 3.16.3, though the most thorough testing is performed against trunk LLVM from [their PPA](https://apt.llvm.org/). Other configurations may work, but without any guarantees.
 
 ## How to build userspace library
-```
+```shell
 $ ./scripts/build.sh --hw -cb -j 32 --tests --test_tables_root <path might be empty folder>
 ```
 See `./scripts/build.sh -h` for more details
 
 Or you can use CMake presets (see `CMakePresets.json` for details on all available configurations):
-```
+```shell
 $ cmake --preset release && cmake --build build/presets/release && cmake --install build/presets/release
 ```
+You can also build a deb package with tools and library using `CPack`:
+```shell
+$ cd build/presets/release && cpack -G DEB
+```
+Built package can be found in `_packages` directory in project root. It can be installed via `dpkg`, as usual.
+Installed binaries and libraries would appear in `/usr/local` by default and would be available for all users.
+[Autocompletion](https://github.samsungds.net/SAIT/PNMLibrary/blob/pnm/README.md#pnm_ctl-autocompletion) is
+also installed and enabled, but you may need to relogin into your shell to use it.
 
 ## Demo apps
 1. [SecNDP Demo](./test/secndp_demo/README.md)
@@ -53,64 +61,77 @@ $ cmake --preset release && cmake --build build/presets/release && cmake --insta
 ### SLS tests
 
 1. Make sure you built library with `--tests` and `--test_tables_root` flags.
-2. [Build library](https://github.samsungds.net/SAIT/PNMLibrary#how-to-build-userspace-library).
+2. [Build and install library](https://github.samsungds.net/SAIT/PNMLibrary#how-to-build-userspace-library).
 3. Make sure you have SLS capable kernel and `sls_resource` kernel driver is presented:
-```bash
+```shell
 $ sudo find /lib/modules/$(uname -r)/kernel/drivers/pnm -name 'sls_resource.ko'
 ```
 4. Setup `sls_resource` driver:
-```bash
-$ sudo modprobe -v sls_resource
+```shell
+$ sudo modprobe -v sls_resource dev_type=${DEVICE}
 ```
+where `%{DEVICE}` can be one `AXDIMM` or `CXL`.
+
 5. Setup DAX device (only for hardware SLS):
-```bash
-$ ./scripts/setup_dax_device.sh
+```shell
+$ sudo pnm_ctl setup-dax-device
 ```
+If you didn't install a deb package, built version of tool is available at `${BUILD_DIR}/tools/pnm_ctl`.
+
 6. Setup shared memory range (only for simulator):
 
-Size of this range can be configured via `--mem` parameter, e. g. `--mem=32G`. This size should not be less than the size of SLS range.
-```bash
-$ ./build/tools/pnm_ctl setup-shm --sls --mem=32G
+Size of this range can be configured via `--mem` parameter, e. g. `--mem=32G`.
+This size should not be less than the size of SLS range.
+This parameter is optional, default value will be loaded from `sysfs`.
+```shell
+$ pnm_ctl setup-shm --sls --mem=32G
 ```
+If you didn't install a deb package, built version of tool is available at `${BUILD_DIR}/tools/pnm_ctl`.
 
 7. Run the test:
-```
-$ ./build/test/sample_app 10
+```shell
+$ ${BUILD_DIR}/test/sample_app 10
 ```
 8. After running the tests shared object can be safely destroyed:
-```bash
-$ ./build/tools/pnm_ctl destroy-shm --sls
+```shell
+$ pnm_ctl destroy-shm --sls
 ```
 
 ### IMDB tests
 1. Make sure you built library with `--tests` and `--test_tables_root` flags.
-2. [Build library](https://github.samsungds.net/SAIT/PNMLibrary#how-to-build-userspace-library).
+2. [Build and install library](https://github.samsungds.net/SAIT/PNMLibrary#how-to-build-userspace-library).
 3. Make sure you have IMDB capable kernel and `imdb_resource` kernel driver is presented:
-```bash
+```shell
 $ sudo find /lib/modules/$(uname -r)/kernel/drivers/pnm -name 'imdb_resource.ko'
 ```
 4. Setup `imdb_resource` driver
-```bash
+```shell
 $ modprobe -v imdb_resource
 ``` 
 5. Setup shared memory objects (only for simulator):
-```bash
-$ ./build/tools/pnm_ctl setup-shm --imdb
+```shell
+$ pnm_ctl setup-shm --imdb
+```
+If you didn't install a deb package, built version of tool is available at `${BUILD_DIR}/tools/pnm_ctl`.
+If you encounter `SIGBUS`, you may want to recreate shared object with more memory:
+```shell
+$ pnm_ctl destroy-shm --imdb
+$ pnm_ctl setup-shm --mem=32G
 ```
 6. Run the test:
-```
-$ ./build/test/imdb_test_app 4
+```shell
+$ ${BUILD_DIR}/test/imdb_test_app 4
 ```
 7. After running the tests shared object can be safely destroyed:
-```bash
-$ ./build/tools/pnm_ctl destroy-shm --imdb
+```shell
+$ pnm_ctl destroy-shm --imdb
 ```
 
 ## How to run GoogleTest with cmake tests
 
-1. Load CMake project with -DCMAKE_ENABLE_TESTS=ON.
+1. Load CMake project with -DPNM_ENABLE_TESTS=ON.
 ```shell
-cmake -S . -B <output_directory> -DCMAKE_ENABLE_TESTS=ON -DTEST_TABLES_ROOT=<path might be empty folder>
+cmake -S . -B <output_directory> -DPNM_ENABLE_TEST=ON -DTEST_TABLES_ROOT=<path might be an empty folder> -DPNM_EXECUTION_PLATFORM=FUNCSIM
 ```
 2. Build all target.
 ```shell
@@ -143,10 +164,10 @@ Start  9: FixedVector.BaseOperation
 9/12 Test  #9: FixedVector.BaseOperation ........   Passed    0.00 sec
 Start 10: RankIO.SimpleCopy
 10/12 Test #10: RankIO.SimpleCopy ................   Passed    0.00 sec
-Start 11: EmbeddedTable.SimpleIteration
-11/12 Test #11: EmbeddedTable.SimpleIteration ....   Passed    0.00 sec
-Start 12: EmbeddedTable.BlockIteration
-12/12 Test #12: EmbeddedTable.BlockIteration .....   Passed    0.00 sec
+Start 11: EmbeddingTable.SimpleIteration
+11/12 Test #11: EmbeddingTable.SimpleIteration ....   Passed    0.00 sec
+Start 12: EmbeddingTable.BlockIteration
+12/12 Test #12: EmbeddingTable.BlockIteration .....   Passed    0.00 sec
 
 100% tests passed, 0 tests failed out of 12
 
@@ -158,12 +179,12 @@ More detail at [docs.](https://cmake.org/cmake/help/latest/manual/ctest.1.html)
 
 To exclude large tests from testset use `-E` flag followed by regular expression. All tests with name
 that matches to regexpr will excluded from run. Ex:
-```bash
+```shell
 ctest -E '(TestApp)|(SecNDPTestFixture)'
 ```
 The command above excludes test with names `*test_app*` and `*SecNDP_Stress*`.	
 
-```bash
+```shell
 ctest -R '(TestApp)|(SecNDPTestFixture)'
 ```
 This command runs test that match regular expression.
@@ -182,46 +203,54 @@ with regular cmake language.
 
 1. [Build library](https://github.samsungds.net/SAIT/PNMLibrary#how-to-build-userspace-library).
 2. Make sure you have SLS capable kernel and `sls_resource` kernel driver is presented:
-```bash
+```shell
 $ sudo find /lib/modules/$(uname -r)/kernel/drivers/pnm -name 'sls_resource.ko'
 ```
 3. Setup SLS resource:
-```bash
-$ sudo modprobe -v sls_resource
+```shell
+$ sudo modprobe -v sls_resource dev_type=${DEVICE}
 ```
+
+where `${DEVICE}` can be `AXDIMM` or `CXL`.
+
 4. Setup shared memory range:
-```bash
-$ ./build/tools/pnm_ctl setup-shm --sls --mem=32G ```
+```shell
+$ pnm_ctl setup-shm --sls --mem=32G
+```
   Size of this range can be configured via `--mem` parameter, e.g. `--mem=32G`. This size should
   not be less than the size of SLS range configured in device driver.
+  This parameter is optional, default value will be loaded from `sysfs`.
+  If you didn't install a deb package, built version of tool is available at `${BUILD_DIR}/tools/pnm_ctl`.
+
 5. Build and install [Pytorch with PNM support](https://github.samsungds.net/SAIT/PNMPytorch), use `USE_PNM=1 PNM_INSTALL_DIR=<path>`
    switches to enable PNM build path.
+  
 6. Download [DeepRecSys with PNM support](https://github.samsungds.net/SAIT/PNMDeepRecSys) and run corresponding script:
-```bash
+```shell
 $ cd ../ && git clone https://github.samsungds.net/SAIT/PNMDeepRecSys.git && cd PNMDeepRecSys
-$ ./run_DeepRecSys_pnm.sh --tables $PATH_TO_TABLES/embedded.bin --use_pnm
+$ ./run_DeepRecSys_pnm.sh --tables $PATH_TO_TABLES/embedding.bin --use_pnm
 ```
   If you want to run in CPU mode, just remove `--use_pnm` flag from the command line:
-```bash
-  $ ./run_DeepRecSys_pnm.sh --tables $PATH_TO_TABLES/embedded.bin
+```shell
+  $ ./run_DeepRecSys_pnm.sh --tables $PATH_TO_TABLES/embedding.bin
 ```
 7. After running the tests shared object can be safely destroyed:
-```bash
-$ ../PNMLibrary/build/tools/pnm_ctl destroy-shm --sls
+```shell
+$ pnm_ctl destroy-shm --sls
 ```
 
 ## How to run Pytorch Facebook Research DLRM in PNM mode
 1. [Build library](https://github.samsungds.net/SAIT/PNMLibrary#how-to-build-userspace-library).
 2. Perform 2-4 steps from `How to run DeepRecSys with PNM using functional simulator`.
 3. Download [Facebook Research DLRM with PNM support](https://github.samsungds.net/SAIT/PNMdlrm) and run corresponding script:
-```bash
+```shell
 $ cd ../ && git clone https://github.samsungds.net/SAIT/PNMdlrm.git && cd PNMdlrm
-$ ./run_test.sh --weights-path $PATH_TO_TABLES//embedded.bin --use-pnm <simple, secure>
+$ ./run_test.sh --weights-path $PATH_TO_TABLES//embedding.bin --use-pnm <simple, secure>
 ```
 
 ## How to generate data for tests
 
-- [Generate embedded tables](docs/howto/embedded_tables.md)
+- [Generate embedding tables](docs/howto/embedding_tables.md)
 - [Generate indices](docs/howto/generate_indices.md)
 - [Create dataset for secndp_demo](docs/howto/test_dataset.md)
 
@@ -257,7 +286,7 @@ java -jar plantuml.jar ./diagram.txt -DPLANTUML_LIMIT_SIZE=100000
 ```
 
 3. Extra option:
-Automatic diagramm generation using the [clang-uml](https://github.com/bkryza/clang-uml)
+   Automatic diagram generation using the [clang-uml](https://github.com/bkryza/clang-uml)
 (Always a up to date diagram, but does not draw header-only classes)
 
 - Install clang-uml
@@ -304,6 +333,7 @@ sudo apt install clang-format clang-tidy python3-clang
 ```
 2. Make sure you built library with `--check_all` flag or just run the script [common_checks.sh](scripts/common_checks.sh) manually.
 All checks will/should be run after the build.
+   Another option is to use `pre_pr` preset, which would also trigger all common checks.
 3. [Build library](https://github.samsungds.net/SAIT/PNMLibrary#how-to-build-userspace-library).
 
 ## pnm_ctl autocompletion
@@ -317,3 +347,6 @@ To be able to call `pnm_ctl` as a bash command, you can add path to executable t
 ```bash
 export PATH=${PATH:+${PATH}:}$PNM_LIBRARY_DIR/build/tools/
 ```
+
+## Share region between processes
+[Region sharing](docs/howto/ipc_region_sharing.md)

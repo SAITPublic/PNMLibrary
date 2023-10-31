@@ -1,0 +1,1366 @@
+From b1cb6261259b08df082976b3afc0580243c8db90 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Thu, 7 Sep 2023 19:13:52 +0300
+Subject: [PATCH 175/225] [PNM] Unify allocator basics
+
+* Common logic generalization
+
+Resolve: MCS23-1538
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/Kconfig                   |   3 +
+ drivers/pnm/imdb_resource/allocator.c | 237 +++-------------
+ drivers/pnm/imdb_resource/allocator.h |  13 -
+ drivers/pnm/sls_resource/allocator.c  | 314 +++------------------
+ drivers/pnm/sls_resource/allocator.h  |   1 -
+ include/linux/pnm_alloc.h             |  53 ++++
+ lib/Kconfig                           |  11 +
+ lib/Makefile                          |   5 +-
+ lib/pnm/Makefile                      |   4 +-
+ lib/pnm/log.h                         |  20 ++
+ lib/pnm/pnm_alloc.c                   | 384 ++++++++++++++++++++++++++
+ lib/pnm/zswap/Makefile                |   4 +
+ lib/pnm/{ => zswap}/pnm_zswap_lib.c   |   0
+ 13 files changed, 557 insertions(+), 492 deletions(-)
+ create mode 100644 include/linux/pnm_alloc.h
+ create mode 100644 lib/pnm/log.h
+ create mode 100644 lib/pnm/pnm_alloc.c
+ create mode 100644 lib/pnm/zswap/Makefile
+ rename lib/pnm/{ => zswap}/pnm_zswap_lib.c (100%)
+
+diff --git a/drivers/pnm/Kconfig b/drivers/pnm/Kconfig
+index 822a7907e..233fbb7cd 100644
+--- a/drivers/pnm/Kconfig
++++ b/drivers/pnm/Kconfig
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0-only
++
+ config PNM_CLASS_RESOURCE
+ 	tristate "PNM class resource manager"
+ 	help
+@@ -12,6 +13,7 @@ config PNM_CLASS_RESOURCE
+ config SLS_RESOURCE
+ 	tristate "SLS Resource Manager"
+ 	depends on PNM_CLASS_RESOURCE
++	select PNM_LIB
+ 	help
+ 	  Support for management of SLS device resources
+ 
+@@ -66,6 +68,7 @@ config PNM_ZSWAP_NUMA_NODE
+ menuconfig IMDB_RESOURCE
+ 	tristate "IMDB Resource Manager"
+ 	depends on PNM_CLASS_RESOURCE
++	select PNM_LIB
+ 	help
+ 	  Support for management of CXL-IMDB device resources
+ 
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index d897e0953..c8cafd2b7 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -6,7 +6,6 @@
+ #include "private.h"
+ #include "proc_mgr.h"
+ 
+-#include <linux/genalloc.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/kernel.h>
+ #include <linux/log2.h>
+@@ -14,194 +13,43 @@
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/numa.h>
++#include <linux/pnm_alloc.h>
+ #include <linux/uaccess.h>
+ 
+-static struct MemoryAllocator general_alloc = {
+-	.gran = IMDB_MEMORY_ADDRESS_ALIGN,
+-};
+-
+-DEFINE_MUTEX(allocator_lock);
++static struct pnm_alloc alloc;
+ 
+ void imdb_alloc_lock(void)
+ {
+-	mutex_lock(&allocator_lock);
++	pnm_alloc_lock(&alloc);
+ }
+ 
+ void imdb_alloc_unlock(void)
+ {
+-	mutex_unlock(&allocator_lock);
+-}
+-
+-/* Use this function under allocator_lock mutex */
+-static int init_rank_pool(struct MemoryAllocator *alloc, uint8_t rank,
+-			  uint64_t start, uint64_t size)
+-{
+-	int err_code;
+-	struct gen_pool *pool =
+-		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
+-
+-	if (!pool) {
+-		IMDB_ERR(
+-			"gen_pool_create failed for rank pool[%hhu], gran = [%llu]\n",
+-			rank, alloc->gran);
+-		return -ENOMEM;
+-	}
+-
+-	err_code = gen_pool_add(pool, start, size, NUMA_NO_NODE);
+-	if (err_code < 0) {
+-		IMDB_ERR(
+-			"Failed to init memory rank pool[%hhu], size = [%llu] with error [%d]\n",
+-			rank, size, err_code);
+-		gen_pool_destroy(pool);
+-		return err_code;
+-	}
+-	gen_pool_set_algo(pool, gen_pool_best_fit, NULL);
+-
+-	IMDB_INF(
+-		"Memory rank pool[%hhu] initialized: gran = [%llu], size = [%llu]\n",
+-		rank, alloc->gran, size);
+-
+-	alloc->pools[rank] = pool;
+-
+-	return err_code;
+-}
+-
+-/* Make each pool chunk size == 0 */
+-static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+-					  struct gen_pool_chunk *chunk,
+-					  void *data)
+-{
+-	chunk->end_addr = chunk->start_addr - 1;
+-}
+-
+-/* Use this function under allocator_lock mutex */
+-static void cleanup_memory_pools(struct MemoryAllocator *alloc)
+-{
+-	uint8_t rank;
+-	struct gen_pool *pool;
+-
+-	for (rank = 0; rank < IMDB_NUM_OF_RANK; ++rank) {
+-		pool = alloc->pools[rank];
+-		if (!pool) {
+-			IMDB_WRN(
+-				"Trying to cleanup memory rank pool[%hhu] that was not created\n",
+-				rank);
+-			continue;
+-		}
+-		if (gen_pool_avail(pool) != gen_pool_size(pool)) {
+-			IMDB_ERR(
+-				"pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
+-				rank, gen_pool_size(pool),
+-				gen_pool_avail(pool));
+-			/*
+-			 * To destroy memory pool gen_pool_destroy checks
+-			 * outstanding allocations up to the kernel panic.
+-			 * Mark all our memory chunks with zero size for
+-			 * forced deallocation ignoring that.
+-			 */
+-			gen_pool_for_each_chunk(
+-				pool, mem_pool_mark_zero_chunk_size, NULL);
+-		}
+-		gen_pool_destroy(pool);
+-		alloc->pools[rank] = NULL;
+-		IMDB_INF("Memory rank pool[%hhu] is destroyed\n", rank);
+-	}
+-}
+-
+-/* Use this function under allocator_lock mutex */
+-static int init_memory_pools(struct MemoryAllocator *alloc)
+-{
+-	/*
+-	 * Reserve alloc->gran size from start to eliminate allocator
+-	 * ambiguity, technically we could back off by just 1 byte,
+-	 * but the alignment is preferred.
+-	 * Otherwise, the allocator may return 0 as a pointer to
+-	 * the real allocation, and we'll not be able to distinguish
+-	 * the result from the allocator fail.
+-	 */
+-	uint64_t start = alloc->gran;
+-	int err_code;
+-	uint8_t rank = 0;
+-
+-	if (!is_power_of_2(alloc->gran)) {
+-		IMDB_ERR("Memory granularity should be a power of 2!\n");
+-		return -EINVAL;
+-	}
+-
+-	for (; rank < IMDB_NUM_OF_RANK; ++rank)
+-		if (alloc->pools[rank]) {
+-			IMDB_ERR("Not cleaned pool[%hhu] in initialization!\n",
+-				 rank);
+-			alloc->pools[rank] = NULL;
+-			IMDB_ERR("pool[%hhu] ptr forcefully reset to zero\n",
+-				 rank);
+-		}
+-
+-	for (rank = 0; rank < IMDB_NUM_OF_RANK;
+-	     ++rank, start += IMDB_RANK_SIZE) {
+-		err_code = init_rank_pool(alloc, rank, start, IMDB_RANK_SIZE);
+-		if (err_code) {
+-			cleanup_memory_pools(alloc);
+-			return err_code;
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+-static uint8_t get_rank_most_free(void)
+-{
+-	uint64_t max_avail = gen_pool_avail(general_alloc.pools[0]);
+-	uint8_t rank_most_free = 0;
+-	uint8_t rank = 1;
+-
+-	for (; rank < IMDB_NUM_OF_RANK; ++rank)
+-		if (max_avail < gen_pool_avail(general_alloc.pools[rank])) {
+-			max_avail = gen_pool_avail(general_alloc.pools[rank]);
+-			rank_most_free = rank;
+-		}
+-	return rank_most_free;
++	pnm_alloc_unlock(&alloc);
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+ static int allocate_memory(struct imdb_allocation *req)
+ {
+-	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
+-	int result = 0;
+-
+ 	if (req->rank == IMDB_NUM_OF_RANK)
+-		req->rank = get_rank_most_free();
+-
+-	req->address =
+-		gen_pool_alloc(general_alloc.pools[req->rank], aligned_size);
+-	if (req->address == 0) {
+-		IMDB_ERR("Fail to allocate %llu bytes.", req->size);
+-		result = -ENOMEM;
+-	} else {
+-		/*
+-		 * Address adjustment taking into account
+-		 * the starting reserve.
+-		 */
+-		req->address -= general_alloc.gran;
+-	}
++		req->rank = pnm_alloc_most_free_pool(&alloc);
+ 
+-	return result;
++	return pnm_alloc_pool_malloc(&alloc, req->rank, req->size,
++				     &req->address);
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+ static void deallocate_memory(const struct imdb_allocation *req)
+ {
+-	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
+-	const auto uint64_t real_address = req->address + general_alloc.gran;
++	uint64_t addr = req->address;
+ 
+-	gen_pool_free(general_alloc.pools[req->rank], real_address,
+-		      aligned_size);
++	pnm_alloc_pool_free(&alloc, req->rank, req->size, &addr);
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+-int allocator_clear_res(const struct imdb_allocation *allocation)
++int allocator_clear_res(const struct imdb_allocation *req)
+ {
+-	deallocate_memory(allocation);
++	deallocate_memory(req);
+ 	return 0;
+ }
+ 
+@@ -257,17 +105,7 @@ int allocator_ioctl(struct file *filp, unsigned int cmd,
+ 
+ uint64_t get_avail_size(void)
+ {
+-	uint64_t value = 0;
+-	uint8_t rank = 0;
+-
+-	mutex_lock(&allocator_lock);
+-
+-	for (; rank < IMDB_NUM_OF_RANK; ++rank)
+-		value += gen_pool_avail(general_alloc.pools[rank]);
+-
+-	mutex_unlock(&allocator_lock);
+-
+-	return value;
++	return pnm_alloc_free_sz(&alloc);
+ }
+ 
+ uint64_t get_mem_size(void)
+@@ -277,49 +115,42 @@ uint64_t get_mem_size(void)
+ 
+ uint64_t get_granularity(void)
+ {
+-	uint64_t value;
+-
+-	mutex_lock(&allocator_lock);
+-
+-	value = general_alloc.gran;
+-
+-	mutex_unlock(&allocator_lock);
+-
+-	return value;
++	return pnm_alloc_granularity(&alloc);
+ }
+ 
+ int initialize_memory_allocator(void)
+ {
+-	int result = 0;
++	uint64_t start = 0, gran = IMDB_MEMORY_ADDRESS_ALIGN;
++	uint8_t idx, nr_pools = IMDB_NUM_OF_RANK;
++	struct range *ranges =
++		kcalloc(nr_pools, sizeof(struct range), GFP_KERNEL);
++	int err_code;
+ 
+-	mutex_init(&allocator_lock);
+-	mutex_lock(&allocator_lock);
++	IMDB_DBG("Initializing IMDB allocator\n");
+ 
+-	result = init_memory_pools(&general_alloc);
++	if (!ranges)
++		return -ENOMEM;
++	for (idx = 0; idx < nr_pools; ++idx, start += IMDB_RANK_SIZE)
++		ranges[idx] =
++			(struct range){ start, start + IMDB_RANK_SIZE - 1 };
++
++	err_code = pnm_alloc_init(&alloc, gran, nr_pools, ranges);
++	if (!err_code)
++		pnm_alloc_set_force_aligned(&alloc, true);
+ 
+-	mutex_unlock(&allocator_lock);
+-	return result;
++	kfree(ranges);
++
++	return err_code;
+ }
+ 
+ void destroy_memory_allocator(void)
+ {
+-	mutex_lock(&allocator_lock);
+-	cleanup_memory_pools(&general_alloc);
+-
+-	mutex_unlock(&allocator_lock);
+-	mutex_destroy(&allocator_lock);
++	IMDB_DBG("Destroy IMDB allocator\n");
++	pnm_alloc_cleanup(&alloc);
+ }
+ 
+ int reset_memory_allocator(void)
+ {
+-	int result = 0;
+-
+ 	IMDB_INF("Reset allocator");
+-	mutex_lock(&allocator_lock);
+-
+-	cleanup_memory_pools(&general_alloc);
+-	result = init_memory_pools(&general_alloc);
+-
+-	mutex_unlock(&allocator_lock);
+-	return result;
++	return pnm_alloc_reset(&alloc);
+ }
+diff --git a/drivers/pnm/imdb_resource/allocator.h b/drivers/pnm/imdb_resource/allocator.h
+index 78541017e..9fc761fe5 100644
+--- a/drivers/pnm/imdb_resource/allocator.h
++++ b/drivers/pnm/imdb_resource/allocator.h
+@@ -5,20 +5,8 @@
+ #define __IMDB_ALLOCATOR_H__
+ 
+ #include <linux/fs.h>
+-#include <linux/genalloc.h>
+ #include <linux/imdb_resources.h>
+ 
+-struct MemoryAllocator {
+-	/* Allocator granularity in bytes, the number should be a power of 2 */
+-	uint64_t gran;
+-	/* GenAlloc memory pools for each rank, each pool has it's own virtual
+-	 * range, currently this range is not bound to the real memory by PA,
+-	 * Range: [reserved_indent == IMDB_MEMORY_ADDRESS_ALIGN,
+-	 * rank_size - reserved_indent]
+-	 */
+-	struct gen_pool *pools[IMDB_NUM_OF_RANK];
+-};
+-
+ int initialize_memory_allocator(void);
+ void destroy_memory_allocator(void);
+ int reset_memory_allocator(void);
+@@ -28,7 +16,6 @@ int allocator_ioctl(struct file *filp, unsigned int cmd,
+ int allocator_clear_res(const struct imdb_allocation *allocation);
+ 
+ uint64_t get_avail_size(void);
+-
+ uint64_t get_mem_size(void);
+ 
+ uint64_t get_granularity(void);
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index 153f5ec8d..6f07d9004 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -7,115 +7,34 @@
+ #include "process_manager.h"
+ #include "topo/params.h"
+ 
+-#include <linux/genalloc.h>
+ #include <linux/kernel.h>
+ #include <linux/log2.h>
+ #include <linux/math.h>
+ #include <linux/numa.h>
++#include <linux/pnm_alloc.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+-/* Helper structure for memory allocation */
+-struct allocator {
+-	/* Allocator granularity in bytes, the number should be a power of 2 */
+-	uint64_t gran;
+-	/* GenAlloc memory pools for each cunit, each pool has it's own virtual
+-	 * range, currently this range is not bound to the real memory by PA,
+-	 * Range: [reserved_indent == PAGE_SIZE, cunit_size - reserved_indent]
+-	 */
+-	struct gen_pool **pools;
+-	uint8_t nr_pools;
+-	const struct sls_mem_cunit_info *mem_cunit_info;
+-} static allocator;
+-
+-DEFINE_MUTEX(memory_mutex);
++static const struct sls_mem_cunit_info *mem_cunit_info;
++static struct pnm_alloc alloc;
+ 
+ void lock_sls_allocator(void)
+ {
+-	mutex_lock(&memory_mutex);
++	pnm_alloc_lock(&alloc);
+ }
+ 
+ void unlock_sls_allocator(void)
+ {
+-	mutex_unlock(&memory_mutex);
++	pnm_alloc_unlock(&alloc);
+ }
+ 
+-static int init_cunit_pool(struct allocator *alloc, uint8_t cunit,
+-			   uint64_t size)
++static uint64_t get_cunit_size(uint8_t cunit)
+ {
+-	int err_code;
+-	struct gen_pool *pool =
+-		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
+-
+-	if (unlikely(!pool)) {
+-		SLS_ERR("gen_pool_create failed for cunit pool[%hhu], granularity = [%llu]\n",
+-			cunit, alloc->gran);
+-		err_code = -ENOMEM;
+-		goto init_cunit_pool_out;
+-	}
+-
+-	err_code = gen_pool_add(pool, alloc->gran, size, NUMA_NO_NODE);
+-	if (unlikely(err_code < 0)) {
+-		SLS_ERR("Failed to init memory cunit pool[%hhu], size = [%llu] with error [%d]\n",
+-			cunit, size, err_code);
+-		gen_pool_destroy(pool);
+-		goto init_cunit_pool_out;
+-	}
+-
+-	SLS_INF("Memory cunit pool[%hhu] initialized: granularity = [%llu], size = [%llu]\n",
+-		cunit, alloc->gran, size);
+-	alloc->pools[cunit] = pool;
+-
+-init_cunit_pool_out:
+-	return err_code;
+-}
+-
+-/* Make each pool chunk size == 0 */
+-static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+-					  struct gen_pool_chunk *chunk,
+-					  void *data)
+-{
+-	chunk->end_addr = chunk->start_addr - 1;
+-}
+-
+-static void cleanup_pools(struct allocator *alloc)
+-{
+-	uint8_t cunit;
+-	struct gen_pool *pool;
+-
+-	for (cunit = 0; cunit < alloc->nr_pools; ++cunit) {
+-		pool = alloc->pools[cunit];
+-		if (unlikely(!pool)) {
+-			SLS_WRN("Trying to cleanup memory cunit pool[%hhu] that was not created\n",
+-				cunit);
+-			continue;
+-		}
+-		if (unlikely(gen_pool_avail(pool) != gen_pool_size(pool))) {
+-			SLS_ERR("Pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
+-				cunit, gen_pool_size(pool),
+-				gen_pool_avail(pool));
+-			/*
+-			 * To destroy memory pool gen_pool_destroy checks
+-			 * outstanding allocations up to the kernel panic.
+-			 * Mark all our memory chunks with zero size for
+-			 * forced deallocation ignoring that.
+-			 */
+-			gen_pool_for_each_chunk(
+-				pool, mem_pool_mark_zero_chunk_size, NULL);
+-		}
+-		gen_pool_destroy(pool);
+-		SLS_INF("Memory cunit pool[%hhu] is destroyed\n", cunit);
+-	}
+-	kfree(alloc->pools);
+-}
+-
+-static inline uint64_t get_cunit_size(struct allocator *alloc, uint8_t cunit)
+-{
+-	const uint64_t nr_cunits = alloc->mem_cunit_info->nr_cunits;
++	const uint64_t nr_cunits = mem_cunit_info->nr_cunits;
+ 	const uint64_t nr_regions_per_cunit =
+-		alloc->mem_cunit_info->nr_regions / nr_cunits;
++		mem_cunit_info->nr_regions / nr_cunits;
+ 	const struct sls_mem_cunit_region *cunit_regions =
+-		&alloc->mem_cunit_info->regions[cunit * nr_regions_per_cunit];
++		&mem_cunit_info->regions[cunit * nr_regions_per_cunit];
+ 	uint64_t idx;
+ 
+ 	for (idx = 0; idx < nr_regions_per_cunit; ++idx)
+@@ -126,148 +45,45 @@ static inline uint64_t get_cunit_size(struct allocator *alloc, uint8_t cunit)
+ 	return 0;
+ }
+ 
+-static int init_pools(struct allocator *alloc)
++int init_sls_allocator(const struct sls_mem_cunit_info *cunit_info)
+ {
+-	uint8_t cunit;
+-	uint64_t cunit_size;
++	uint64_t gran = sls_topo()->alignment_sz;
++	uint8_t idx, nr_cunits = cunit_info->nr_cunits;
++	struct range *ranges =
++		kcalloc(nr_cunits, sizeof(struct range), GFP_KERNEL);
+ 	int err_code;
+ 
+-	alloc->pools =
+-		kcalloc(alloc->nr_pools, sizeof(alloc->pools[0]), GFP_KERNEL);
+-	if (!alloc->pools)
+-		return -ENOMEM;
+-
+-	for (cunit = 0; cunit < alloc->nr_pools; ++cunit) {
+-		/*
+-		 * reserve PAGE_SIZE size from start to eliminate allocator
+-		 * ambiguity, technically we could back off by just 1 byte,
+-		 * but given the alignment, the page size is preferred.
+-		 * Otherwise, the allocator may return 0 as a pointer to
+-		 * the real allocation, and we'll not be able to distinguish
+-		 * the result from the allocator fail.
+-		 */
+-		cunit_size = get_cunit_size(alloc, cunit) - alloc->gran;
+-		err_code = init_cunit_pool(alloc, cunit, cunit_size);
+-		if (unlikely(err_code)) {
+-			cleanup_pools(alloc);
+-			return err_code;
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+-static int set_granularity(struct allocator *alloc, uint64_t gran)
+-{
+-	if (unlikely(!is_power_of_2(gran))) {
+-		SLS_ERR("Memory granularity should be a power of 2!\n");
+-		return -EINVAL;
+-	}
+-	alloc->gran = gran;
+-	return 0;
+-}
+-
+-// [TODO: @p.bred] Generalize all PNM allocators logic
+-static int init(struct allocator *alloc,
+-		const struct sls_mem_cunit_info *mem_cunit_info)
+-{
+-	int err = 0;
+-
+-	if (!mem_cunit_info) {
+-		SLS_ERR("mem_cunit_info is NULL!\n");
++	SLS_DBG("Initializing SLS allocator\n");
++	if (!cunit_info) {
++		SLS_ERR("cunit_info is NULL!\n");
+ 		return -EINVAL;
+ 	}
++	mem_cunit_info = cunit_info;
+ 
+-	alloc->mem_cunit_info = mem_cunit_info;
+-	alloc->nr_pools = mem_cunit_info->nr_cunits;
+-
+-	err = set_granularity(alloc, sls_topo()->alignment_sz);
+-	if (err)
+-		return err;
++	if (!ranges)
++		return -ENOMEM;
++	for (idx = 0; idx < nr_cunits; ++idx)
++		ranges[idx] = (struct range){ 0, get_cunit_size(idx) - 1 };
+ 
+-	return init_pools(alloc);
+-}
++	err_code = pnm_alloc_init(&alloc, gran, nr_cunits, ranges);
++	kfree(ranges);
+ 
+-int init_sls_allocator(const struct sls_mem_cunit_info *mem_cunit_info)
+-{
+-	SLS_DBG("Initializing SLS allocator\n");
+-	return init(&allocator, mem_cunit_info);
+-}
+-
+-static void reset_lock(void)
+-{
+-	if (unlikely(mutex_is_locked(&memory_mutex))) {
+-		SLS_WRN("Mutex unlock forced.\n");
+-		unlock_sls_allocator();
+-	}
++	return err_code;
+ }
+ 
+ int reset_sls_allocator(void)
+ {
+ 	SLS_DBG("Resetting SLS allocator\n");
+-	reset_lock();
+-	cleanup_pools(&allocator);
+-	return init_pools(&allocator);
++	return pnm_alloc_reset(&alloc);
+ }
+ 
+ void cleanup_sls_allocator(void)
+ {
+ 	SLS_DBG("Cleaning up SLS allocator\n");
+-	reset_lock();
+-	cleanup_pools(&allocator);
+-	mutex_destroy(&memory_mutex);
+-}
+-
+-static uint8_t select_optimal_cunit(struct allocator *alloc)
+-{
+-	uint8_t cunit;
+-	uint8_t optimal_cunit = 0;
+-	size_t max_free_space = gen_pool_avail(alloc->pools[0]);
+-
+-	for (cunit = 1; cunit < alloc->nr_pools; ++cunit) {
+-		size_t cunit_free_space = gen_pool_avail(alloc->pools[cunit]);
+-
+-		if (max_free_space < cunit_free_space) {
+-			max_free_space = cunit_free_space;
+-			optimal_cunit = cunit;
+-		}
+-	}
+-	return optimal_cunit;
+-}
+-
+-// Call only when holding allocator lock
+-static int allocate_memory_unsafe(struct allocator *alloc,
+-				  struct sls_memory_alloc_request *req)
+-{
+-	if (req->cunit != SLS_ALLOC_ANY_CUNIT &&
+-	    req->cunit >= alloc->nr_pools) {
+-		SLS_ERR("cunit %u doesn't exist.\n", req->cunit);
+-		return -EINVAL;
+-	}
+-
+-	if (req->size == 0) {
+-		SLS_ERR("Trying to allocate zero memory.\n");
+-		return -EINVAL;
+-	}
+-
+-	if (req->cunit == SLS_ALLOC_ANY_CUNIT)
+-		req->cunit = select_optimal_cunit(alloc);
+-
+-	req->cunit_offset = gen_pool_alloc(alloc->pools[req->cunit], req->size);
+-
+-	if (unlikely(req->cunit_offset == 0)) {
+-		SLS_ERR("No free memory for object of size = [%llu] at pool[%hhu]\n",
+-			req->size, req->cunit);
+-		return -ENOMEM;
+-	}
+-
+-	req->cunit_offset -= alloc->gran;
+-
+-	return 0;
++	pnm_alloc_cleanup(&alloc);
+ }
+ 
+-static int allocate_memory_ioctl(struct file *filp, struct allocator *alloc,
+-				 unsigned long __user arg)
++static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ {
+ 	int err;
+ 	struct sls_memory_alloc_request kreq;
+@@ -283,9 +99,13 @@ static int allocate_memory_ioctl(struct file *filp, struct allocator *alloc,
+ 
+ 	lock_sls_allocator();
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc);
++
++		if (kreq.cunit == SLS_ALLOC_ANY_CUNIT)
++			kreq.cunit = pnm_alloc_most_free_pool(&alloc);
+ 
+-		err = allocate_memory_unsafe(alloc, &kreq);
++		err = pnm_alloc_pool_malloc(&alloc, kreq.cunit, kreq.size,
++					    &kreq.cunit_offset);
+ 		if (unlikely(err)) {
+ 			unlock_sls_allocator();
+ 			return err;
+@@ -312,41 +132,13 @@ static int allocate_memory_ioctl(struct file *filp, struct allocator *alloc,
+ 	return err;
+ }
+ 
+-// Call only when holding allocator lock
+ int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
+ {
+-	req.cunit_offset += allocator.gran;
+-
+-	if (req.cunit >= allocator.nr_pools) {
+-		SLS_ERR("cunit %u doesn't exist.\n", req.cunit);
+-		return -EINVAL;
+-	}
+-
+-	/*
+-	 * [TODO: @e-kutovoi] This check doesn't save against pointers
+-	 * inside of allocated memory
+-	 * i.e.:
+-	 *   addr = alloc(0x100)
+-	 *   ...
+-	 *   dealloc(addr + 4)
+-	 * We should consider either adding additional bookkeeping of
+-	 * valid allocations in here, or calling into process manager
+-	 * before this call.
+-	 */
+-	if (unlikely(!gen_pool_has_addr(allocator.pools[req.cunit],
+-					req.cunit_offset, req.size))) {
+-		SLS_ERR("Deallocating a nonexistent object at %llu of size %llu from pool[%u]\n",
+-			req.cunit_offset, req.size, req.cunit);
+-		return -EINVAL;
+-	}
+-
+-	gen_pool_free(allocator.pools[req.cunit], req.cunit_offset, req.size);
+-
+-	return 0;
++	return pnm_alloc_pool_free(&alloc, req.cunit, req.size,
++				   &req.cunit_offset);
+ }
+ 
+-static int deallocate_memory_ioctl(struct file *filp, struct allocator *alloc,
+-				   unsigned long __user arg)
++static int deallocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ {
+ 	int err;
+ 	struct sls_memory_alloc_request kreq;
+@@ -363,7 +155,7 @@ static int deallocate_memory_ioctl(struct file *filp, struct allocator *alloc,
+ 
+ 	lock_sls_allocator();
+ 	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc);
+ 
+ 		err = deallocate_memory_unsafe(kreq);
+ 		if (unlikely(err)) {
+@@ -380,34 +172,12 @@ static int deallocate_memory_ioctl(struct file *filp, struct allocator *alloc,
+ 
+ uint64_t get_total_size(uint8_t cunit)
+ {
+-	struct gen_pool *pool = NULL;
+-	uint64_t size = 0;
+-
+-	lock_sls_allocator();
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
+-		pool = allocator.pools[cunit];
+-		size = pool ? gen_pool_size(pool) : 0;
+-	}
+-	unlock_sls_allocator();
+-
+-	return size;
++	return pnm_alloc_total_sz_pool(&alloc, cunit);
+ }
+ 
+ uint64_t get_free_size(uint8_t cunit)
+ {
+-	struct gen_pool *pool = NULL;
+-	uint64_t size = 0;
+-
+-	lock_sls_allocator();
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(allocator);
+-		pool = allocator.pools[cunit];
+-		size = pool ? gen_pool_avail(pool) : 0;
+-	}
+-	unlock_sls_allocator();
+-
+-	return size;
++	return pnm_alloc_free_sz_pool(&alloc, cunit);
+ }
+ 
+ int mem_process_ioctl(struct file *filp, unsigned int cmd,
+@@ -415,9 +185,9 @@ int mem_process_ioctl(struct file *filp, unsigned int cmd,
+ {
+ 	switch (cmd) {
+ 	case ALLOCATE_MEMORY:
+-		return allocate_memory_ioctl(filp, &allocator, arg);
++		return allocate_memory_ioctl(filp, arg);
+ 	case DEALLOCATE_MEMORY:
+-		return deallocate_memory_ioctl(filp, &allocator, arg);
++		return deallocate_memory_ioctl(filp, arg);
+ 	default:
+ 		SLS_ERR("Unknown memory operation [%u], with argument [%lu]\n",
+ 			cmd, arg);
+diff --git a/drivers/pnm/sls_resource/allocator.h b/drivers/pnm/sls_resource/allocator.h
+index decd7d383..5d681298e 100644
+--- a/drivers/pnm/sls_resource/allocator.h
++++ b/drivers/pnm/sls_resource/allocator.h
+@@ -26,7 +26,6 @@ void lock_sls_allocator(void);
+ void unlock_sls_allocator(void);
+ 
+ uint64_t get_total_size(uint8_t cunit);
+-
+ uint64_t get_free_size(uint8_t cunit);
+ 
+ #endif /* __SLS_ALLOCATOR_H__ */
+diff --git a/include/linux/pnm_alloc.h b/include/linux/pnm_alloc.h
+new file mode 100644
+index 000000000..1d1f92962
+--- /dev/null
++++ b/include/linux/pnm_alloc.h
+@@ -0,0 +1,53 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __PNM_ALLOCATOR_H__
++#define __PNM_ALLOCATOR_H__
++
++#include <linux/genalloc.h>
++#include <linux/mutex.h>
++#include <linux/range.h>
++#include <linux/types.h>
++
++struct pnm_alloc {
++	/* Allocator granularity in bytes, the number should be a power of 2 */
++	uint64_t gran;
++	/* Should we align size relative to granularity */
++	bool aligned;
++	struct mutex lock;
++	uint8_t nr_pools;
++	/* GenAlloc memory pools, each pool has it's own virtual
++	 * range, currently this range is not bound to the real memory by PA,
++	 * Pool range: [reserved_indent, pool_size - reserved_indent]
++	 */
++	struct gen_pool **pools;
++	/* Raw VA ranges for each pool */
++	struct range *ranges;
++};
++
++void pnm_alloc_lock(struct pnm_alloc *alloc);
++void pnm_alloc_unlock(struct pnm_alloc *alloc);
++void pnm_alloc_reset_lock(struct pnm_alloc *alloc);
++
++int pnm_alloc_init(struct pnm_alloc *alloc, uint64_t gran, uint8_t nr_pools,
++		   struct range *ranges);
++int pnm_alloc_reset(struct pnm_alloc *alloc);
++void pnm_alloc_cleanup(struct pnm_alloc *alloc);
++
++int pnm_alloc_pool_malloc(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
++			  uint64_t *addr);
++int pnm_alloc_pool_free(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
++			uint64_t *addr);
++
++uint64_t pnm_alloc_total_sz(struct pnm_alloc *alloc);
++uint64_t pnm_alloc_free_sz(struct pnm_alloc *alloc);
++
++uint8_t pnm_alloc_most_free_pool(struct pnm_alloc *alloc);
++uint64_t pnm_alloc_total_sz_pool(struct pnm_alloc *alloc, uint8_t idx);
++uint64_t pnm_alloc_free_sz_pool(struct pnm_alloc *alloc, uint8_t idx);
++
++uint64_t pnm_alloc_granularity(struct pnm_alloc *alloc);
++void pnm_alloc_set_force_aligned(struct pnm_alloc *alloc, bool alloc_aligned);
++bool pnm_alloc_get_force_aligned(struct pnm_alloc *alloc);
++
++#endif /* __PNM_ALLOCATOR_H__ */
+diff --git a/lib/Kconfig b/lib/Kconfig
+index 9bbf8a4b2..00d1da85a 100644
+--- a/lib/Kconfig
++++ b/lib/Kconfig
+@@ -751,3 +751,14 @@ config ASN1_ENCODER
+ 
+ config POLYNOMIAL
+        tristate
++
++config PNM_LIB
++       bool "PNM kernel library"
++       default n
++       help
++	  PNM common logic: allocator, scheduler, etc.
++
++	  Provides essential PNM functionality.
++	  Core PNM layer components: allocator, scheduler,
++	  process manager, etc. Gives utility helpers and
++	  a unified layer for various PNM devices.
+diff --git a/lib/Makefile b/lib/Makefile
+index 7d984e520..6618f34f0 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -367,8 +367,11 @@ obj-$(CONFIG_OBJAGG) += objagg.o
+ # pldmfw library
+ obj-$(CONFIG_PLDMFW) += pldmfw/
+ 
++# pnm library
++obj-$(CONFIG_PNM_LIB) += pnm/
++
+ # pnm zswap
+-obj-$(CONFIG_PNM_ZSWAP) += pnm/
++obj-$(CONFIG_PNM_ZSWAP) += pnm/zswap/
+ 
+ # KUnit tests
+ CFLAGS_bitfield_kunit.o := $(DISABLE_STRUCTLEAK_PLUGIN)
+diff --git a/lib/pnm/Makefile b/lib/pnm/Makefile
+index 5f061253c..3d5000267 100644
+--- a/lib/pnm/Makefile
++++ b/lib/pnm/Makefile
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+-obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap_lib.o
+ 
+-pnm_zswap_lib-y := pnm_zswap_lib.o
++obj-$(CONFIG_PNM_LIB) += pnm_lib.o
++pnm_lib-y := pnm_alloc.o
+diff --git a/lib/pnm/log.h b/lib/pnm/log.h
+new file mode 100644
+index 000000000..bb908692f
+--- /dev/null
++++ b/lib/pnm/log.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++/* [TODO: @p.bred] MCS23-1586 Unify logs subsystem */
++
++#ifndef __PNM_LOG_H__
++#define __PNM_LOG_H__
++
++#include <linux/kernel.h>
++
++#define PNM_MARK "[PNM]"
++
++#define PNM_PRINT(level, fmt, ...) \
++	pr_##level(PNM_MARK "[%s:%d] " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
++#define PNM_ERR(fmt, ...) PNM_PRINT(err, fmt, ##__VA_ARGS__)
++#define PNM_WRN(fmt, ...) PNM_PRINT(warn, fmt, ##__VA_ARGS__)
++#define PNM_INF(fmt, ...) PNM_PRINT(info, fmt, ##__VA_ARGS__)
++#define PNM_DBG(fmt, ...) PNM_PRINT(debug, fmt, ##__VA_ARGS__)
++
++#endif /* __PNM_LOG_H__ */
+diff --git a/lib/pnm/pnm_alloc.c b/lib/pnm/pnm_alloc.c
+new file mode 100644
+index 000000000..2894e767e
+--- /dev/null
++++ b/lib/pnm/pnm_alloc.c
+@@ -0,0 +1,384 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include "log.h"
++
++#include <linux/pnm_alloc.h>
++#include <linux/range.h>
++#include <linux/slab.h>
++
++void pnm_alloc_lock(struct pnm_alloc *alloc)
++{
++	mutex_lock(&alloc->lock);
++}
++EXPORT_SYMBOL(pnm_alloc_lock);
++
++void pnm_alloc_unlock(struct pnm_alloc *alloc)
++{
++	mutex_unlock(&alloc->lock);
++}
++EXPORT_SYMBOL(pnm_alloc_unlock);
++
++void pnm_alloc_reset_lock(struct pnm_alloc *alloc)
++{
++	if (unlikely(mutex_is_locked(&alloc->lock))) {
++		PNM_ERR("Mutex unlock forced.\n");
++		/*
++		 * [TODO: @p.bred] Question about UB exclusion, 2 variants:
++		 * 1) current, force unlock if there is any lockage, it can
++		 * happen, for example, if we forgot to unlock. But potentially
++		 * there is also a chance - that this is the real allocator work
++		 * somewhere else, then an UB is possible. The advantage of this
++		 * method is also the complete reinitialization of the mutex.
++		 * 2) a mutex is never reinitialized, it's created only
++		 * statically, and is directly used in reinitialization methods
++		 * with lock/unlock. Thus, we wait in any case for the
++		 * completion of any exist locking. However, in this case,
++		 * we can wait forever, and also if we try to reinitialize
++		 * the mutex, there is a high chance of initializing a locked
++		 * mutex, which is an UB.
++		 * -----
++		 * There may be a more reliable solution to this problem,
++		 * or a combination of both approaches.
++		 */
++		pnm_alloc_unlock(alloc);
++	}
++}
++EXPORT_SYMBOL(pnm_alloc_reset_lock);
++
++static int set_granularity(struct pnm_alloc *alloc, uint64_t gran)
++{
++	if (unlikely(!is_power_of_2(gran))) {
++		PNM_ERR("Memory granularity should be a power of 2!\n");
++		return -EINVAL;
++	}
++	alloc->gran = gran;
++	return 0;
++}
++
++static int init_pool(struct pnm_alloc *alloc, uint8_t idx)
++{
++	struct range range = alloc->ranges[idx];
++	struct gen_pool *pool =
++		gen_pool_create(ilog2(alloc->gran), NUMA_NO_NODE);
++	int err_code;
++	uint64_t start = range.start, sz = range_len(&alloc->ranges[idx]);
++
++	if (unlikely(!pool)) {
++		PNM_ERR("gen_pool_create failed for pool[%hhu], granularity = [%llu]\n",
++			idx, alloc->gran);
++		return -ENOMEM;
++	}
++
++	/*
++	 * Reserve granularity size from start if it's zero to eliminate
++	 * allocator ambiguity, technically we could back off by just 1 byte,
++	 * but given the alignment, the granularity is preferred.
++	 * Otherwise, the allocator may return 0 as a pointer to the real
++	 * allocation, and we'll not be able to distinguish the result from
++	 * the allocator fail.
++	 */
++	if (!start)
++		start += alloc->gran;
++
++	err_code = gen_pool_add(pool, start, sz, NUMA_NO_NODE);
++	if (unlikely(err_code < 0)) {
++		PNM_ERR("Failed to init pool[%hhu], start=[%llu], size=[%llu] with error [%d]\n",
++			idx, start, sz, err_code);
++		gen_pool_destroy(pool);
++		return err_code;
++	}
++
++	PNM_INF("Memory pool[%hhu] initialized: granularity=[%llu], start=[%llu], size=[%llu]\n",
++		idx, alloc->gran, start, sz);
++	alloc->pools[idx] = pool;
++
++	return 0;
++}
++
++int pnm_alloc_pool_malloc(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
++			  uint64_t *addr)
++{
++	if (idx >= alloc->nr_pools) {
++		PNM_ERR("Pool[%hhu] doesn't exist.\n", idx);
++		return -EINVAL;
++	}
++
++	if (!sz) {
++		PNM_ERR("Trying to allocate zero memory.\n");
++		return -EINVAL;
++	}
++
++	if (alloc->aligned)
++		sz = ALIGN(sz, alloc->gran);
++
++	*addr = gen_pool_alloc(alloc->pools[idx], sz);
++
++	if (unlikely(!*addr)) {
++		PNM_ERR("Pool[%hhu]: no free memory for object with size = [%llu]\n",
++			idx, sz);
++		return -ENOMEM;
++	}
++
++	/* Align if reserved indent there is before, see init_pool func */
++	if (!alloc->ranges[idx].start)
++		*addr -= alloc->gran;
++
++	return 0;
++}
++EXPORT_SYMBOL(pnm_alloc_pool_malloc);
++
++int pnm_alloc_pool_free(struct pnm_alloc *alloc, uint8_t idx, uint64_t sz,
++			uint64_t *addr)
++{
++	if (idx >= alloc->nr_pools) {
++		PNM_ERR("Pool[%hhu] doesn't exist.\n", idx);
++		return -EINVAL;
++	}
++
++	/* Align if reserved indent there is before, see init_pool func */
++	if (!alloc->ranges[idx].start)
++		*addr += alloc->gran;
++
++	if (alloc->aligned)
++		sz = ALIGN(sz, alloc->gran);
++
++	/*
++	 * [TODO: @e-kutovoi] This check doesn't save against pointers
++	 * inside of allocated memory
++	 * i.e.:
++	 *   addr = alloc(0x100)
++	 *   ...
++	 *   dealloc(addr + 4)
++	 * We should consider either adding additional bookkeeping of
++	 * valid allocations in here, or calling into process manager
++	 * before this call.
++	 */
++	if (unlikely(!gen_pool_has_addr(alloc->pools[idx], *addr, sz))) {
++		PNM_ERR("The object at %llu of size %llu from pool[%u] doesn't exist\n",
++			*addr, sz, idx);
++		return -EINVAL;
++	}
++
++	gen_pool_free(alloc->pools[idx], *addr, sz);
++
++	return 0;
++}
++EXPORT_SYMBOL(pnm_alloc_pool_free);
++
++/* Make each pool chunk size == 0 */
++static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
++					  struct gen_pool_chunk *chunk,
++					  void *data)
++{
++	chunk->end_addr = chunk->start_addr - 1;
++}
++
++static void cleanup_pools(struct pnm_alloc *alloc)
++{
++	uint8_t idx;
++	struct gen_pool *pool;
++
++	for (idx = 0; idx < alloc->nr_pools; ++idx) {
++		pool = alloc->pools[idx];
++		if (unlikely(!pool)) {
++			PNM_WRN("Trying to cleanup memory pool[%hhu] that was not created\n",
++				idx);
++			continue;
++		}
++		if (unlikely(gen_pool_avail(pool) != gen_pool_size(pool))) {
++			PNM_ERR("Pool[%hhu]: non-deallocated objects, size: %zu, avail: %zu\n",
++				idx, gen_pool_size(pool), gen_pool_avail(pool));
++			/*
++			 * To destroy memory pool gen_pool_destroy checks
++			 * outstanding allocations up to the kernel panic.
++			 * Mark all our memory chunks with zero size for
++			 * forced deallocation ignoring that.
++			 */
++			gen_pool_for_each_chunk(
++				pool, mem_pool_mark_zero_chunk_size, NULL);
++		}
++		gen_pool_destroy(pool);
++		PNM_INF("Memory pool[%hhu] is destroyed\n", idx);
++	}
++	kfree(alloc->pools);
++}
++
++static int init_pools(struct pnm_alloc *alloc)
++{
++	uint8_t idx;
++	int err_code;
++
++	alloc->pools =
++		kcalloc(alloc->nr_pools, sizeof(alloc->pools[0]), GFP_KERNEL);
++	if (!alloc->pools)
++		return -ENOMEM;
++
++	for (idx = 0; idx < alloc->nr_pools; ++idx) {
++		err_code = init_pool(alloc, idx);
++		if (unlikely(err_code)) {
++			cleanup_pools(alloc);
++			return err_code;
++		}
++	}
++
++	return 0;
++}
++
++static int init_ranges(struct pnm_alloc *alloc, struct range *ranges)
++{
++	uint8_t idx;
++
++	alloc->ranges =
++		kcalloc(alloc->nr_pools, sizeof(alloc->ranges[0]), GFP_KERNEL);
++	if (!alloc->ranges)
++		return -ENOMEM;
++
++	for (idx = 0; idx < alloc->nr_pools; ++idx)
++		alloc->ranges[idx] = ranges[idx];
++
++	return 0;
++}
++
++static void cleanup_ranges(struct pnm_alloc *alloc)
++{
++	kfree(alloc->ranges);
++}
++
++int pnm_alloc_init(struct pnm_alloc *alloc, uint64_t gran, uint8_t nr_pools,
++		   struct range *ranges)
++{
++	int err = set_granularity(alloc, gran);
++
++	if (err)
++		return err;
++
++	alloc->aligned = false;
++	mutex_init(&alloc->lock);
++	alloc->nr_pools = nr_pools;
++	err = init_ranges(alloc, ranges);
++	return err ? err : init_pools(alloc);
++}
++EXPORT_SYMBOL(pnm_alloc_init);
++
++int pnm_alloc_reset(struct pnm_alloc *alloc)
++{
++	pnm_alloc_reset_lock(alloc);
++	cleanup_pools(alloc);
++	return init_pools(alloc);
++}
++EXPORT_SYMBOL(pnm_alloc_reset);
++
++void pnm_alloc_cleanup(struct pnm_alloc *alloc)
++{
++	pnm_alloc_reset_lock(alloc);
++	cleanup_pools(alloc);
++	cleanup_ranges(alloc);
++	mutex_destroy(&alloc->lock);
++}
++EXPORT_SYMBOL(pnm_alloc_cleanup);
++
++uint8_t pnm_alloc_most_free_pool(struct pnm_alloc *alloc)
++{
++	uint8_t idx, res_idx = 0;
++	uint64_t pool_free_space,
++		max_free_space = gen_pool_avail(alloc->pools[0]);
++
++	for (idx = 1; idx < alloc->nr_pools; ++idx) {
++		pool_free_space = gen_pool_avail(alloc->pools[idx]);
++		if (max_free_space < pool_free_space) {
++			max_free_space = pool_free_space;
++			res_idx = idx;
++		}
++	}
++	return res_idx;
++}
++EXPORT_SYMBOL(pnm_alloc_most_free_pool);
++
++uint64_t pnm_alloc_total_sz_pool(struct pnm_alloc *alloc, uint8_t idx)
++{
++	uint64_t sz = 0;
++
++	pnm_alloc_lock(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++		sz = gen_pool_size(alloc->pools[idx]);
++	}
++	pnm_alloc_unlock(alloc);
++
++	return sz;
++}
++EXPORT_SYMBOL(pnm_alloc_total_sz_pool);
++
++uint64_t pnm_alloc_total_sz(struct pnm_alloc *alloc)
++{
++	uint64_t sz = 0;
++	uint8_t idx;
++
++	pnm_alloc_lock(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++		for (idx = 0; idx < alloc->nr_pools; ++idx)
++			sz += gen_pool_size(alloc->pools[idx]);
++	}
++	pnm_alloc_unlock(alloc);
++
++	return sz;
++}
++EXPORT_SYMBOL(pnm_alloc_total_sz);
++
++uint64_t pnm_alloc_free_sz_pool(struct pnm_alloc *alloc, uint8_t idx)
++{
++	uint64_t sz = 0;
++
++	pnm_alloc_lock(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++		sz = gen_pool_avail(alloc->pools[idx]);
++	}
++	pnm_alloc_unlock(alloc);
++
++	return sz;
++}
++EXPORT_SYMBOL(pnm_alloc_free_sz_pool);
++
++uint64_t pnm_alloc_free_sz(struct pnm_alloc *alloc)
++{
++	uint64_t sz = 0;
++	uint8_t idx;
++
++	pnm_alloc_lock(alloc);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(*alloc);
++		for (idx = 0; idx < alloc->nr_pools; ++idx)
++			sz += gen_pool_avail(alloc->pools[idx]);
++	}
++	pnm_alloc_unlock(alloc);
++
++	return sz;
++}
++EXPORT_SYMBOL(pnm_alloc_free_sz);
++
++uint64_t pnm_alloc_granularity(struct pnm_alloc *alloc)
++{
++	uint64_t gran;
++
++	pnm_alloc_lock(alloc);
++	gran = alloc->gran;
++	pnm_alloc_unlock(alloc);
++
++	return gran;
++}
++EXPORT_SYMBOL(pnm_alloc_granularity);
++
++void pnm_alloc_set_force_aligned(struct pnm_alloc *alloc, bool alloc_aligned)
++{
++	alloc->aligned = alloc_aligned;
++}
++EXPORT_SYMBOL(pnm_alloc_set_force_aligned);
++
++bool pnm_alloc_get_force_aligned(struct pnm_alloc *alloc)
++{
++	return alloc->aligned;
++}
++EXPORT_SYMBOL(pnm_alloc_get_force_aligned);
+diff --git a/lib/pnm/zswap/Makefile b/lib/pnm/zswap/Makefile
+new file mode 100644
+index 000000000..7196a6d7c
+--- /dev/null
++++ b/lib/pnm/zswap/Makefile
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: GPL-2.0
++
++obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap_lib.o
++pnm_zswap_lib-y := pnm_zswap_lib.o
+diff --git a/lib/pnm/pnm_zswap_lib.c b/lib/pnm/zswap/pnm_zswap_lib.c
+similarity index 100%
+rename from lib/pnm/pnm_zswap_lib.c
+rename to lib/pnm/zswap/pnm_zswap_lib.c
+-- 
+2.34.1
+

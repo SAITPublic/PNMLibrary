@@ -96,24 +96,27 @@ int main(int argc, char **argv) {
     return app.exit(e);
   }
 
-  auto indices_generator = IndicesGeneratorFactory::default_factory().create(
-      generator_name, generator_args);
+  auto indices_generator =
+      tools::gen::sls::IndicesGeneratorFactory::default_factory().create(
+          generator_name, generator_args);
 
-  auto length_generator = LengthsGeneratorFactory::default_factory().create(
-      lengths_generator_name, overflow_type);
+  auto length_generator =
+      tools::gen::sls::LengthsGeneratorFactory::default_factory().create(
+          lengths_generator_name, overflow_type);
 
-  auto tables = sls::tests::get_test_tables_mmap(tables_root);
-  const TablesInfo &tinfo = tables.info;
+  auto tables = tools::gen::sls::get_test_tables_mmap(tables_root);
+  const tools::gen::sls::TablesInfo &tinfo = tables.info;
 
   auto lengths = length_generator->create(tinfo.num_tables(), min_num_lookup,
                                           max_num_lookup, minibatch_size);
-  const IndicesInfo info(minibatch_size, lengths);
+  const tools::gen::sls::IndicesInfo info(minibatch_size, lengths);
   indices_generator->create_and_store(tables_root, prefix, info, tinfo);
 
-  auto indices = sls::tests::get_test_indices(tables_root, prefix);
+  auto indices = tools::gen::sls::get_test_indices(tables_root, prefix);
 
   auto generator =
-      GoldenVecGeneratorFactory::default_factory().create(entry_type);
+      tools::gen::sls::GoldenVecGeneratorFactory::default_factory().create(
+          entry_type);
   generator->compute_and_store_golden_sls(tables_root, prefix, tables, indices);
 
   return 0;

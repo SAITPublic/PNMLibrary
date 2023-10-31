@@ -25,6 +25,8 @@
 #include <random>
 #include <vector>
 
+namespace tools::gen::sls {
+
 class RandomLengthsGen : public ILengthsGenerator {
 public:
   explicit RandomLengthsGen(int type_of_tables_with_overflow)
@@ -54,7 +56,7 @@ private:
 
     const uint32_t overflowed_table_id = overflowed_table_id_distrib(engine);
 
-    using pnm::device::topo;
+    using pnm::sls::device::topo;
 
     const uint32_t single_overflowed_table_batch_lookups =
         (topo().InstBufSize / topo().NumOfInstBuf / topo().InstructionSize) - 1;
@@ -99,5 +101,7 @@ private:
   // a number that characterizes tables with overflow
   const int type_of_tables_with_overflow_;
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_RANDOM_LEN_GENERATOR_H

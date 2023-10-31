@@ -1,7 +1,7 @@
 From b8e51c8ced12ed7252bdf34bc1305a205f2a8020 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Tue, 18 Apr 2023 11:21:32 +0300
-Subject: [PATCH 116/128] [axdimm] Use generalized pnm::Runner
+Subject: [PATCH 116/135] [axdimm] Use generalized pnm::Runner
 
 AXDIMM's operators use pnm::Runner instead of SLSRunner to run the SLS
 operation.

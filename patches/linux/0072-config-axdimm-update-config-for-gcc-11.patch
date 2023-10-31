@@ -1,7 +1,7 @@
 From 88f7b883f3db38d21287e5d6407d559d4ab3a860 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Wed, 7 Dec 2022 16:41:10 +0300
-Subject: [PATCH 072/161] [config-axdimm] update config for gcc-11
+Subject: [PATCH 072/225] [config-axdimm] update config for gcc-11
 
 Resolves: AXDIMM-463
 

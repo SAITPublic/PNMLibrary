@@ -29,14 +29,16 @@
 #include <string>
 #include <vector>
 
-struct SLSFixture : public ::testing::Test {
+using namespace tools::gen::sls;
+
+struct SlsFixture : public ::testing::Test {
 protected:
   std::string root;
   void SetUp() override {
     root = (std::filesystem::temp_directory_path() / "embXXXXXX").string();
     ASSERT_TRUE(mkdtemp(root.data()));
 
-    fmt::print("The temporary embedded tables will be saved at {}\n", root);
+    fmt::print("The temporary embedding tables will be saved at {}\n", root);
   }
   void TearDown() override { std::filesystem::remove_all(root); }
 
@@ -51,14 +53,14 @@ protected:
     auto igen = IndicesGeneratorFactory::default_factory().create("sequential");
     ASSERT_NO_THROW(igen->create_and_store(root, "seq_ok", iinfo, tinfo));
 
-    auto indices = sls::tests::get_test_indices(root, "seq_ok");
-    auto tables = sls::tests::get_test_tables_mmap(root);
+    auto indices = get_test_indices(root, "seq_ok");
+    auto tables = get_test_tables_mmap(root);
 
     auto generator =
         GoldenVecGeneratorFactory::default_factory().create("uint32_t");
     generator->compute_and_store_golden_sls(root, "seq_ok", tables, indices);
 
-    auto golden_ss = sls::tests::get_golden_vector(root, "seq_ok");
+    auto golden_ss = get_golden_vector(root, "seq_ok");
     auto psum_entries_count = 5 * 5;
 
     std::vector<uint32_t> value(4);
@@ -76,11 +78,11 @@ protected:
   }
 };
 
-TEST_F(SLSFixture, SequentialOk) { sls_test_value(1); }
+TEST_F(SlsFixture, SequentialOk) { sls_test_value(1); }
 
-TEST_F(SLSFixture, SequentialOk100) { sls_test_value(10); }
+TEST_F(SlsFixture, SequentialOk100) { sls_test_value(10); }
 
-TEST_F(SLSFixture, RandomOk2) {
+TEST_F(SlsFixture, RandomOk2) {
   const TablesInfo tinfo(5, 4, {30, 40, 20, 100, 14});
 
   auto tgen = TablesGeneratorFactory::default_factory().create("fixed", "2");
@@ -90,14 +92,14 @@ TEST_F(SLSFixture, RandomOk2) {
   auto igen = IndicesGeneratorFactory::default_factory().create("random");
   ASSERT_NO_THROW(igen->create_and_store(root, "random", iinfo, tinfo));
 
-  auto indices = sls::tests::get_test_indices(root, "random");
-  auto tables = sls::tests::get_test_tables_mmap(root);
+  auto indices = get_test_indices(root, "random");
+  auto tables = get_test_tables_mmap(root);
 
   auto generator =
       GoldenVecGeneratorFactory::default_factory().create("uint32_t");
   generator->compute_and_store_golden_sls(root, "random", tables, indices);
 
-  auto golden_ss = sls::tests::get_golden_vector(root, "random");
+  auto golden_ss = get_golden_vector(root, "random");
   auto psum_entries_count = 5 * 5;
 
   std::vector<uint32_t> value(4);
@@ -116,7 +118,7 @@ TEST_F(SLSFixture, RandomOk2) {
 TEST(SLS, Position) {
   const TablesInfo tinfo(3, 4, {10, 20, 5});
 
-  // Generate 'position' embedded tables to evaluate psum by hand
+  // Generate 'position' embedding tables to evaluate psum by hand
   auto tgen = TablesGeneratorFactory::default_factory().create("position");
   auto emb_tables = tgen->create(tinfo);
 

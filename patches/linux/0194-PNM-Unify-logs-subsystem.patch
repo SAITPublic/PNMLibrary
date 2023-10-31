@@ -1,0 +1,260 @@
+From 8f8531b83636b611984e0c4dbdc5666482e6b909 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Thu, 28 Sep 2023 15:38:55 +0300
+Subject: [PATCH 194/225] [PNM] Unify logs subsystem
+
+* Unify missed zswap logs in mm part
+
+Resolve: MCS23-1586
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ mm/pnm/Makefile    |  2 ++
+ mm/pnm/pnm_zswap.c | 69 +++++++++++++++++++++++-----------------------
+ 2 files changed, 36 insertions(+), 35 deletions(-)
+
+diff --git a/mm/pnm/Makefile b/mm/pnm/Makefile
+index 5e8a089f8..bd28607d8 100644
+--- a/mm/pnm/Makefile
++++ b/mm/pnm/Makefile
+@@ -1,3 +1,5 @@
+ obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap.o
+ 
++ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[MM]\"
++
+ pnm_zswap-y := pnm_zswap.o
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index 3de58a3b4..679c66d60 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1,8 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+-
+ #include <asm/msr.h>
+ #include <asm/timer.h>
+ #include <crypto/acompress.h>
+@@ -23,6 +21,7 @@
+ #include <linux/page-flags.h>
+ #include <linux/pagemap.h>
+ #include <linux/pnm/cxl_zswap.h>
++#include <linux/pnm_log.h>
+ #include <linux/preempt.h>
+ #include <linux/processor.h>
+ #include <linux/rbtree.h>
+@@ -249,9 +248,9 @@ static bool cxl_has_zpool;
+  * helpers and fwd declarations
+  *********************************/
+ 
+-#define cxl_zpool_debug(msg, p)                         \
+-	pr_debug("%s pool %s/%s\n", msg, (p)->tfm_name, \
+-		 zpool_get_type((p)->zpool))
++#define cxl_zpool_debug(msg, p)                        \
++	PNM_DBG("%s pool %s/%s\n", msg, (p)->tfm_name, \
++		zpool_get_type((p)->zpool))
+ 
+ static int cxl_zswap_writeback_entry(struct zpool *pool, unsigned long handle);
+ static int cxl_zpool_get(struct cxl_zpool *pool);
+@@ -800,16 +799,16 @@ static int cxl_zswap_cpu_comp_prepare(unsigned int cpu, struct hlist_node *node)
+ 
+ 	acomp = crypto_alloc_acomp_node(pool->tfm_name, 0, 0, cpu_to_node(cpu));
+ 	if (IS_ERR(acomp)) {
+-		pr_err("could not alloc crypto acomp %s : %ld\n",
+-		       pool->tfm_name, PTR_ERR(acomp));
++		PNM_ERR("could not alloc crypto acomp %s : %ld\n",
++			pool->tfm_name, PTR_ERR(acomp));
+ 		return PTR_ERR(acomp);
+ 	}
+ 	acomp_ctx->acomp = acomp;
+ 
+ 	req = acomp_request_alloc(acomp_ctx->acomp);
+ 	if (!req) {
+-		pr_err("could not alloc crypto acomp_request %s\n",
+-		       pool->tfm_name);
++		PNM_ERR("could not alloc crypto acomp_request %s\n",
++			pool->tfm_name);
+ 		crypto_free_acomp(acomp_ctx->acomp);
+ 		return -ENOMEM;
+ 	}
+@@ -959,23 +958,23 @@ static struct cxl_zpool *cxl_zpool_create(char *type, char *compressor)
+ 
+ 	pool->zpool = zpool_create_pool(type, name, gfp, &cxl_zpool_ops);
+ 	if (!pool->zpool) {
+-		pr_err("%s zpool not available\n", type);
++		PNM_ERR("%s zpool not available\n", type);
+ 		goto error;
+ 	}
+-	pr_debug("using %s zpool\n", zpool_get_type(pool->zpool));
++	PNM_DBG("using %s zpool\n", zpool_get_type(pool->zpool));
+ 
+ 	strscpy(pool->tfm_name, compressor, sizeof(pool->tfm_name));
+ 
+ 	pool->acomp_ctx = alloc_percpu(*pool->acomp_ctx);
+ 	if (!pool->acomp_ctx) {
+-		pr_err("percpu alloc failed\n");
++		PNM_ERR("percpu alloc failed\n");
+ 		goto error;
+ 	}
+ 
+ 	ret = cpuhp_state_add_instance(CPUHP_MM_CXL_ZPOOL_PREPARE, &pool->node);
+ 	if (ret)
+ 		goto error;
+-	pr_debug("using %s compressor\n", pool->tfm_name);
++	PNM_DBG("using %s compressor\n", pool->tfm_name);
+ 
+ 	// being the current pool takes 1 ref; this func expects the
+ 	// caller to always add the new pool as the current pool
+@@ -1004,29 +1003,29 @@ static __init struct cxl_zpool *__cxl_zpool_create_fallback(void)
+ 	has_comp = crypto_has_acomp(cxl_zswap_compressor, 0, 0);
+ 	if (!has_comp &&
+ 	    strcmp(cxl_zswap_compressor, CONFIG_ZSWAP_COMPRESSOR_DEFAULT)) {
+-		pr_err("compressor %s not available, using default %s\n",
+-		       cxl_zswap_compressor, CONFIG_ZSWAP_COMPRESSOR_DEFAULT);
++		PNM_ERR("compressor %s not available, using default %s\n",
++			cxl_zswap_compressor, CONFIG_ZSWAP_COMPRESSOR_DEFAULT);
+ 		param_free_charp(&cxl_zswap_compressor);
+ 		cxl_zswap_compressor = CONFIG_ZSWAP_COMPRESSOR_DEFAULT;
+ 		has_comp = crypto_has_acomp(cxl_zswap_compressor, 0, 0);
+ 	}
+ 	if (!has_comp) {
+-		pr_err("default compressor %s not available\n",
+-		       cxl_zswap_compressor);
++		PNM_ERR("default compressor %s not available\n",
++			cxl_zswap_compressor);
+ 		param_free_charp(&cxl_zswap_compressor);
+ 		cxl_zswap_compressor = ZSWAP_PARAM_UNSET;
+ 	}
+ 
+ 	has_zpool = zpool_has_pool(cxl_zpool_type);
+ 	if (!has_zpool && strcmp(cxl_zpool_type, CONFIG_ZSWAP_ZPOOL_DEFAULT)) {
+-		pr_err("zpool %s not available, using default %s\n",
+-		       cxl_zpool_type, CONFIG_ZSWAP_ZPOOL_DEFAULT);
++		PNM_ERR("zpool %s not available, using default %s\n",
++			cxl_zpool_type, CONFIG_ZSWAP_ZPOOL_DEFAULT);
+ 		param_free_charp(&cxl_zpool_type);
+ 		cxl_zpool_type = CONFIG_ZSWAP_ZPOOL_DEFAULT;
+ 		has_zpool = zpool_has_pool(cxl_zpool_type);
+ 	}
+ 	if (!has_zpool) {
+-		pr_err("default zpool %s not available\n", cxl_zpool_type);
++		PNM_ERR("default zpool %s not available\n", cxl_zpool_type);
+ 		param_free_charp(&cxl_zpool_type);
+ 		cxl_zpool_type = ZSWAP_PARAM_UNSET;
+ 	}
+@@ -1105,7 +1104,7 @@ static int __cxl_zswap_param_set(const char *val, const struct kernel_param *kp,
+ 	int ret;
+ 
+ 	if (cxl_zswap_init_failed) {
+-		pr_err("can't set param, initialization failed\n");
++		PNM_ERR("can't set param, initialization failed\n");
+ 		return -ENODEV;
+ 	}
+ 
+@@ -1121,13 +1120,13 @@ static int __cxl_zswap_param_set(const char *val, const struct kernel_param *kp,
+ 
+ 	if (!type) {
+ 		if (!zpool_has_pool(s)) {
+-			pr_err("zpool %s not available\n", s);
++			PNM_ERR("zpool %s not available\n", s);
+ 			return -ENOENT;
+ 		}
+ 		type = s;
+ 	} else if (!compressor) {
+ 		if (!crypto_has_acomp(s, 0, 0)) {
+-			pr_err("compressor %s not available\n", s);
++			PNM_ERR("compressor %s not available\n", s);
+ 			return -ENOENT;
+ 		}
+ 		compressor = s;
+@@ -1213,17 +1212,17 @@ static int cxl_zswap_enabled_param_set(const char *val,
+ 
+ 	for_each_online_node(nid) {
+ 		si_meminfo_node(&i, nid);
+-		pr_info("NODE %d Free/Total Pages: %8lu / %8lu\n", nid,
++		PNM_INF("NODE %d Free/Total Pages: %8lu / %8lu\n", nid,
+ 			i.freeram, i.totalram);
+ 	}
+-	pr_info("Total Pages: %8lu\n", totalram_pages());
++	PNM_INF("Total Pages: %8lu\n", totalram_pages());
+ 
+ 	if (cxl_zswap_init_failed) {
+-		pr_err("can't enable, initialization failed\n");
++		PNM_ERR("can't enable, initialization failed\n");
+ 		return -ENODEV;
+ 	}
+ 	if (!cxl_has_zpool && cxl_zswap_init_started) {
+-		pr_err("can't enable, no pool configured\n");
++		PNM_ERR("can't enable, no pool configured\n");
+ 		return -ENODEV;
+ 	}
+ 
+@@ -1473,11 +1472,11 @@ static int cxl_zswap_frontswap_store(unsigned int type, pgoff_t offset,
+ 			migrated_page =
+ 				alloc_pages_node(cxl_mem_node, GFP_KERNEL, 0);
+ 			if (!migrated_page) {
+-				pr_err("err: failed to alloc pages on the CXL node.\n");
++				PNM_ERR("err: failed to alloc pages on the CXL node.\n");
+ 				return -1;
+ 			}
+ 			if (dma_copy_page(page, migrated_page) != 0) {
+-				pr_err("err: failed to move pages to CXL node.\n");
++				PNM_ERR("err: failed to move pages to CXL node.\n");
+ 				__free_page(migrated_page);
+ 				return -1;
+ 			}
+@@ -1485,7 +1484,7 @@ static int cxl_zswap_frontswap_store(unsigned int type, pgoff_t offset,
+ 			if (move_page_cxl(current->pid, 1, (void *)page,
+ 					  cxl_mem_node, 0,
+ 					  MPOL_MF_MOVE_ALL) != 0) {
+-				pr_err("failed to move pages to CXL node.\n");
++				PNM_ERR("failed to move pages to CXL node.\n");
+ 				return -1;
+ 			}
+ #endif
+@@ -1620,7 +1619,7 @@ static int __init init_cxl_zswap(void)
+ 	cxl_zswap_init_started = true;
+ 
+ 	if (cxl_zswap_entry_cache_create()) {
+-		pr_err("entry cache creation failed\n");
++		PNM_ERR("entry cache creation failed\n");
+ 		goto cache_fail;
+ 	}
+ 
+@@ -1629,7 +1628,7 @@ static int __init init_cxl_zswap(void)
+ 				cxl_zswap_dstmem_prepare,
+ 				cxl_zswap_dstmem_dead);
+ 	if (ret) {
+-		pr_err("dstmem alloc failed\n");
++		PNM_ERR("dstmem alloc failed\n");
+ 		goto dstmem_fail;
+ 	}
+ 
+@@ -1642,12 +1641,12 @@ static int __init init_cxl_zswap(void)
+ 
+ 	pool = __cxl_zpool_create_fallback();
+ 	if (pool) {
+-		pr_info("loaded using pool %s/%s\n", pool->tfm_name,
++		PNM_INF("loaded using pool %s/%s\n", pool->tfm_name,
+ 			zpool_get_type(pool->zpool));
+ 		list_add(&pool->list, &cxl_zpools);
+ 		cxl_has_zpool = true;
+ 	} else {
+-		pr_err("pool creation failed\n");
++		PNM_ERR("pool creation failed\n");
+ 		cxl_zswap_enabled = false;
+ 	}
+ 
+@@ -1659,7 +1658,7 @@ static int __init init_cxl_zswap(void)
+ 	if (ret)
+ 		goto destroy_wq;
+ 	if (cxl_zswap_debugfs_init())
+-		pr_warn("debugfs initialization failed\n");
++		PNM_WRN("debugfs initialization failed\n");
+ 	return 0;
+ 
+ destroy_wq:
+-- 
+2.34.1
+

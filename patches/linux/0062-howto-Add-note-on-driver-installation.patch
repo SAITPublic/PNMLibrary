@@ -1,7 +1,7 @@
 From e4a1764b93a246f565e5f69a6e652c4f82e64e3c Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Thu, 10 Nov 2022 12:28:55 +0000
-Subject: [PATCH 062/161] [howto] Add note on driver installation.
+Subject: [PATCH 062/225] [howto] Add note on driver installation.
 
 Related to AXDIMM-465.
 ---

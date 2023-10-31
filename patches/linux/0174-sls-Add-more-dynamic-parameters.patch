@@ -1,0 +1,463 @@
+From 4e12aec35972b736101a767617f442efe047a21c Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 31 Aug 2023 08:22:56 +0000
+Subject: [PATCH 174/225] [sls] Add more dynamic parameters
+
+- Make sls scale dynamic
+- Make base addr dynamic
+- Fix validation
+
+Related to: MCS23-1081
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md                       | 20 ++++++--
+ drivers/dax/Kconfig                       | 27 -----------
+ drivers/dax/sls_dax.c                     | 11 ++---
+ drivers/dax/sls_dax.h                     |  7 +--
+ drivers/pnm/sls_resource/mem_info.c       | 26 +++++++++++
+ drivers/pnm/sls_resource/mem_info.h       |  4 ++
+ drivers/pnm/sls_resource/sysfs/sysfs.c    |  3 +-
+ drivers/pnm/sls_resource/sysfs/topology.c |  8 ++++
+ drivers/pnm/sls_resource/topo/axdimm.h    |  1 +
+ drivers/pnm/sls_resource/topo/cxl.h       |  1 +
+ drivers/pnm/sls_resource/topo/params.c    | 56 ++++++++++++++++++-----
+ drivers/pnm/sls_resource/topo/params.h    |  2 +
+ include/linux/sls_common.h                |  8 ----
+ 13 files changed, 112 insertions(+), 62 deletions(-)
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 348c03397..37a1706ba 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -16,9 +16,7 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+     PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
+   HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
+   KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+-    A base physical address of SLS range in gigabytes (SLS_BASE_ADDR) [4] (NEW) 4 -> choose your offset here (4 for simulation, 66 for FPGA).
+-    A scale of SLS memory range (SLS_MEMORY_SCALE) [2] (NEW) 2 -> choose your scale here (2 for simulation 16GB range, 1 for simulation 32GB range, 0 for FPGA)
+-    Choose PNM SLS device type
++     Choose PNM SLS device type
+     > 1. AXDIMM (DEV_SLS_AXDIMM) (NEW)
+       2. CXL (DEV_SLS_CXL) (NEW)
+     choice[1-2?]: -> choose between AXDIMM and CXL SLS
+@@ -90,3 +88,19 @@ $ ./scripts/pnm/install_imdb_resource.sh
+ ```bash
+ $ ./scripts/pnm/install_sls_headers.sh
+ ```
++
++## Parameters
++
++If you want to override default module parameters, you can specify them explicitly in `modprobe` command.
++For example, the code below sets the `scale` and `base_addr` parameters to 1 and 4 respectively.
++
++```bash
++sudo modprobe sls_resource dev_type=CXL scale=1 base_addr=4
++```
++
++If you do not want to pass module parameters every time, you can set arguments in linux cmd-line
++Just edit `/etc/default/grub` and add needed parameters to`GRUB_CMDLINE_LINUX_DEFAULT` like
++
++```bash
++GRUB_CMDLINE_LINUX_DEFAULT="sls_resource.dev_type=CXL sls_resource.base_addr=4 sls_resource.scale=1"
++```
+\ No newline at end of file
+diff --git a/drivers/dax/Kconfig b/drivers/dax/Kconfig
+index 11876f478..0060d0cd8 100644
+--- a/drivers/dax/Kconfig
++++ b/drivers/dax/Kconfig
+@@ -80,33 +80,6 @@ config DEV_DAX_KMEM
+ 
+ if DEV_SLS
+ 
+-config DEV_SLS_BASE_ADDR
+-	int "A base address of SLS range"
+-	depends on DEV_SLS
+-	range 4 66
+-	default 4
+-	help
+-	  A base physical address of SLS range in gigabytes
+-
+-	  This value is used to detect SLS range in DAX driver and
+-	  map it accordingly.
+-
+-config DEV_SLS_MEMORY_SCALE
+-	int "A scale of SLS memory range"
+-	depends on DEV_SLS
+-	range 0 4
+-	default 1
+-	help
+-	  Setup memory range size for SLS
+-
+-	  This value is used to scale the total SLS memory range
+-	  in DAX driver.
+-	  The maximum possible memory is 64 gigabytes. And the scale
+-	  parameter allows to scale this down by powers of 2. The calculation
+-	  for the real memory size is total_size = 64 / (2^scale) gigabytes.
+-	  By default scale = 1, and so the default total_size = 32 gigabytes
+-
+-
+ choice
+ 	prompt "Choose PNM SLS type"
+ 	depends on DEV_SLS
+diff --git a/drivers/dax/sls_dax.c b/drivers/dax/sls_dax.c
+index 38d64e4cb..03bf80c86 100644
+--- a/drivers/dax/sls_dax.c
++++ b/drivers/dax/sls_dax.c
+@@ -54,9 +54,8 @@ int sls_dax_mmap(struct file *filep, struct vm_area_struct *vma)
+ {
+ 	pgprot_t p_prot;
+ 	size_t page_addr, page_offset;
+-	off_t gpio_addr = SLS_BASE_ADDR;
+ 
+-	page_offset = gpio_addr >> PAGE_SHIFT;
++	page_offset = sls_get_base() >> PAGE_SHIFT;
+ 	page_addr = page_offset + vma->vm_pgoff;
+ 
+ 	if (get_page_prot(vma, &p_prot))
+@@ -85,6 +84,7 @@ static int setup_sls_ranges(struct dev_dax *dev_dax)
+ 	const uint64_t orig_range_start = dev_dax->ranges[0].range.start;
+ 	const struct sls_mem_info *mem_info = sls_create_mem_info();
+ 	uint64_t start, end;
++	const uint64_t base_addr = sls_get_base();
+ 	struct dev_dax_range *ranges;
+ 	int i;
+ 	int rc = 0;
+@@ -94,7 +94,7 @@ static int setup_sls_ranges(struct dev_dax *dev_dax)
+ 		goto out;
+ 	}
+ 
+-	if (orig_range_start < SLS_BASE_ADDR) {
++	if (orig_range_start < base_addr) {
+ 		pr_err(LOG_PREFIX "Setup sls ranges failed\n");
+ 		rc = -EFAULT;
+ 		goto mem_info_err;
+@@ -121,10 +121,9 @@ static int setup_sls_ranges(struct dev_dax *dev_dax)
+ 		if (i == 0)
+ 			start = orig_range_start;
+ 		else
+-			start = SLS_BASE_ADDR +
+-				mem_info->regions[i].range.start;
++			start = base_addr + mem_info->regions[i].range.start;
+ 
+-		end = SLS_BASE_ADDR + mem_info->regions[i].range.end;
++		end = base_addr + mem_info->regions[i].range.end;
+ 
+ 		ranges[i] = (struct dev_dax_range){
+ 			.pgoff = pgoff,
+diff --git a/drivers/dax/sls_dax.h b/drivers/dax/sls_dax.h
+index bf65fb7ea..f3a0ef4c6 100644
+--- a/drivers/dax/sls_dax.h
++++ b/drivers/dax/sls_dax.h
+@@ -16,13 +16,10 @@
+ 
+ extern struct sls_mem_info *sls_create_mem_info(void);
+ extern void sls_destroy_mem_info(const struct sls_mem_info *mem_info);
++extern bool is_sls_range(uint64_t start, uint64_t end);
++extern uint64_t sls_get_base(void);
+ 
+ int sls_dax_mmap(struct file *filep, struct vm_area_struct *vma);
+ int init_sls_dax_device(struct dev_dax *dev_dax);
+ 
+-static inline bool is_sls_range(u64 start, u64 end)
+-{
+-	return start >= SLS_BASE_ADDR && end < SLS_BASE_ADDR + SLS_MEMORY_SIZE;
+-}
+-
+ #endif /* __SLS_DAX_H__ */
+diff --git a/drivers/pnm/sls_resource/mem_info.c b/drivers/pnm/sls_resource/mem_info.c
+index 537e25111..e7c8d65f2 100644
+--- a/drivers/pnm/sls_resource/mem_info.c
++++ b/drivers/pnm/sls_resource/mem_info.c
+@@ -122,3 +122,29 @@ void sls_destroy_mem_cunit_info(const struct sls_mem_cunit_info *cunit_mem_info)
+ 	kfree(cunit_mem_info);
+ }
+ EXPORT_SYMBOL(sls_destroy_mem_cunit_info);
++
++uint64_t sls_get_memory_size(void)
++{
++	const size_t nr_regions = sls_topo()->nr_cs * SLS_BLOCK_MAX;
++	uint64_t size = 0;
++	uint8_t idx;
++
++	for (idx = 0; idx < nr_regions; ++idx)
++		size += sls_topo()->block_sz[idx % SLS_BLOCK_MAX];
++
++	return size;
++}
++
++bool is_sls_range(uint64_t start, uint64_t end)
++{
++	const uint64_t base_addr = sls_topo()->base_addr;
++
++	return start >= base_addr && end < base_addr + sls_get_memory_size();
++}
++EXPORT_SYMBOL(is_sls_range);
++
++uint64_t sls_get_base(void)
++{
++	return sls_topo()->base_addr;
++}
++EXPORT_SYMBOL(sls_get_base);
+diff --git a/drivers/pnm/sls_resource/mem_info.h b/drivers/pnm/sls_resource/mem_info.h
+index 580f195be..8d5efd406 100644
+--- a/drivers/pnm/sls_resource/mem_info.h
++++ b/drivers/pnm/sls_resource/mem_info.h
+@@ -13,4 +13,8 @@ const struct sls_mem_cunit_info *
+ sls_create_mem_cunit_info(const struct sls_mem_info *mem_info);
+ void sls_destroy_mem_cunit_info(const struct sls_mem_cunit_info *cunit_mem_info);
+ 
++uint64_t sls_get_memory_size(void);
++bool is_sls_range(uint64_t start, uint64_t end);
++uint64_t sls_get_base(void);
++
+ #endif /* __MEM_INFO_H__ */
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs.c b/drivers/pnm/sls_resource/sysfs/sysfs.c
+index 8f92d5525..da38614db 100644
+--- a/drivers/pnm/sls_resource/sysfs/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.c
+@@ -5,6 +5,7 @@
+ #include "allocator.h"
+ #include "cunit_scheduler.h"
+ #include "log.h"
++#include "mem_info.h"
+ #include "private.h"
+ #include "process_manager.h"
+ #include "sysfs-private.h"
+@@ -96,7 +97,7 @@ static DEVICE_ATTR_WO(reset);
+ static ssize_t size_show(struct device *device, struct device_attribute *attr,
+ 			 char *buf)
+ {
+-	uint64_t value = SLS_MEMORY_SIZE;
++	const uint64_t value = sls_get_memory_size();
+ 
+ 	return sysfs_emit(buf, "%llu\n", value);
+ }
+diff --git a/drivers/pnm/sls_resource/sysfs/topology.c b/drivers/pnm/sls_resource/sysfs/topology.c
+index 6c75fb592..d0a84ed39 100644
+--- a/drivers/pnm/sls_resource/sysfs/topology.c
++++ b/drivers/pnm/sls_resource/sysfs/topology.c
+@@ -41,6 +41,13 @@ EXPORT_PARAM(reg_exec);
+ EXPORT_PARAM(reg_poll);
+ EXPORT_PARAM(alignment_sz);
+ 
++static ssize_t base_addr_show(struct device *device,
++			      struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "%llu\n", sls_topo()->base_addr);
++}
++DEVICE_ATTR_RO(base_addr);
++
+ static struct kobject *mem_topo_kobj;
+ 
+ static struct attribute *mem_topo_attrs[] = {
+@@ -63,6 +70,7 @@ static struct attribute *mem_topo_attrs[] = {
+ 	DEV_ATTR_REF(reg_exec),
+ 	DEV_ATTR_REF(reg_poll),
+ 	DEV_ATTR_REF(alignment_sz),
++	DEV_ATTR_REF(base_addr),
+ 	NULL,
+ };
+ 
+diff --git a/drivers/pnm/sls_resource/topo/axdimm.h b/drivers/pnm/sls_resource/topo/axdimm.h
+index ea22d8a2d..5941ff3fb 100644
+--- a/drivers/pnm/sls_resource/topo/axdimm.h
++++ b/drivers/pnm/sls_resource/topo/axdimm.h
+@@ -30,6 +30,7 @@ static const struct sls_params axdimm_default_sls_params = {
+ 	.reg_poll = 0x840,
+ 	.alignment_sz = PAGE_SIZE,
+ 	.block_sz = {},
++	.base_addr = 66ULL << 30, // hardware base addr
+ };
+ 
+ #endif // __SLS_AXDIMM_PARAMETERS_H__
+diff --git a/drivers/pnm/sls_resource/topo/cxl.h b/drivers/pnm/sls_resource/topo/cxl.h
+index 58cf81e99..357b7f7cb 100644
+--- a/drivers/pnm/sls_resource/topo/cxl.h
++++ b/drivers/pnm/sls_resource/topo/cxl.h
+@@ -32,6 +32,7 @@ static const struct sls_params cxl_default_sls_params = {
+ 	.reg_poll = 0x440,
+ 	.alignment_sz = HUGE_PAGE_SIZE,
+ 	.block_sz = {},
++	.base_addr = 66ULL << 30, // hardware base addr
+ };
+ 
+ #endif // __SLS_CXL_PARAMETERS_H__
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index 80b8165c7..490e09eac 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -20,12 +20,12 @@ static struct sls_params sls_params = cxl_default_sls_params;
+ 
+ /* Base offset for each CS */
+ #define EMBT_BASE_CS0_OFFSET 0ULL
+-#define EMBT_BASE_CS1_OFFSET (0x800000000ULL >> SLS_MEMORY_SCALE)
++#define EMBT_BASE_CS1_OFFSET 0x800000000ULL // hardware CS1 offset addr
+ #define SLS_CH_ID 0
+ 
+ //[TODO: MCS23-1373] replace this function onto constants
+ static uint64_t sls_make_address(int channel, int rank, int bankgroup, int bank,
+-				 int row, int column)
++				 int row, int column, int scale)
+ {
+ 	uint64_t addr = 0;
+ 	uint64_t tmp_x = 0, tmp = 0, row_t = (uint64_t)row;
+@@ -81,15 +81,15 @@ static uint64_t sls_make_address(int channel, int rank, int bankgroup, int bank,
+ 	 * it's a common shift for INST/CONF/PSUM relative to the start of BASE,
+ 	 * in other words it's a BASE block size.
+ 	 */
+-	addr += ((row_t >> 12) & 0x1f) >> SLS_MEMORY_SCALE << 30;
++	addr += ((row_t >> 12) & 0x1f) >> scale << 30;
+ 
+ 	/*
+ 	 * CS bit[35], Chip Select bit, it also scales to proper switch
+ 	 * between CS when using scale on a simulator.
+ 	 */
+-	addr += ((uint64_t)rank << 35) >> SLS_MEMORY_SCALE;
++	addr += ((uint64_t)rank << 35) >> scale;
+ 	/* CH bit[36], always 0 */
+-	addr += (((uint64_t)channel & 0x1) << 36) >> SLS_MEMORY_SCALE;
++	addr += (((uint64_t)channel & 0x1) << 36) >> scale;
+ 
+ 	return addr;
+ }
+@@ -99,16 +99,17 @@ static void set_mem_blocks_sizes(u64 *block_sz)
+ 	int cs = 0;
+ 	int block;
+ 	size_t offsets[SLS_BLOCK_MAX] = {};
++	const uint64_t scale = sls_topo()->scale;
+ 
+ 	offsets[SLS_BLOCK_BASE] = EMBT_BASE_CS0_OFFSET;
+ 	offsets[SLS_BLOCK_INST] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F000, 0);
++		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F000, 0, scale);
+ 	offsets[SLS_BLOCK_CFGR] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F100, 0);
++		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F100, 0, scale);
+ 	offsets[SLS_BLOCK_TAGS] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F200, 0);
++		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F200, 0, scale);
+ 	offsets[SLS_BLOCK_PSUM] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F400, 0);
++		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F400, 0, scale);
+ 
+ 	/* init register size for each cs */
+ 	block_sz[SLS_BLOCK_BASE] =
+@@ -120,8 +121,7 @@ static void set_mem_blocks_sizes(u64 *block_sz)
+ 	block_sz[SLS_BLOCK_TAGS] =
+ 		offsets[SLS_BLOCK_PSUM] - offsets[SLS_BLOCK_TAGS];
+ 	block_sz[SLS_BLOCK_PSUM] =
+-		EMBT_BASE_CS1_OFFSET -
+-		offsets[SLS_BLOCK_PSUM]; // Assume that all psum sizes are the same
++		(EMBT_BASE_CS1_OFFSET >> scale) - offsets[SLS_BLOCK_PSUM];
+ 
+ 	if (CONFIG_DEV_SLS_BUS == DEV_TYPE_SLS_AXDIMM)
+ 		return;
+@@ -164,6 +164,7 @@ static int check_topo_consistent(const struct sls_params *params)
+ 	is_valid &= (params->interleaving_stride == 0 ||
+ 		     params->interleaving_stride == SZ_128);
+ 	is_valid &= (params->aligned_tag_sz == SZ_64);
++	is_valid &= (params->scale >= 0 && params->scale <= 4);
+ 
+ 	return is_valid ? 0 : -EINVAL;
+ }
+@@ -218,6 +219,34 @@ static const struct kernel_param_ops param_ops_dev_type = {
+ 	.get = get_dev_type,
+ };
+ 
++static int set_base_addr(const char *val, const struct kernel_param *kp)
++{
++	uint64_t value;
++	const int rc = kstrtoull(val, 0, &value);
++
++	if (rc)
++		return rc;
++
++	value = value << 30;
++	*((uint64_t *)kp->arg) = value;
++
++	return 0;
++}
++
++static int get_base_addr(char *buffer, const struct kernel_param *kp)
++{
++	uint64_t value = *((uint64_t *)kp->arg);
++
++	value = value >> 30;
++
++	return sysfs_emit(buffer, "%llu\n", value);
++}
++
++static const struct kernel_param_ops param_ops_base_addr = {
++	.set = set_base_addr,
++	.get = get_base_addr,
++};
++
+ static int set_value(const char *value, const struct kernel_param *kp)
+ {
+ 	int *field_val, rc;
+@@ -240,7 +269,7 @@ static int set_value(const char *value, const struct kernel_param *kp)
+ 	if (rc != 0)
+ 		return rc;
+ 
+-	memcpy((char *)&temp_params + offset, kp->arg, sizeof(int));
++	*((int *)kp->arg) = *field_val; // apply value
+ 
+ 	return rc;
+ }
+@@ -257,6 +286,7 @@ static const struct kernel_param_ops param_ops_topo = {
+ 
+ #define param_check_dev_type(name, p) __param_check(name, p, int)
+ #define param_check_topo(name, p) __param_check(name, p, int)
++#define param_check_base_addr(name, p) __param_check(name, p, uint64_t)
+ 
+ #define TYPED_NAMED_PARAM(param, type) \
+ 	module_param_named(param, sls_params.param, type, 0444)
+@@ -264,6 +294,7 @@ static const struct kernel_param_ops param_ops_topo = {
+ #define NAMED_PARAM(param) TYPED_NAMED_PARAM(param, topo)
+ 
+ TYPED_NAMED_PARAM(dev_type, dev_type);
++TYPED_NAMED_PARAM(base_addr, base_addr);
+ NAMED_PARAM(nr_ranks);
+ NAMED_PARAM(nr_cunits);
+ NAMED_PARAM(nr_cs);
+@@ -282,3 +313,4 @@ NAMED_PARAM(reg_en);
+ NAMED_PARAM(reg_exec);
+ NAMED_PARAM(reg_poll);
+ NAMED_PARAM(alignment_sz);
++NAMED_PARAM(scale);
+diff --git a/drivers/pnm/sls_resource/topo/params.h b/drivers/pnm/sls_resource/topo/params.h
+index 6141111cb..e76445f45 100644
+--- a/drivers/pnm/sls_resource/topo/params.h
++++ b/drivers/pnm/sls_resource/topo/params.h
+@@ -27,8 +27,10 @@ struct sls_params {
+ 	int reg_exec;
+ 	int reg_poll;
+ 	int alignment_sz;
++	int scale; //[TODO: MCS23-1534] Remove to total size
+ 	/* [TODO: @p.bred] make it generic and flexible, then export */
+ 	uint64_t block_sz[SLS_BLOCK_MAX];
++	uint64_t base_addr;
+ };
+ 
+ const struct sls_params *sls_topo(void);
+diff --git a/include/linux/sls_common.h b/include/linux/sls_common.h
+index 99e154824..863e123e0 100644
+--- a/include/linux/sls_common.h
++++ b/include/linux/sls_common.h
+@@ -48,12 +48,4 @@ struct sls_mem_cunit_info {
+ 	struct sls_mem_cunit_region regions[];
+ };
+ 
+-/* [TODO: @p.bred] Move these constants to the topology and make them dynamic */
+-/* A scale of SLS memory range */
+-#define SLS_MEMORY_SCALE ((uint64_t)CONFIG_DEV_SLS_MEMORY_SCALE)
+-/* Total Memory size for SLS */
+-#define SLS_MEMORY_SIZE (0x1000000000ULL >> SLS_MEMORY_SCALE)
+-/* Start address of SLS */
+-#define SLS_BASE_ADDR ((uint64_t)CONFIG_DEV_SLS_BASE_ADDR << 30)
+-
+ #endif /* __SLS_COMMON_H__ */
+-- 
+2.34.1
+

@@ -13,7 +13,7 @@
 
 #include "transfer_manager.h"
 
-#include "core/memory/barrier.h"
+#include "common/memory/barrier.h"
 
 #include "pnmlib/common/error.h"
 #include "pnmlib/common/views.h"
@@ -22,8 +22,9 @@
 #include <cstdint>
 #include <iterator>
 
-uint64_t pnm::memory::IMDBTransferManager::copy_from_device_impl(
-    const DeviceRegionInfo &dev_region, pnm::common_view<uint8_t> host_region) {
+uint64_t pnm::memory::ImdbTransferManager::copy_from_device_impl(
+    const DeviceRegionInfo &dev_region,
+    pnm::views::common<uint8_t> host_region) {
   const auto &dev_vregion = std::get<VRegionType>(dev_region.virt);
 
   if (host_region.size() < dev_vregion.size()) {
@@ -37,7 +38,8 @@ uint64_t pnm::memory::IMDBTransferManager::copy_from_device_impl(
   // [TODO: y-lavrinenko] Use AVX-memcpy from sandbox when the real device will
   // be used
   if constexpr (PNM_PLATFORM != FUNCSIM) {
-    flush(dev_vregion.begin(), dev_vregion.size());
+    pnm::memory::flush(dev_vregion.begin(), dev_vregion.size());
+    pnm::memory::mfence();
   }
   auto *end_it =
       std::copy(dev_vregion.begin(), dev_vregion.end(), host_region.begin());
@@ -45,8 +47,8 @@ uint64_t pnm::memory::IMDBTransferManager::copy_from_device_impl(
   return std::distance(host_region.begin(), end_it);
 }
 
-uint64_t pnm::memory::IMDBTransferManager::copy_to_device_impl(
-    pnm::common_view<const uint8_t> host_region,
+uint64_t pnm::memory::ImdbTransferManager::copy_to_device_impl(
+    pnm::views::common<const uint8_t> host_region,
     const DeviceRegionInfo &dev_region) {
   auto dev_vregion = std::get<VRegionType>(dev_region.virt);
 
@@ -63,7 +65,8 @@ uint64_t pnm::memory::IMDBTransferManager::copy_to_device_impl(
   auto *end_it =
       std::copy(host_region.begin(), host_region.end(), dev_vregion.begin());
   if constexpr (PNM_PLATFORM != FUNCSIM) {
-    flush(dev_vregion.begin(), dev_vregion.size());
+    pnm::memory::flush(dev_vregion.begin(), dev_vregion.size());
+    pnm::memory::mfence();
   }
 
   return std::distance(dev_vregion.begin(), end_it);

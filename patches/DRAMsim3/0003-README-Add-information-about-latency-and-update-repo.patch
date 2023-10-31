@@ -1,7 +1,7 @@
 From 56f7711484d42b0d4c82439539e300a7dda35488 Mon Sep 17 00:00:00 2001
 From: Jinsu Park <jinsu0.park@samsung.com>
 Date: Thu, 31 Aug 2023 11:26:00 +0900
-Subject: [PATCH 3/4] [README] Add information about latency and update repo
+Subject: [PATCH 3/6] [README] Add information about latency and update repo
  name
 
 ---

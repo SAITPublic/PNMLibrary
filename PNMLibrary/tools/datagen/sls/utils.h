@@ -41,10 +41,10 @@
 #include <string>
 #include <vector>
 
-namespace sls::tests {
+namespace tools::gen::sls {
 
-inline constexpr auto tables_default_name = "embedded.bin";
-inline constexpr auto info_default_name = "embedded.info";
+inline constexpr auto tables_default_name = "embedding.bin";
+inline constexpr auto info_default_name = "embedding.info";
 inline constexpr auto indices_suffix_bin = ".indices.bin";
 inline constexpr auto indices_suffix_info = ".indices.info";
 inline constexpr auto golden_suffix_bin = ".golden.bin";
@@ -75,13 +75,13 @@ inline void get_or_create_test_tables(const std::filesystem::path &root,
                                       std::vector<uint8_t> &tables) {
 
   if (std::filesystem::exists(root / tables_default_name)) {
-    pnm::log::info("Embedded tables exist, skipping creation");
+    pnm::log::info("Embedding tables exist, skipping creation");
   } else {
-    pnm::log::info("Embedded tables not found, creating");
+    pnm::log::info("Embedding tables not found, creating");
     if (!std::filesystem::exists(root) &&
         !std::filesystem::create_directory(root)) {
       PNM_LOG_ERROR(
-          "Can't create directory to store embedded tables, path = {}.",
+          "Can't create directory to store embedding tables, path = {}.",
           root.string());
     }
 
@@ -93,7 +93,7 @@ inline void get_or_create_test_tables(const std::filesystem::path &root,
     table_generator->create_and_store(root, info);
   }
 
-  auto tables_ = sls::tests::get_test_tables_mmap(root);
+  auto tables_ = get_test_tables_mmap(root);
   auto tables_view = tables_.mapped_file.get_view<uint8_t>();
   tables = std::vector<uint8_t>(tables_view.begin(), tables_view.end());
 }
@@ -128,14 +128,14 @@ get_or_create_test_indices(const GeneratorWithOverflowParams &params,
                               (params.prefix + indices_suffix_bin))) {
     pnm::log::info("Indices exist, skipping creation");
   } else {
-    pnm::log::info("Embedded not found, creating");
+    pnm::log::info("Indices have not been found, creating");
     auto indices_generator = IndicesGeneratorFactory::default_factory().create(
         params.generator_indices_name);
 
     auto length_generator = LengthsGeneratorFactory::default_factory().create(
         params.generator_lengths_name, params.overflow_type);
 
-    auto tables = sls::tests::get_test_tables_mmap(params.root);
+    auto tables = get_test_tables_mmap(params.root);
     const TablesInfo &tinfo = tables.info;
 
     auto lengths =
@@ -145,7 +145,7 @@ get_or_create_test_indices(const GeneratorWithOverflowParams &params,
     indices_generator->create_and_store(params.root, params.prefix, info,
                                         tinfo);
 
-    auto indices = sls::tests::get_test_indices(params.root, params.prefix);
+    auto indices = get_test_indices(params.root, params.prefix);
 
     auto generator =
         GoldenVecGeneratorFactory::default_factory().create(params.entry_type);
@@ -153,7 +153,7 @@ get_or_create_test_indices(const GeneratorWithOverflowParams &params,
                                             indices);
   }
 
-  auto ihandler = sls::tests::get_test_indices(params.root, params.prefix);
+  auto ihandler = get_test_indices(params.root, params.prefix);
 
   auto index_count = std::accumulate(ihandler.info.lengths().begin(),
                                      ihandler.info.lengths().end(), 0ULL);
@@ -183,6 +183,6 @@ inline std::ifstream get_golden_vector(const std::filesystem::path &root,
   return in;
 }
 
-} // namespace sls::tests
+} // namespace tools::gen::sls
 
 #endif // SLS_UTILS_H

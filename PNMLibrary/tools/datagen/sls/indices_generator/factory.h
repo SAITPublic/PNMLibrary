@@ -21,6 +21,8 @@
 #include <memory>
 #include <string>
 
+namespace tools::gen::sls {
+
 /*!\brief Factory for Indices generators. Call default_factory() to get factory
  * with preregistered generators. */
 class IndicesGeneratorFactory
@@ -29,5 +31,7 @@ class IndicesGeneratorFactory
 public:
   static IndicesGeneratorFactory &default_factory();
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_INDICES_GEN_FACTORY_H

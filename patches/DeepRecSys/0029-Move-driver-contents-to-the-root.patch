@@ -1,7 +1,7 @@
 From c79c39179e61cfa560d30e94eff0124c926ad242 Mon Sep 17 00:00:00 2001
 From: Petr Bred <p.bred@samsung.com>
 Date: Mon, 29 May 2023 12:24:22 +0300
-Subject: [PATCH 29/33] Move driver contents to the root
+Subject: [PATCH 29/34] Move driver contents to the root
 
 * Build script rename: build_drv.sh -> build.sh
 * Includes checker rename: check_driver_includes.sh -> check_includes.h

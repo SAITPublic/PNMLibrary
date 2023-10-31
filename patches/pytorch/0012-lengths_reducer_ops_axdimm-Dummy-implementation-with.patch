@@ -1,7 +1,7 @@
 From 0eca04ec219d471e6372984b7f3257cb219f0cf2 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 1 Nov 2021 19:00:52 +0900
-Subject: [PATCH 012/128] [lengths_reducer_ops_axdimm] Dummy implementation
+Subject: [PATCH 012/135] [lengths_reducer_ops_axdimm] Dummy implementation
  with axdimm::axdimm_run
 
 To be debugged and refined further.

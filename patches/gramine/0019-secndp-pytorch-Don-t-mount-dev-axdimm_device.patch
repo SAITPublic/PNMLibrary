@@ -1,7 +1,7 @@
 From f7269add43cb0ad2cfcb1db7aedbe0c0924e2dbf Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Fri, 5 May 2023 15:22:32 +0300
-Subject: [PATCH 19/27] [secndp, pytorch] Don't mount `/dev/axdimm_device`
+Subject: [PATCH 19/29] [secndp, pytorch] Don't mount `/dev/axdimm_device`
 
 This device is not present in simulator setting, and
 mounting it raises an error. To my knowledge, Gramine

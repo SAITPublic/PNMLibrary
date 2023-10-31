@@ -1,7 +1,7 @@
 From db65bc96bd50bf4abcb43a058fa3013a36fdca97 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Mon, 19 Sep 2022 15:55:48 +0300
-Subject: [PATCH 19/33] Add GDB script to debug DeepRecSys.
+Subject: [PATCH 19/34] Add GDB script to debug DeepRecSys.
 
 Write a script for GDB to properly handle child processes in DeepRecSys
 and simplify debugging the multi-process application.

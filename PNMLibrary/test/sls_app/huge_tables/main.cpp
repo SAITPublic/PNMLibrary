@@ -8,7 +8,6 @@
 #include "test/sls_app/api/utils.h"
 
 #include "pnmlib/core/device.h"
-#include "pnmlib/core/sls_device.h"
 
 #include <gtest/gtest.h>
 
@@ -24,18 +23,33 @@
 #include <vector>
 
 using namespace test_app;
+using pnm::sls::device::topo;
 
 namespace {
-template <typename T> size_t gen_num_tables(const SlsDevice &device) {
-  // get all ranks memory where we can place huge tables by distribute policy
-  const auto sls_memory_size = device.base_memory_size();
-  fmt::print("SLS total memory size[GB]: {}\n",
-             sls_memory_size / 1024 / 1024 / 1024);
-  size_t num_tables =
-      sls_memory_size / sizeof(T) / ksparse_feature_size / kemb_table_len;
-  num_tables = num_tables / pnm::device::topo().NumOfRanks *
-               pnm::device::topo().NumOfRanks; // to avoid uneven distribution
-  return num_tables;
+template <typename T>
+size_t gen_num_tables(const pnm::DevicePointer device, bool distribute_policy) {
+  /* Get BASE  memory size*/
+  const auto sls_memory_size = device->memory_size();
+
+  fmt::print("SLS total memory size[GB]: {}\n", sls_memory_size >> 30);
+
+  /* 2MB CXL DAX alignment*/
+  static constexpr size_t align_size =
+      2 << 20; //[TODO: @s-motov]: export alignment as parameter
+
+  /* Calculate table size */
+  const auto table_size = sizeof(T) * ksparse_feature_size * kemb_table_len;
+
+  /* Calculate table size with align gap */
+  const auto table_size_aligned =
+      ((table_size + align_size - 1) / align_size) * align_size;
+
+  size_t num_tables = sls_memory_size / table_size_aligned;
+
+  /* to avoid uneven distribution */
+  num_tables -= num_tables % topo().NumOfCUnits;
+
+  return distribute_policy ? num_tables : num_tables / topo().NumOfCUnits;
 }
 
 template <typename T>
@@ -44,8 +58,7 @@ void gen_tables(std::vector<uint8_t> &tables, size_t num_tables) {
   const uint64_t total_tables_features = kemb_table_len * num_tables;
   const size_t tables_size_in_bytes =
       total_tables_features * ksparse_feature_size * sizeof(T);
-  fmt::print("Tables size[GB]: {}\n",
-             tables_size_in_bytes / 1024 / 1024 / 1024);
+  fmt::print("Tables size[GB]: {}\n", tables_size_in_bytes >> 30);
   const auto max_reserve_memory = get_mem_avail_in_bytes();
   if (tables_size_in_bytes > max_reserve_memory) {
     fmt::print(stderr, "Tables total size is too big: {}\n",
@@ -96,17 +109,19 @@ generate_sparse_indices_vec(const std::vector<uint32_t> &lS_lengths,
 }
 } // namespace
 
-TEST(Memory, HugeTables) {
-  const size_t num_tables =
-      gen_num_tables<float>(SlsDevice::make(pnm::Device::Type::SLS_AXDIMM));
+TEST(Memory, ReplicateHugeTables) {
+  static constexpr auto distribute = false;
+
+  const size_t num_tables = gen_num_tables<float>(
+      pnm::Device::make_device(pnm::Device::Type::SLS), distribute);
 
   const HelperRunParams batch(kmini_batch_size, knum_requests,
-                              test::mock::ContextType::AXDIMM);
+                              test::mock::ContextType::SLS);
   const SlsModelParams model(ksparse_feature_size, num_tables, kemb_table_len);
 
-  const SLSParamsGenerator params_generator;
+  const SlsParamsGenerator params_generator;
 
-  const SLSTestHugeTables<float> test(batch, model, params_generator);
+  const SlsTestHugeTables<float> test(batch, model, params_generator);
   test.print();
 
   std::vector<uint8_t> tables;
@@ -117,5 +132,36 @@ TEST(Memory, HugeTables) {
       num_tables * kmini_batch_size, knum_indices_per_lookup_fix);
   sls_op_params.lS_indices =
       generate_sparse_indices_vec(sls_op_params.lS_lengths, num_tables);
-  test.run(tables, sls_op_params);
+  test.run(tables, sls_op_params, distribute);
+}
+
+TEST(Memory, DistributeHugeTables) {
+  static constexpr auto distribute = true;
+
+  if (topo().Bus == pnm::sls::device::BusType::AXDIMM &&
+      topo().NumOfCUnits > 4) {
+    GTEST_SKIP() << "Requires more memory then our CI has\n";
+  }
+
+  const size_t num_tables = gen_num_tables<float>(
+      pnm::Device::make_device(pnm::Device::Type::SLS), distribute);
+
+  const HelperRunParams batch(kmini_batch_size, knum_requests,
+                              test::mock::ContextType::SLS);
+  const SlsModelParams model(ksparse_feature_size, num_tables, kemb_table_len);
+
+  const SlsParamsGenerator params_generator;
+
+  const SlsTestHugeTables<float> test(batch, model, params_generator);
+  test.print();
+
+  std::vector<uint8_t> tables;
+  gen_tables<float>(tables, num_tables);
+
+  SlsOpParams sls_op_params;
+  sls_op_params.lS_lengths = std::vector<uint32_t>(
+      num_tables * kmini_batch_size, knum_indices_per_lookup_fix);
+  sls_op_params.lS_indices =
+      generate_sparse_indices_vec(sls_op_params.lS_lengths, num_tables);
+  test.run(tables, sls_op_params, distribute);
 }

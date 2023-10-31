@@ -1,7 +1,7 @@
 From 4dfc6969a56893f858757cf9e8e8a05acdc99bb3 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 12 May 2023 04:32:23 +0000
-Subject: [PATCH 106/161] NFC: rename config-axdimm -> config-pnm
+Subject: [PATCH 106/225] NFC: rename config-axdimm -> config-pnm
 
 * rename config-axdimm -> config-pnm.
 * rename linux kernel suffix for pnm config build.

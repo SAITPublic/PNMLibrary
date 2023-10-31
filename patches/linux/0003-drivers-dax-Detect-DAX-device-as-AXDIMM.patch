@@ -1,7 +1,7 @@
 From df1678fadc6ce9f0dd7070bda4af680432666019 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 17 Nov 2021 12:55:34 +0900
-Subject: [PATCH 003/161] [drivers/dax] Detect DAX device as AXDIMM
+Subject: [PATCH 003/225] [drivers/dax] Detect DAX device as AXDIMM
 
 Add 'is_axdimm_device' field to 'struct dax_mapping' and set it up in 'probe'
 method basing on range start (fixed for AXDIMM).

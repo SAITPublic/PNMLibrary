@@ -41,8 +41,15 @@ private:
                 const pnm::property::PropertiesList &props) override;
 
   void deallocate_impl(const DeviceRegion &region) override;
+
+  DeviceRegion share_region_impl(const DeviceRegion &region) override;
+
+  DeviceRegion get_shared_alloc_impl(const DeviceRegion &region) override;
+
   uint8_t
   get_alloc_preference(const pnm::property::PropertiesList &props) const;
+
+  DeviceRegion sharing_ioctl(const DeviceRegion &region, uint64_t cmd);
 
   const Device *device_;
 };

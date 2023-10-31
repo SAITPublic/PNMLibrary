@@ -33,10 +33,10 @@
 TEST(BitViewIterator, CreateAdvance) {
   struct iota_skipped {
     auto begin() const {
-      return pnm::views::bitview_iterator<size_t, iota_skipped>(*this, first);
+      return pnm::views::bit_iterator<size_t, iota_skipped>(*this, first);
     }
     auto end() const {
-      return pnm::views::bitview_iterator<size_t, iota_skipped>(*this, last);
+      return pnm::views::bit_iterator<size_t, iota_skipped>(*this, last);
     }
 
     size_t it_helper_value(uint64_t index) const { return index * scale; }
@@ -76,9 +76,9 @@ TEST(BitCompressedView, TrivialAccess) {
 
   *(reinterpret_cast<uint16_t *>(memory.get())) = 0b0'101'110'111'011'001;
 
-  const pnm::views::bit_compressed_view vw(
+  const pnm::views::bit_compressed vw(
       VALUE_BITS, VALUE_COUNT,
-      pnm::common_view{memory.get(), memory.get() + N});
+      pnm::views::common{memory.get(), memory.get() + N});
 
   auto gid = 0;
   for (auto e : vw) {
@@ -107,9 +107,9 @@ TEST(BitCompressedView, ReadWriteAccess) {
   const std::unique_ptr<uint64_t[]> memory(new uint64_t[N]);
   std::fill_n(memory.get(), N, 0);
 
-  pnm::views::bit_compressed_view vw(
+  pnm::views::bit_compressed vw(
       VALUE_BITS, VALUE_COUNT,
-      pnm::common_view{memory.get(), memory.get() + N});
+      pnm::views::common{memory.get(), memory.get() + N});
 
   auto gid = 0;
   for (auto c : test_message) {
@@ -126,7 +126,7 @@ TEST(BitCompressedView, ReadWriteAccess) {
   }
 
   ASSERT_TRUE(std::equal(golden.begin(), golden.end(),
-                         pnm::make_view(memory.get(), N).begin()));
+                         pnm::views::make_view(memory.get(), N).begin()));
 }
 
 TEST(BitVectorView, CreateReadWrite) {

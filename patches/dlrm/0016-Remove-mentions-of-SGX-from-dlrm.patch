@@ -1,7 +1,7 @@
 From 5bb6fecf4b7dc9675345da152555206a37429738 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Mon, 21 Nov 2022 18:12:36 +0300
-Subject: [PATCH 16/23] Remove mentions of SGX from dlrm.
+Subject: [PATCH 16/24] Remove mentions of SGX from dlrm.
 
 Remove checks for SGX mode and SGX-related options from the Facebook
 DLRM application.

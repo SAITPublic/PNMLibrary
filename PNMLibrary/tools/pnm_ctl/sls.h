@@ -35,35 +35,34 @@ struct RankInfoDescription {
   std::string option_name;
   std::string option_description;
   std::string printable_name;
-  SlsComputeUnitInfo compute_unit_info;
+  pnm::sls::ComputeUnitInfo compute_unit_info;
 };
 
 } // namespace details
 
-class PrintInfo final : public ICommand {
+class PrintInfo : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 
 private:
   void execute();
 
-  static const std::array<details::RankInfoDescription, cunit_info_length>
+  static const std::array<details::RankInfoDescription,
+                          pnm::sls::cunit_info_length>
       descriptions_;
 
   std::vector<uint64_t> enabled_ranks_;
 
   CLI::Option *is_hex_{};
   std::vector<CLI::Option *> rank_info_options_{};
-  CLI::App *sub_ = nullptr;
-  bool sub_is_initialized_ = false;
 };
 
-class Reset final : public ICommand {
+class Reset : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 };
 
-class AcquisitionTimeout final : public ICommand {
+class AcquisitionTimeout : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 
@@ -71,7 +70,7 @@ private:
   uint64_t set_timeout_{};
 };
 
-class ResourceCleanup final : public ICommand {
+class ResourceCleanup : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 
@@ -82,12 +81,11 @@ private:
   uint64_t set_cleanup_{};
 };
 
-class LeakedInfo final : public ICommand {
+class LeakedInfo : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 };
 
-bool check_sls_available();
 } // namespace tools::ctl::sls
 
 #endif // TOOLS_CTL_SLS_H

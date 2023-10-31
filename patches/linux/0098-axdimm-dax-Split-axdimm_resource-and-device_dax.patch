@@ -1,7 +1,7 @@
 From b5b0b3b7db8bec19fcfaf2455aa0cdc6186357c6 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Wed, 22 Mar 2023 19:27:19 +0300
-Subject: [PATCH 098/161] [axdimm, dax] Split axdimm_resource and device_dax
+Subject: [PATCH 098/225] [axdimm, dax] Split axdimm_resource and device_dax
 
 Previously, `device_dax` contained all AXDIMM-related kernel code
 including resource management and sysfs exports. This commit

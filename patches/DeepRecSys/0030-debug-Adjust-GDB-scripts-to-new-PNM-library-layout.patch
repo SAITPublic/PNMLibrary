@@ -1,7 +1,7 @@
 From 2d99a9c1892154057f3030f19b34e902e5be3dbb Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Fri, 23 Jun 2023 14:52:20 +0300
-Subject: [PATCH 30/33] [debug] Adjust GDB scripts to new PNM library layout.
+Subject: [PATCH 30/34] [debug] Adjust GDB scripts to new PNM library layout.
 
 SAIT/PNMLibrary#554 changed the names of exported PNM libraries.
 This commit updates the GDB scripts to use new library names.

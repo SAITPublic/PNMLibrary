@@ -1,0 +1,660 @@
+From f93d97dc041b7eff540234191fbfa4e3029ff07f Mon Sep 17 00:00:00 2001
+From: Bogdan Palkin <b.palkin@samsung.com>
+Date: Mon, 11 Sep 2023 12:26:03 +0000
+Subject: [PATCH 182/225] [pnm] Unify allocation structure
+
+Currently we have 2 separate structures `sls_memory_alloc_request` and
+`imdb_allocation` in kernel, but they are basically the same.
+This commit introduces unified structure `allocation` for SLS and IMDB
+allocations.
+
+Resolves: MCS23-1619
+
+Signed-off-by: Bogdan Palkin <b.palkin@samsung.com>
+---
+ drivers/pnm/imdb_resource/allocator.c      | 22 +++---
+ drivers/pnm/imdb_resource/allocator.h      |  2 +-
+ drivers/pnm/imdb_resource/proc_mgr.c       | 41 ++++++-----
+ drivers/pnm/imdb_resource/proc_mgr.h       |  4 +-
+ drivers/pnm/sls_resource/allocator.c       | 36 +++++----
+ drivers/pnm/sls_resource/allocator.h       |  2 +-
+ drivers/pnm/sls_resource/process_manager.c | 85 ++++++++++------------
+ drivers/pnm/sls_resource/process_manager.h |  6 +-
+ include/uapi/linux/imdb_resources.h        | 18 +----
+ include/uapi/linux/pnm_resources.h         | 14 ++++
+ include/uapi/linux/sls_resources.h         | 19 +----
+ 11 files changed, 111 insertions(+), 138 deletions(-)
+
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index c8cafd2b7..8ab7c5ae5 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -29,25 +29,25 @@ void imdb_alloc_unlock(void)
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+-static int allocate_memory(struct imdb_allocation *req)
++static int allocate_memory(struct pnm_allocation *req)
+ {
+-	if (req->rank == IMDB_NUM_OF_RANK)
+-		req->rank = pnm_alloc_most_free_pool(&alloc);
++	if (req->memory_pool == IMDB_NUM_OF_RANK)
++		req->memory_pool = pnm_alloc_most_free_pool(&alloc);
+ 
+-	return pnm_alloc_pool_malloc(&alloc, req->rank, req->size,
+-				     &req->address);
++	return pnm_alloc_pool_malloc(&alloc, req->memory_pool, req->size,
++				     &req->addr);
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+-static void deallocate_memory(const struct imdb_allocation *req)
++static void deallocate_memory(const struct pnm_allocation *req)
+ {
+-	uint64_t addr = req->address;
++	uint64_t addr = req->addr;
+ 
+-	pnm_alloc_pool_free(&alloc, req->rank, req->size, &addr);
++	pnm_alloc_pool_free(&alloc, req->memory_pool, req->size, &addr);
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+-int allocator_clear_res(const struct imdb_allocation *req)
++int allocator_clear_res(const struct pnm_allocation *req)
+ {
+ 	deallocate_memory(req);
+ 	return 0;
+@@ -56,14 +56,14 @@ int allocator_clear_res(const struct imdb_allocation *req)
+ int allocator_ioctl(struct file *filp, unsigned int cmd,
+ 		    unsigned long __user arg)
+ {
+-	struct imdb_allocation req;
++	struct pnm_allocation req;
+ 
+ 	int rc = !!copy_from_user(&req, (void __user *)arg, sizeof(req));
+ 
+ 	if (rc)
+ 		return -EFAULT;
+ 
+-	if (req.rank > IMDB_NUM_OF_RANK)
++	if (req.memory_pool > IMDB_NUM_OF_RANK)
+ 		return -EINVAL;
+ 
+ 	/*
+diff --git a/drivers/pnm/imdb_resource/allocator.h b/drivers/pnm/imdb_resource/allocator.h
+index 9fc761fe5..419408890 100644
+--- a/drivers/pnm/imdb_resource/allocator.h
++++ b/drivers/pnm/imdb_resource/allocator.h
+@@ -13,7 +13,7 @@ int reset_memory_allocator(void);
+ 
+ int allocator_ioctl(struct file *filp, unsigned int cmd,
+ 		    unsigned long __user arg);
+-int allocator_clear_res(const struct imdb_allocation *allocation);
++int allocator_clear_res(const struct pnm_allocation *allocation);
+ 
+ uint64_t get_avail_size(void);
+ uint64_t get_mem_size(void);
+diff --git a/drivers/pnm/imdb_resource/proc_mgr.c b/drivers/pnm/imdb_resource/proc_mgr.c
+index ad72a11aa..bdef8efc4 100644
+--- a/drivers/pnm/imdb_resource/proc_mgr.c
++++ b/drivers/pnm/imdb_resource/proc_mgr.c
+@@ -18,7 +18,7 @@
+ 
+ /* list of descriptors held by process */
+ struct imdb_alloc_res {
+-	struct imdb_allocation allocation;
++	struct pnm_allocation alloc;
+ 	struct rb_node node;
+ };
+ 
+@@ -56,14 +56,15 @@ static struct proc_mgr proc_mgr = {
+ 	.lock = __MUTEX_INITIALIZER(proc_mgr.lock),
+ };
+ 
+-static inline bool imdb_req_less(struct imdb_allocation a,
+-				 struct imdb_allocation b)
++static inline bool imdb_alloc_less(struct pnm_allocation a,
++				   struct pnm_allocation b)
+ {
+-	return a.rank < b.rank || (a.rank == b.rank && a.address < b.address);
++	return a.memory_pool < b.memory_pool ||
++	       (a.memory_pool == b.memory_pool && a.addr < b.addr);
+ }
+ 
+ static bool desc_delete(struct rb_root *root,
+-			const struct imdb_allocation *allocation)
++			const struct pnm_allocation *alloc)
+ {
+ 	struct rb_node *node = root->rb_node;
+ 
+@@ -71,9 +72,9 @@ static bool desc_delete(struct rb_root *root,
+ 		struct imdb_alloc_res *desc_node =
+ 			container_of(node, struct imdb_alloc_res, node);
+ 
+-		if (imdb_req_less(*allocation, desc_node->allocation)) {
++		if (imdb_alloc_less(*alloc, desc_node->alloc)) {
+ 			node = node->rb_left;
+-		} else if (imdb_req_less(desc_node->allocation, *allocation)) {
++		} else if (imdb_alloc_less(desc_node->alloc, *alloc)) {
+ 			node = node->rb_right;
+ 		} else {
+ 			rb_erase(&desc_node->node, root);
+@@ -85,7 +86,7 @@ static bool desc_delete(struct rb_root *root,
+ }
+ 
+ static bool desc_insert(struct rb_root *root,
+-			const struct imdb_allocation *allocation)
++			const struct pnm_allocation *alloc)
+ {
+ 	struct rb_node **new = &(root->rb_node);
+ 	struct rb_node *parent = NULL;
+@@ -94,7 +95,7 @@ static bool desc_insert(struct rb_root *root,
+ 	imdb_alloc = kzalloc(sizeof(*imdb_alloc), GFP_KERNEL);
+ 
+ 	if (imdb_alloc)
+-		imdb_alloc->allocation = *allocation;
++		imdb_alloc->alloc = *alloc;
+ 	else
+ 		return false;
+ 
+@@ -103,9 +104,9 @@ static bool desc_insert(struct rb_root *root,
+ 			container_of(*new, struct imdb_alloc_res, node);
+ 
+ 		parent = *new;
+-		if (imdb_req_less(*allocation, this->allocation))
++		if (imdb_alloc_less(*alloc, this->alloc))
+ 			new = &((*new)->rb_left);
+-		else if (imdb_req_less(this->allocation, *allocation))
++		else if (imdb_alloc_less(this->alloc, *alloc))
+ 			new = &((*new)->rb_right);
+ 		else
+ 			return false;
+@@ -119,7 +120,7 @@ static bool desc_insert(struct rb_root *root,
+ 
+ static int clear_allocations(struct imdb_proc_res *proc_res)
+ {
+-	struct imdb_allocation *allocation = NULL;
++	struct pnm_allocation *alloc = NULL;
+ 	struct rb_node *next;
+ 	uint64_t begin = 0;
+ 	uint64_t end = 0;
+@@ -129,9 +130,9 @@ static int clear_allocations(struct imdb_proc_res *proc_res)
+ 		struct imdb_alloc_res *alloc_res_node =
+ 			rb_entry_safe(next, struct imdb_alloc_res, node);
+ 
+-		allocation = &alloc_res_node->allocation;
+-		begin = allocation->address;
+-		end = begin + allocation->size;
++		alloc = &alloc_res_node->alloc;
++		begin = alloc->addr;
++		end = begin + alloc->size;
+ 		IMDB_DBG("Process manager release allocation [%llx, %llx]\n",
+ 			 begin, end);
+ 
+@@ -141,7 +142,7 @@ static int clear_allocations(struct imdb_proc_res *proc_res)
+ 		 */
+ 		imdb_alloc_lock();
+ 		{
+-			rc |= allocator_clear_res(allocation);
++			rc |= allocator_clear_res(alloc);
+ 			rb_erase(&alloc_res_node->node,
+ 				 &proc_res->alloc_res_tree);
+ 			kfree(alloc_res_node);
+@@ -196,7 +197,7 @@ static inline bool is_resource_empty(struct imdb_proc_res *proc_res)
+ }
+ 
+ int imdb_register_allocation(struct file *filp,
+-			     const struct imdb_allocation *allocation)
++			     const struct pnm_allocation *alloc)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+@@ -207,7 +208,7 @@ int imdb_register_allocation(struct file *filp,
+ 	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (likely(proc_res)) {
+-		if (!desc_insert(&proc_res->alloc_res_tree, allocation)) {
++		if (!desc_insert(&proc_res->alloc_res_tree, alloc)) {
+ 			IMDB_ERR("Can't register allocation\n");
+ 			rc = -ENOMEM;
+ 		}
+@@ -220,7 +221,7 @@ int imdb_register_allocation(struct file *filp,
+ }
+ 
+ int imdb_unregister_allocation(struct file *filp,
+-			       const struct imdb_allocation *allocation)
++			       const struct pnm_allocation *alloc)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+@@ -231,7 +232,7 @@ int imdb_unregister_allocation(struct file *filp,
+ 	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (likely(proc_res)) {
+-		if (!desc_delete(&proc_res->alloc_res_tree, allocation)) {
++		if (!desc_delete(&proc_res->alloc_res_tree, alloc)) {
+ 			rc = -EINVAL;
+ 			IMDB_ERR("Allocation not found\n");
+ 		}
+diff --git a/drivers/pnm/imdb_resource/proc_mgr.h b/drivers/pnm/imdb_resource/proc_mgr.h
+index 513f2c51e..04aad938e 100644
+--- a/drivers/pnm/imdb_resource/proc_mgr.h
++++ b/drivers/pnm/imdb_resource/proc_mgr.h
+@@ -14,9 +14,9 @@ int imdb_register_process(struct file *filp);
+ int imdb_release_process(struct file *filp);
+ 
+ int imdb_register_allocation(struct file *filp,
+-			     const struct imdb_allocation *allocation);
++			     const struct pnm_allocation *alloc);
+ int imdb_unregister_allocation(struct file *filp,
+-			       const struct imdb_allocation *allocation);
++			       const struct pnm_allocation *alloc);
+ 
+ int imdb_register_thread(struct file *filp, uint8_t thread);
+ int imdb_unregister_thread(struct file *filp, uint8_t thread);
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index 05e7950c4..8701fc716 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -86,12 +86,11 @@ void cleanup_sls_allocator(void)
+ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ {
+ 	int err;
+-	struct sls_memory_alloc_request kreq;
+-	struct sls_memory_alloc_request __user *ureq =
+-		(struct sls_memory_alloc_request __user *)arg;
++	struct pnm_allocation kreq;
++	struct pnm_allocation __user *ureq =
++		(struct pnm_allocation __user *)arg;
+ 
+-	SLS_COPY_FROM_USER(err, &kreq, ureq,
+-			   sizeof(struct sls_memory_alloc_request));
++	SLS_COPY_FROM_USER(err, &kreq, ureq, sizeof(struct pnm_allocation));
+ 	if (unlikely(err)) {
+ 		SLS_ERR("Failed to read user alloc request. Ptr = %p.\n", ureq);
+ 		return err;
+@@ -101,18 +100,18 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc.props);
+ 
+-		if (kreq.cunit == SLS_ALLOC_ANY_CUNIT)
+-			kreq.cunit = pnm_alloc_most_free_pool(&alloc);
++		if (kreq.memory_pool == SLS_ALLOC_ANY_CUNIT)
++			kreq.memory_pool = pnm_alloc_most_free_pool(&alloc);
+ 
+-		err = pnm_alloc_pool_malloc(&alloc, kreq.cunit, kreq.size,
+-					    &kreq.cunit_offset);
++		err = pnm_alloc_pool_malloc(&alloc, kreq.memory_pool, kreq.size,
++					    &kreq.addr);
+ 		if (unlikely(err)) {
+ 			unlock_sls_allocator();
+ 			return err;
+ 		}
+ 
+ 		SLS_COPY_TO_USER(err, ureq, &kreq,
+-				 sizeof(struct sls_memory_alloc_request));
++				 sizeof(struct pnm_allocation));
+ 		if (unlikely(err)) {
+ 			SLS_ERR("Failed to write user alloc request. Ptr = %p.\n",
+ 				ureq);
+@@ -124,7 +123,7 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 
+ 		if (!err) {
+ 			SLS_DBG("Allocated obj: pool[%u], cunit_offset = [0x%llx], size = [%llu]\n",
+-				kreq.cunit, kreq.cunit_offset, kreq.size);
++				kreq.memory_pool, kreq.addr, kreq.size);
+ 		}
+ 	}
+ 	unlock_sls_allocator();
+@@ -132,21 +131,20 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 	return err;
+ }
+ 
+-int deallocate_memory_unsafe(struct sls_memory_alloc_request req)
++int deallocate_memory_unsafe(struct pnm_allocation req)
+ {
+-	return pnm_alloc_pool_free(&alloc, req.cunit, req.size,
+-				   &req.cunit_offset);
++	return pnm_alloc_pool_free(&alloc, req.memory_pool, req.size,
++				   &req.addr);
+ }
+ 
+ static int deallocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ {
+ 	int err;
+-	struct sls_memory_alloc_request kreq;
+-	struct sls_memory_alloc_request __user *ureq =
+-		(struct sls_memory_alloc_request __user *)arg;
++	struct pnm_allocation kreq;
++	struct pnm_allocation __user *ureq =
++		(struct pnm_allocation __user *)arg;
+ 
+-	SLS_COPY_FROM_USER(err, &kreq, ureq,
+-			   sizeof(struct sls_memory_alloc_request));
++	SLS_COPY_FROM_USER(err, &kreq, ureq, sizeof(struct pnm_allocation));
+ 	if (unlikely(err)) {
+ 		SLS_ERR("Failed to read user dealloc request. Ptr = %p.\n",
+ 			ureq);
+diff --git a/drivers/pnm/sls_resource/allocator.h b/drivers/pnm/sls_resource/allocator.h
+index 5d681298e..8a7904c01 100644
+--- a/drivers/pnm/sls_resource/allocator.h
++++ b/drivers/pnm/sls_resource/allocator.h
+@@ -21,7 +21,7 @@ int reset_sls_allocator(void);
+ void cleanup_sls_allocator(void);
+ int mem_process_ioctl(struct file *filp, unsigned int cmd,
+ 		      unsigned long __user arg);
+-int deallocate_memory_unsafe(struct sls_memory_alloc_request req);
++int deallocate_memory_unsafe(struct pnm_allocation req);
+ void lock_sls_allocator(void);
+ void unlock_sls_allocator(void);
+ 
+diff --git a/drivers/pnm/sls_resource/process_manager.c b/drivers/pnm/sls_resource/process_manager.c
+index dda5df152..5d1e22b40 100644
+--- a/drivers/pnm/sls_resource/process_manager.c
++++ b/drivers/pnm/sls_resource/process_manager.c
+@@ -10,11 +10,8 @@
+ #include <linux/sched/signal.h>
+ #include <linux/slab.h>
+ 
+-// [TODO: @e-kutovoi MCS23-1260] Rename desc -> req, since there are no
+-// "descriptors" anymore
+-
+ struct sls_proc_desc {
+-	struct sls_memory_alloc_request request;
++	struct pnm_allocation alloc;
+ 	struct rb_node node;
+ };
+ 
+@@ -62,15 +59,14 @@ enum cunit_access_type {
+ 	CUNIT_ACCESS_INVAL,
+ };
+ 
+-static inline bool sls_req_less(struct sls_memory_alloc_request a,
+-				struct sls_memory_alloc_request b)
++static inline bool sls_alloc_less(struct pnm_allocation a,
++				  struct pnm_allocation b)
+ {
+-	return a.cunit < b.cunit ||
+-	       (a.cunit == b.cunit && a.cunit_offset < b.cunit_offset);
++	return a.memory_pool < b.memory_pool ||
++	       (a.memory_pool == b.memory_pool && a.addr < b.addr);
+ }
+ 
+-static bool desc_delete(struct rb_root *root,
+-			struct sls_memory_alloc_request req)
++static bool desc_delete(struct rb_root *root, struct pnm_allocation alloc)
+ {
+ 	struct rb_node *node = root->rb_node;
+ 
+@@ -78,9 +74,9 @@ static bool desc_delete(struct rb_root *root,
+ 		struct sls_proc_desc *desc_node =
+ 			container_of(node, struct sls_proc_desc, node);
+ 
+-		if (sls_req_less(req, desc_node->request)) {
++		if (sls_alloc_less(alloc, desc_node->alloc)) {
+ 			node = node->rb_left;
+-		} else if (sls_req_less(desc_node->request, req)) {
++		} else if (sls_alloc_less(desc_node->alloc, alloc)) {
+ 			node = node->rb_right;
+ 		} else {
+ 			rb_erase(&desc_node->node, root);
+@@ -101,9 +97,9 @@ static bool desc_insert(struct rb_root *root, struct sls_proc_desc *proc_desc)
+ 			container_of(*new, struct sls_proc_desc, node);
+ 
+ 		parent = *new;
+-		if (sls_req_less(proc_desc->request, this->request))
++		if (sls_alloc_less(proc_desc->alloc, this->alloc))
+ 			new = &((*new)->rb_left);
+-		else if (sls_req_less(this->request, proc_desc->request))
++		else if (sls_alloc_less(this->alloc, proc_desc->alloc))
+ 			new = &((*new)->rb_right);
+ 		else
+ 			return false;
+@@ -161,8 +157,8 @@ static void track_leaked_resources(struct process_manager *mgr,
+ 	for (node = rb_first(&proc_res->alloc_desc_tree); node;
+ 	     node = rb_next(node)) {
+ 		desc = rb_entry(node, struct sls_proc_desc, node);
+-		SLS_DBG("Leaked memory under desc[cunit = %u, cunit_offset = %llu]\n",
+-			desc->request.cunit, desc->request.cunit_offset);
++		SLS_DBG("Leaked memory under desc[cunit = %u, addr = %llu]\n",
++			desc->alloc.memory_pool, desc->alloc.addr);
+ 	}
+ }
+ 
+@@ -218,12 +214,12 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 		{
+ 			//[TODO:s-motov] kcsan check
+ 
+-			failed |= deallocate_memory_unsafe(
+-					  desc_node->request) != 0;
++			failed |= deallocate_memory_unsafe(desc_node->alloc) !=
++				  0;
+ 			SLS_INF("Abnormal release desc[cunit=%u, offset=%llu],pid:%d,tid:%d\n",
+-				desc_node->request.cunit,
+-				desc_node->request.cunit_offset,
+-				get_current_process_id(), current->pid);
++				desc_node->alloc.memory_pool,
++				desc_node->alloc.addr, get_current_process_id(),
++				current->pid);
+ 			next = rb_first(&proc_res->alloc_desc_tree);
+ 			rb_erase(&desc_node->node, &proc_res->alloc_desc_tree);
+ 			kfree(desc_node);
+@@ -361,8 +357,7 @@ int sls_proc_remove_cunit(struct file *filp, int cunit, unsigned int cmd)
+ }
+ 
+ static int update_alloc_tree(struct file *filp, struct process_manager *mgr,
+-			     struct sls_memory_alloc_request req,
+-			     bool is_registration)
++			     struct pnm_allocation alloc, bool is_registration)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+@@ -385,11 +380,11 @@ static int update_alloc_tree(struct file *filp, struct process_manager *mgr,
+ 			goto unlock_mutex_out;
+ 		}
+ 
+-		proc_desc->request = req;
++		proc_desc->alloc = alloc;
+ 		if (!desc_insert(&proc_res->alloc_desc_tree, proc_desc))
+ 			err_code = -1;
+ 	} else { /* remove requested descriptor from descriptors list */
+-		if (!desc_delete(&proc_res->alloc_desc_tree, req))
++		if (!desc_delete(&proc_res->alloc_desc_tree, alloc))
+ 			err_code = -1;
+ 	}
+ 
+@@ -398,44 +393,40 @@ static int update_alloc_tree(struct file *filp, struct process_manager *mgr,
+ 	return err_code;
+ }
+ 
+-static int register_alloc_request(struct file *filp,
+-				  struct process_manager *mgr,
+-				  struct sls_memory_alloc_request req)
++static int register_allocation(struct file *filp, struct process_manager *mgr,
++			       struct pnm_allocation alloc)
+ {
+-	return update_alloc_tree(filp, mgr, req, true);
++	return update_alloc_tree(filp, mgr, alloc, true);
+ }
+ 
+-static int unregister_alloc_request(struct file *filp,
+-				    struct process_manager *mgr,
+-				    struct sls_memory_alloc_request req)
++static int unregister_allocation(struct file *filp, struct process_manager *mgr,
++				 struct pnm_allocation alloc)
+ {
+-	return update_alloc_tree(filp, mgr, req, false);
++	return update_alloc_tree(filp, mgr, alloc, false);
+ }
+ 
+-int sls_proc_register_alloc(struct file *filp,
+-			    struct sls_memory_alloc_request req)
++int sls_proc_register_alloc(struct file *filp, struct pnm_allocation alloc)
+ {
+-	SLS_DBG("Registering allocation, desc[cunit = %u, cunit_offset = %llu], pid: %d, tid: %d\n",
+-		req.cunit, req.cunit_offset, get_current_process_id(),
++	SLS_DBG("Registering allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
++		alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 		current->pid);
+-	if (register_alloc_request(filp, &proc_mgr, req)) {
+-		SLS_ERR("Fail to register cunit: %u, cunit_offset: %llu, pid: %d, tid: %d\n",
+-			req.cunit, req.cunit_offset, get_current_process_id(),
++	if (register_allocation(filp, &proc_mgr, alloc)) {
++		SLS_ERR("Fail to register cunit: %u, addr: %llu, pid: %d, tid: %d\n",
++			alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 			current->pid);
+ 		return -1;
+ 	}
+ 	return 0;
+ }
+ 
+-int sls_proc_remove_alloc(struct file *filp,
+-			  struct sls_memory_alloc_request req)
++int sls_proc_remove_alloc(struct file *filp, struct pnm_allocation alloc)
+ {
+-	SLS_DBG("Removing allocation, desc[cunit = %u, cunit_offset = %llu], pid: %d, tid: %d\n",
+-		req.cunit, req.cunit_offset, get_current_process_id(),
++	SLS_DBG("Removing allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
++		alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 		current->pid);
+-	if (unregister_alloc_request(filp, &proc_mgr, req)) {
+-		SLS_ERR("Fail to remove cunit: %u, cunit_offset: %llu, pid: %d, tid: %d\n",
+-			req.cunit, req.cunit_offset, get_current_process_id(),
++	if (unregister_allocation(filp, &proc_mgr, alloc)) {
++		SLS_ERR("Fail to remove cunit: %u, addr: %llu, pid: %d, tid: %d\n",
++			alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 			current->pid);
+ 		return -1;
+ 	}
+diff --git a/drivers/pnm/sls_resource/process_manager.h b/drivers/pnm/sls_resource/process_manager.h
+index 739aff17f..ceb9b7d2c 100644
+--- a/drivers/pnm/sls_resource/process_manager.h
++++ b/drivers/pnm/sls_resource/process_manager.h
+@@ -20,13 +20,11 @@ int register_sls_process(struct file *filp);
+ int release_sls_process(struct file *filp);
+ 
+ /* functions for adding allocation/cunits into process's resources data structure*/
+-int sls_proc_register_alloc(struct file *filp,
+-			    struct sls_memory_alloc_request req);
++int sls_proc_register_alloc(struct file *filp, struct pnm_allocation alloc);
+ int sls_proc_register_cunit(struct file *filp, int cunit, unsigned int cmd);
+ 
+ /* function for removing allocation/cunits from process's resources data structure*/
+-int sls_proc_remove_alloc(struct file *filp,
+-			  struct sls_memory_alloc_request req);
++int sls_proc_remove_alloc(struct file *filp, struct pnm_allocation alloc);
+ int sls_proc_remove_cunit(struct file *filp, int cunit, unsigned int cmd);
+ 
+ int sls_proc_manager_cleanup_on(void);
+diff --git a/include/uapi/linux/imdb_resources.h b/include/uapi/linux/imdb_resources.h
+index 9b0248f39..382e1f254 100644
+--- a/include/uapi/linux/imdb_resources.h
++++ b/include/uapi/linux/imdb_resources.h
+@@ -14,12 +14,6 @@
+ 
+ #include <linux/pnm_resources.h>
+ 
+-#ifdef __KERNEL__
+-#include <linux/types.h>
+-#else
+-#include <stdint.h> // for uint64_t
+-#endif
+-
+ // [TODO: y-lavrinenko] Should be merged with libimdb.h when the last is on kernel
+ 
+ #define IMDB_RESOURCE_DEVICE_NAME "imdb_resource"
+@@ -35,20 +29,12 @@
+ #define IMDB_THREAD_BUSY 1
+ #define IMDB_THREAD_IDLE 0
+ 
+-#pragma pack(push, 1)
+-struct imdb_allocation {
+-	uint64_t address;
+-	uint64_t size;
+-	uint8_t rank;
+-};
+-#pragma pack(pop)
+-
+ #define IMDB_RESOURCE_IOC_MAGIC 'D'
+ 
+ #define IMDB_IOCTL_ALLOCATE \
+-	_IOWR(IMDB_RESOURCE_IOC_MAGIC, 1, struct imdb_allocation)
++	_IOWR(IMDB_RESOURCE_IOC_MAGIC, 1, struct pnm_allocation)
+ #define IMDB_IOCTL_DEALLOCATE \
+-	_IOW(IMDB_RESOURCE_IOC_MAGIC, 2, struct imdb_allocation)
++	_IOW(IMDB_RESOURCE_IOC_MAGIC, 2, struct pnm_allocation)
+ #define IMDB_IOCTL_GET_THREAD _IO(IMDB_RESOURCE_IOC_MAGIC, 3)
+ #define IMDB_IOCTL_RELEASE_THREAD _IOW(IMDB_RESOURCE_IOC_MAGIC, 4, uint8_t)
+ 
+diff --git a/include/uapi/linux/pnm_resources.h b/include/uapi/linux/pnm_resources.h
+index 342c26c6d..d238f604f 100644
+--- a/include/uapi/linux/pnm_resources.h
++++ b/include/uapi/linux/pnm_resources.h
+@@ -12,6 +12,20 @@
+ #ifndef __PNM_RESOURCES_H__
+ #define __PNM_RESOURCES_H__
+ 
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stdint.h> // for uint64_t
++#endif
++
+ #define PNM_RESOURCE_CLASS_NAME "pnm"
+ 
++#pragma pack(push, 1)
++struct pnm_allocation {
++	uint64_t addr;
++	uint64_t size;
++	uint32_t memory_pool;
++};
++#pragma pack(pop)
++
+ #endif /* __PNM_RESOURCES_H__ */
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index c123d11c9..d4e477287 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -14,12 +14,6 @@
+ 
+ #include <linux/pnm_resources.h>
+ 
+-#ifdef __KERNEL__
+-#include <linux/types.h>
+-#else
+-#include <stdint.h> // for uint64_t
+-#endif
+-
+ #define SLS_RESOURCE_DEVICE_NAME "sls_resource"
+ 
+ /* Path to SLS resource manager device within /dev */
+@@ -187,14 +181,6 @@ enum sls_user_preferences {
+ 
+ #define SLS_ALLOC_ANY_CUNIT 0xffffffffU
+ 
+-#pragma pack(push, 1)
+-struct sls_memory_alloc_request {
+-	uint32_t cunit;
+-	uint64_t cunit_offset;
+-	uint64_t size;
+-};
+-#pragma pack(pop)
+-
+ #define SLS_IOC_MAGIC 'T'
+ 
+ #define DEVICE_IOCRESET _IO(SLS_IOC_MAGIC, 0)
+@@ -205,9 +191,8 @@ struct sls_memory_alloc_request {
+ #define GET_CUNIT_FOR_READ _IOW(SLS_IOC_MAGIC, 5, unsigned int)
+ #define RELEASE_WRITE_CUNIT _IOW(SLS_IOC_MAGIC, 6, unsigned int)
+ #define RELEASE_READ_CUNIT _IOW(SLS_IOC_MAGIC, 7, unsigned int)
+-#define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 8, struct sls_memory_alloc_request)
+-#define DEALLOCATE_MEMORY \
+-	_IOW(SLS_IOC_MAGIC, 9, struct sls_memory_alloc_request)
++#define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 8, struct pnm_allocation)
++#define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 9, struct pnm_allocation)
+ 
+ // Required to switch CPU context to avoid hangs in SLS-CXL hardware
+ // [TODO: @y-lavrinenko] Get rid when firmware be more stable
+-- 
+2.34.1
+

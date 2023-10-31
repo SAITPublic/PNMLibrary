@@ -1,7 +1,7 @@
 From dc3535d4d5f813f3a8ff3d4a61c7958a53da4872 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Fri, 18 Nov 2022 13:36:26 +0300
-Subject: [PATCH 13/23] Fix absolute pathing in dlrm pytoch test starter
+Subject: [PATCH 13/24] Fix absolute pathing in dlrm pytoch test starter
 
 Signed-off-by: Nikita Enin <n.enin@samsung.com>
 ---

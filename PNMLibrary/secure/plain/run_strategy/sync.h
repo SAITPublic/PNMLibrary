@@ -18,9 +18,9 @@
 #include <future>
 #include <utility>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 /*! \brief Class that makes a sequential run of workload on dev */
-class SLSSync {
+class SlsSync {
 public:
   template <typename Func, typename... Args>
   std::future<void> run(Func &&func, Args &&...args) {
@@ -38,6 +38,6 @@ public:
   }
 };
 
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // _SYNC_RUNNER_H_

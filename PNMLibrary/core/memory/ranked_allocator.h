@@ -51,11 +51,17 @@ private:
                               const pnm::property::PropertiesList &props,
                               RegionType &region);
 
-  SequentialRegion allocate_ioctl(uint64_t size, std::optional<uint32_t> rank);
+  SequentialRegion allocate_ioctl(uint64_t size, std::optional<uint8_t> cunit);
 
   void deallocate_impl(const DeviceRegion &region) override;
 
   void deallocate_ioctl(const SequentialRegion &seq_region);
+
+  DeviceRegion share_region_impl(const DeviceRegion &region) override;
+
+  DeviceRegion get_shared_alloc_impl(const DeviceRegion &region) override;
+
+  DeviceRegion sharing_ioctl(const DeviceRegion &region, uint64_t cmd);
 
   const Device *device_;
   const uint64_t regions_count_;

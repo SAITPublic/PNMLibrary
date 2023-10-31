@@ -1,7 +1,7 @@
 #include "param_checks.h"
 
 #include "core/device/sls/base.h"
-#include "core/device/sls/constants.h"
+#include "core/device/sls/utils/constants.h"
 
 #include "common/make_error.h"
 
@@ -25,7 +25,7 @@ namespace pnm::sls {
 namespace {
 
 // NOTE: Unused whenever building in release
-[[maybe_unused]] void check_indices(const PNMSLSOperation &op) {
+[[maybe_unused]] void check_indices(const pnm::operations::SlsOperation &op) {
   for (uint32_t table_id = 0; table_id < op.tables_sizes().size(); ++table_id) {
     // Max number of vectors per table
     const auto tables_sizes = op.tables_sizes()[table_id];
@@ -99,7 +99,7 @@ void check_device_memory_limits(const device::BaseDevice &device,
   }
 }
 
-void check_run_params(const PNMSLSOperation &op) {
+void check_run_params(const pnm::operations::SlsOperation &op) {
   if (op.minibatch_size() == 0) {
     throw pnm::error::make_inval("Minibatch size: {}.", op.minibatch_size());
   }

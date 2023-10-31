@@ -1,0 +1,835 @@
+From 461c7e467e7ef1b6601e4ed964d7da11773f4f27 Mon Sep 17 00:00:00 2001
+From: Bogdan Palkin <b.palkin@samsung.com>
+Date: Fri, 18 Aug 2023 13:16:07 +0000
+Subject: [PATCH 168/225] [pnm][imdb] Tracking resources using FD
+
+- Use private_data field of file descriptor to track process
+resources;
+
+- List active_process_list has been removed from process_manager structure
+because we don't need to store active processes to get their resources now;
+
+- Eliminate usage of find_current_proc_res;
+
+- Use rb_tree for allocations in process manager instead of list;
+
+- Add local mutex to imdb_proc_res structure;
+
+- Remove unnecessary ref_cnt.
+
+Related: MCS23-1212
+
+Signed-off-by: Bogdan Palkin <b.palkin@samsung.com>
+---
+ drivers/pnm/imdb_resource/allocator.c       |  49 ++-
+ drivers/pnm/imdb_resource/allocator.h       |   7 +-
+ drivers/pnm/imdb_resource/proc_mgr.c        | 330 ++++++++++----------
+ drivers/pnm/imdb_resource/proc_mgr.h        |  15 +-
+ drivers/pnm/imdb_resource/resource_device.c |   8 +-
+ drivers/pnm/imdb_resource/thread_sched.c    |   7 +-
+ drivers/pnm/imdb_resource/thread_sched.h    |   3 +-
+ 7 files changed, 222 insertions(+), 197 deletions(-)
+
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index 75e3d84ee..d897e0953 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -22,6 +22,17 @@ static struct MemoryAllocator general_alloc = {
+ 
+ DEFINE_MUTEX(allocator_lock);
+ 
++void imdb_alloc_lock(void)
++{
++	mutex_lock(&allocator_lock);
++}
++
++void imdb_alloc_unlock(void)
++{
++	mutex_unlock(&allocator_lock);
++}
++
++/* Use this function under allocator_lock mutex */
+ static int init_rank_pool(struct MemoryAllocator *alloc, uint8_t rank,
+ 			  uint64_t start, uint64_t size)
+ {
+@@ -63,6 +74,7 @@ static void mem_pool_mark_zero_chunk_size(struct gen_pool *pool,
+ 	chunk->end_addr = chunk->start_addr - 1;
+ }
+ 
++/* Use this function under allocator_lock mutex */
+ static void cleanup_memory_pools(struct MemoryAllocator *alloc)
+ {
+ 	uint8_t rank;
+@@ -96,6 +108,7 @@ static void cleanup_memory_pools(struct MemoryAllocator *alloc)
+ 	}
+ }
+ 
++/* Use this function under allocator_lock mutex */
+ static int init_memory_pools(struct MemoryAllocator *alloc)
+ {
+ 	/*
+@@ -150,13 +163,12 @@ static uint8_t get_rank_most_free(void)
+ 	return rank_most_free;
+ }
+ 
++/* Use this function under allocator_lock mutex */
+ static int allocate_memory(struct imdb_allocation *req)
+ {
+ 	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
+ 	int result = 0;
+ 
+-	mutex_lock(&allocator_lock);
+-
+ 	if (req->rank == IMDB_NUM_OF_RANK)
+ 		req->rank = get_rank_most_free();
+ 
+@@ -173,28 +185,28 @@ static int allocate_memory(struct imdb_allocation *req)
+ 		req->address -= general_alloc.gran;
+ 	}
+ 
+-	mutex_unlock(&allocator_lock);
+ 	return result;
+ }
+ 
++/* Use this function under allocator_lock mutex */
+ static void deallocate_memory(const struct imdb_allocation *req)
+ {
+ 	const uint64_t aligned_size = ALIGN(req->size, general_alloc.gran);
+ 	const auto uint64_t real_address = req->address + general_alloc.gran;
+ 
+-	mutex_lock(&allocator_lock);
+ 	gen_pool_free(general_alloc.pools[req->rank], real_address,
+ 		      aligned_size);
+-	mutex_unlock(&allocator_lock);
+ }
+ 
++/* Use this function under allocator_lock mutex */
+ int allocator_clear_res(const struct imdb_allocation *allocation)
+ {
+ 	deallocate_memory(allocation);
+ 	return 0;
+ }
+ 
+-int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
++int allocator_ioctl(struct file *filp, unsigned int cmd,
++		    unsigned long __user arg)
+ {
+ 	struct imdb_allocation req;
+ 
+@@ -206,16 +218,29 @@ int allocator_ioctl(unsigned int cmd, unsigned long __user arg)
+ 	if (req.rank > IMDB_NUM_OF_RANK)
+ 		return -EINVAL;
+ 
++	/*
++	 * When we allocate or deallocate memory and register or unregister
++	 * this resource in process manager(rb_tree), we should do it
++	 * using mutex here. Otherwise, we will have "Out of memory"
++	 * error in some cases, which involve multithreading.
++	 */
+ 	switch (cmd) {
+ 	case IMDB_IOCTL_ALLOCATE:
+-		rc = allocate_memory(&req);
+-		if (!rc)
+-			rc = imdb_register_allocation(&req);
++		imdb_alloc_lock();
++		{
++			rc = allocate_memory(&req);
++			if (!rc)
++				rc = imdb_register_allocation(filp, &req);
++		}
++		imdb_alloc_unlock();
+ 		break;
+ 	case IMDB_IOCTL_DEALLOCATE:
+-		deallocate_memory(&req);
+-		rc = imdb_unregister_allocation(&req);
+-
++		imdb_alloc_lock();
++		{
++			deallocate_memory(&req);
++			rc = imdb_unregister_allocation(filp, &req);
++		}
++		imdb_alloc_unlock();
+ 		break;
+ 	}
+ 
+diff --git a/drivers/pnm/imdb_resource/allocator.h b/drivers/pnm/imdb_resource/allocator.h
+index 47869a247..78541017e 100644
+--- a/drivers/pnm/imdb_resource/allocator.h
++++ b/drivers/pnm/imdb_resource/allocator.h
+@@ -4,6 +4,7 @@
+ #ifndef __IMDB_ALLOCATOR_H__
+ #define __IMDB_ALLOCATOR_H__
+ 
++#include <linux/fs.h>
+ #include <linux/genalloc.h>
+ #include <linux/imdb_resources.h>
+ 
+@@ -22,7 +23,8 @@ int initialize_memory_allocator(void);
+ void destroy_memory_allocator(void);
+ int reset_memory_allocator(void);
+ 
+-int allocator_ioctl(unsigned int cmd, unsigned long __user arg);
++int allocator_ioctl(struct file *filp, unsigned int cmd,
++		    unsigned long __user arg);
+ int allocator_clear_res(const struct imdb_allocation *allocation);
+ 
+ uint64_t get_avail_size(void);
+@@ -31,4 +33,7 @@ uint64_t get_mem_size(void);
+ 
+ uint64_t get_granularity(void);
+ 
++void imdb_alloc_lock(void);
++void imdb_alloc_unlock(void);
++
+ #endif
+diff --git a/drivers/pnm/imdb_resource/proc_mgr.c b/drivers/pnm/imdb_resource/proc_mgr.c
+index 328f90f9d..ad72a11aa 100644
+--- a/drivers/pnm/imdb_resource/proc_mgr.c
++++ b/drivers/pnm/imdb_resource/proc_mgr.c
+@@ -19,13 +19,13 @@
+ /* list of descriptors held by process */
+ struct imdb_alloc_res {
+ 	struct imdb_allocation allocation;
+-	struct list_head list;
++	struct rb_node node;
+ };
+ 
+ /* resources allocated for particular process */
+ struct imdb_proc_res {
+-	pid_t pid;
+-	struct list_head alloc_res; //[TODO: s.motov] use rb-tree
++	struct rb_root alloc_res_tree;
++	/* Must be protected by imdb_proc_lock */
+ 	uint8_t threads_mask;
+ 	/* This counter needed because each open syscall create new
+ 	 * file descriptors and call register process.
+@@ -33,8 +33,8 @@ struct imdb_proc_res {
+ 	 * for reset ioctl purpose. take in mind this counter should be accessed
+ 	 * only under lock in order to prevent race conditions
+ 	 */
+-	int ref_cnt;
+ 	struct list_head list;
++	struct mutex imdb_proc_lock;
+ };
+ 
+ /*
+@@ -42,8 +42,7 @@ struct imdb_proc_res {
+  * processes
+  */
+ struct proc_mgr {
+-	struct list_head active_process_list; //[TODO: s.motov] use rb-tree
+-	struct list_head leaked_process_list; //[TODO: s.motov] use rb-tree
++	struct list_head leaked_process_list;
+ 	atomic64_t leaked;
+ 	atomic64_t enable_cleanup;
+ 	/* mutex for accessing process_list concurrently */
+@@ -51,61 +50,107 @@ struct proc_mgr {
+ };
+ 
+ static struct proc_mgr proc_mgr = {
+-	.active_process_list = LIST_HEAD_INIT(proc_mgr.active_process_list),
+ 	.leaked_process_list = LIST_HEAD_INIT(proc_mgr.leaked_process_list),
+ 	.leaked = ATOMIC64_INIT(0),
+ 	.enable_cleanup = ATOMIC64_INIT(IMDB_DISABLE_CLEANUP),
+ 	.lock = __MUTEX_INITIALIZER(proc_mgr.lock),
+ };
+ 
+-static pid_t get_current_process_id(void)
++static inline bool imdb_req_less(struct imdb_allocation a,
++				 struct imdb_allocation b)
+ {
+-	/*
+-	 * group_leader is a pointer to the task_struct of the main thread of
+-	 * userspace process.
+-	 */
+-	return current->group_leader->pid;
++	return a.rank < b.rank || (a.rank == b.rank && a.address < b.address);
+ }
+ 
+-/* this function should be called with sync */
+-static struct imdb_proc_res *find_current_proc_res(struct proc_mgr *mgr)
++static bool desc_delete(struct rb_root *root,
++			const struct imdb_allocation *allocation)
+ {
+-	struct imdb_proc_res *proc_res = NULL;
+-	const pid_t pid = get_current_process_id();
++	struct rb_node *node = root->rb_node;
++
++	while (node) {
++		struct imdb_alloc_res *desc_node =
++			container_of(node, struct imdb_alloc_res, node);
++
++		if (imdb_req_less(*allocation, desc_node->allocation)) {
++			node = node->rb_left;
++		} else if (imdb_req_less(desc_node->allocation, *allocation)) {
++			node = node->rb_right;
++		} else {
++			rb_erase(&desc_node->node, root);
++			kfree(desc_node);
++			return true;
++		}
++	}
++	return false;
++}
++
++static bool desc_insert(struct rb_root *root,
++			const struct imdb_allocation *allocation)
++{
++	struct rb_node **new = &(root->rb_node);
++	struct rb_node *parent = NULL;
++	struct imdb_alloc_res *imdb_alloc = NULL;
++
++	imdb_alloc = kzalloc(sizeof(*imdb_alloc), GFP_KERNEL);
+ 
+-	list_for_each_entry(proc_res, &mgr->active_process_list, list) {
+-		if (proc_res->pid == pid)
+-			return proc_res;
++	if (imdb_alloc)
++		imdb_alloc->allocation = *allocation;
++	else
++		return false;
++
++	while (*new) {
++		struct imdb_alloc_res *this =
++			container_of(*new, struct imdb_alloc_res, node);
++
++		parent = *new;
++		if (imdb_req_less(*allocation, this->allocation))
++			new = &((*new)->rb_left);
++		else if (imdb_req_less(this->allocation, *allocation))
++			new = &((*new)->rb_right);
++		else
++			return false;
+ 	}
+ 
+-	return NULL;
++	rb_link_node(&imdb_alloc->node, parent, new);
++	rb_insert_color(&imdb_alloc->node, root);
++
++	return true;
+ }
+ 
+ static int clear_allocations(struct imdb_proc_res *proc_res)
+ {
+-	struct imdb_alloc_res *alloc_res = NULL, *alloc_res_temp = NULL;
+ 	struct imdb_allocation *allocation = NULL;
++	struct rb_node *next;
+ 	uint64_t begin = 0;
+ 	uint64_t end = 0;
+ 	int rc = 0;
+ 
+-	list_for_each_entry_safe(alloc_res, alloc_res_temp,
+-				 &proc_res->alloc_res, list) {
+-		allocation = &alloc_res->allocation;
++	while ((next = rb_first(&proc_res->alloc_res_tree))) {
++		struct imdb_alloc_res *alloc_res_node =
++			rb_entry_safe(next, struct imdb_alloc_res, node);
++
++		allocation = &alloc_res_node->allocation;
+ 		begin = allocation->address;
+ 		end = begin + allocation->size;
+-		IMDB_DBG(
+-			"Process manager release allocation [%llx, %llx], pid: %d, tid: %d\n",
+-			begin, end, get_current_process_id(), current->pid);
+-
+-		rc |= allocator_clear_res(allocation);
+-		list_del(&alloc_res->list);
+-		kfree(alloc_res);
++		IMDB_DBG("Process manager release allocation [%llx, %llx]\n",
++			 begin, end);
++
++		/*
++		 * Same as for sls_resource. We should work with allocator
++		 * and rb_tree in process manager under one mutex for now.
++		 */
++		imdb_alloc_lock();
++		{
++			rc |= allocator_clear_res(allocation);
++			rb_erase(&alloc_res_node->node,
++				 &proc_res->alloc_res_tree);
++			kfree(alloc_res_node);
++		}
++		imdb_alloc_unlock();
+ 	}
+ 
+ 	if (rc) {
+-		IMDB_ERR("Can't clear allocations, pid %d, tid %d\n",
+-			 get_current_process_id(), current->pid);
++		IMDB_ERR("Can't clear allocations\n");
+ 		rc = -EINVAL;
+ 	}
+ 
+@@ -120,15 +165,12 @@ static int clear_threads(struct imdb_proc_res *proc_res)
+ 	for (it = 0; it < IMDB_THREAD_NUM; ++it) {
+ 		if (proc_res->threads_mask & (1 << it)) {
+ 			rc |= thread_sched_clear_res(it);
+-			IMDB_DBG(
+-				"Process manager release thread[%d], pid: %d, tid: %d\n",
+-				it, get_current_process_id(), current->pid);
++			IMDB_DBG("Process manager release thread[%d]\n", it);
+ 		}
+ 	}
+ 
+ 	if (rc) {
+-		IMDB_ERR("Can't clear threads, pid %d tid %d\n",
+-			 get_current_process_id(), current->pid);
++		IMDB_ERR("Can't clear threads\n");
+ 		return -EINVAL;
+ 	}
+ 
+@@ -141,6 +183,7 @@ static int clear_process_resource(struct imdb_proc_res *proc_res)
+ 
+ 	failed |= clear_threads(proc_res);
+ 	failed |= clear_allocations(proc_res);
++	mutex_destroy(&proc_res->imdb_proc_lock);
+ 	kfree(proc_res);
+ 
+ 	return failed ? -1 : 0;
+@@ -148,212 +191,165 @@ static int clear_process_resource(struct imdb_proc_res *proc_res)
+ 
+ static inline bool is_resource_empty(struct imdb_proc_res *proc_res)
+ {
+-	return list_empty(&proc_res->alloc_res) && proc_res->threads_mask == 0;
++	return RB_EMPTY_ROOT(&proc_res->alloc_res_tree) &&
++	       proc_res->threads_mask == 0;
+ }
+ 
+-int imdb_register_allocation(const struct imdb_allocation *allocation)
++int imdb_register_allocation(struct file *filp,
++			     const struct imdb_allocation *allocation)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+-	struct imdb_alloc_res *imdb_alloc = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&proc_mgr.lock);
+-
+-	proc_res = find_current_proc_res(&proc_mgr);
+-
+-	if (unlikely(!proc_res)) {
+-		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			 get_current_process_id(), current->pid);
+-		rc = -ESRCH;
+-		goto error;
+-	}
++	if (!filp)
++		return -EINVAL;
+ 
+-	imdb_alloc = kzalloc(sizeof(*imdb_alloc), GFP_KERNEL);
++	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+-	if (imdb_alloc) {
+-		imdb_alloc->allocation = *allocation;
+-		INIT_LIST_HEAD(&imdb_alloc->list);
+-		list_add(&imdb_alloc->list, &proc_res->alloc_res);
++	if (likely(proc_res)) {
++		if (!desc_insert(&proc_res->alloc_res_tree, allocation)) {
++			IMDB_ERR("Can't register allocation\n");
++			rc = -ENOMEM;
++		}
+ 	} else {
+-		rc = -ENOMEM;
++		IMDB_ERR("Can't find resources\n");
++		rc = -ESRCH;
+ 	}
+ 
+-error:
+-	mutex_unlock(&proc_mgr.lock);
+-
+ 	return rc;
+ }
+ 
+-int imdb_unregister_allocation(const struct imdb_allocation *allocation)
++int imdb_unregister_allocation(struct file *filp,
++			       const struct imdb_allocation *allocation)
+ {
+-	struct imdb_alloc_res *alloc_res = NULL, *imdb_alloc_tmp = NULL;
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&proc_mgr.lock);
++	if (!filp)
++		return -EINVAL;
+ 
+-	proc_res = find_current_proc_res(&proc_mgr);
++	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (likely(proc_res)) {
+-		rc = -EINVAL;
+-		list_for_each_entry_safe(alloc_res, imdb_alloc_tmp,
+-					 &proc_res->alloc_res, list) {
+-			if (alloc_res->allocation.address ==
+-				    allocation->address &&
+-			    alloc_res->allocation.size == allocation->size) {
+-				rc = 0;
+-				list_del(&alloc_res->list);
+-				kfree(alloc_res);
+-				break;
+-			}
++		if (!desc_delete(&proc_res->alloc_res_tree, allocation)) {
++			rc = -EINVAL;
++			IMDB_ERR("Allocation not found\n");
+ 		}
+-		if (rc)
+-			IMDB_ERR("Allocation not found, pid %d, tid %d\n",
+-				 get_current_process_id(), current->pid);
+ 	} else {
+-		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			 get_current_process_id(), current->pid);
++		IMDB_ERR("Can't find resources\n");
+ 		rc = -ESRCH;
+ 	}
+ 
+-	mutex_unlock(&proc_mgr.lock);
+-
+ 	return rc;
+ }
+ 
+-int imdb_register_thread(uint8_t thread)
++int imdb_register_thread(struct file *filp, uint8_t thread)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 	const uint8_t thread_mask = 1 << thread;
+ 
+-	mutex_lock(&proc_mgr.lock);
++	if (!filp)
++		return -EINVAL;
+ 
+-	proc_res = find_current_proc_res(&proc_mgr);
++	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (likely(proc_res)) {
++		mutex_lock(&proc_res->imdb_proc_lock);
+ 		proc_res->threads_mask |= thread_mask;
++		mutex_unlock(&proc_res->imdb_proc_lock);
+ 	} else {
+-		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			 get_current_process_id(), current->pid);
++		IMDB_ERR("Can't find resources\n");
+ 		rc = -ESRCH;
+ 	};
+ 
+-	mutex_unlock(&proc_mgr.lock);
+-
+ 	return rc;
+ }
+ 
+-int imdb_unregister_thread(uint8_t thread)
++int imdb_unregister_thread(struct file *filp, uint8_t thread)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	const uint8_t thread_mask = ~(1 << thread);
+ 	int rc = 0;
+ 
+-	mutex_lock(&proc_mgr.lock);
++	if (!filp)
++		return -EINVAL;
+ 
+-	proc_res = find_current_proc_res(&proc_mgr);
++	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (likely(proc_res)) {
++		mutex_lock(&proc_res->imdb_proc_lock);
+ 		proc_res->threads_mask &= thread_mask;
++		mutex_unlock(&proc_res->imdb_proc_lock);
+ 	} else {
+-		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			 get_current_process_id(), current->pid);
++		IMDB_ERR("Can't find resources\n");
+ 		rc = -ESRCH;
+ 	}
+ 
+-	mutex_unlock(&proc_mgr.lock);
+-
+ 	return rc;
+ }
+ 
+-int imdb_register_process(void)
++int imdb_register_process(struct file *filp)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+ 
+-	mutex_lock(&proc_mgr.lock);
++	if (!filp)
++		return -EINVAL;
+ 
+-	proc_res = find_current_proc_res(&proc_mgr);
++	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (!proc_res) {
+ 		proc_res = kzalloc(sizeof(*proc_res), GFP_KERNEL);
+ 
+ 		if (unlikely(!proc_res)) {
+ 			rc = -ENOMEM;
+-			IMDB_ERR("Can't allocate memory, pid %d, tid %d\n",
+-				 get_current_process_id(), current->pid);
+-			goto error;
++			IMDB_ERR("Can't allocate memory\n");
++		} else {
++			proc_res->alloc_res_tree = RB_ROOT;
++			mutex_init(&proc_res->imdb_proc_lock);
++			filp->private_data = proc_res;
++			IMDB_DBG("Registered process\n");
+ 		}
+-
+-		proc_res->pid = get_current_process_id();
+-		INIT_LIST_HEAD(&proc_res->alloc_res);
+-		list_add(&proc_res->list, &proc_mgr.active_process_list);
+-		IMDB_DBG("Registered process, pid: %d, tid: %d\n",
+-			 get_current_process_id(), current->pid);
+ 	}
+ 
+-	proc_res->ref_cnt++;
+-
+-error:
+-	mutex_unlock(&proc_mgr.lock);
+-
+ 	return rc;
+ }
+ 
+-int imdb_release_process(void)
++int imdb_release_process(struct file *filp)
+ {
+ 	struct imdb_proc_res *proc_res = NULL;
+ 	int rc = 0;
+-	bool delete_res = false;
+ 
+-	mutex_lock(&proc_mgr.lock);
++	if (!filp)
++		return -EINVAL;
+ 
+-	proc_res = find_current_proc_res(&proc_mgr);
++	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (unlikely(!proc_res)) {
+-		IMDB_ERR("Can't find resources, pid %d, tid %d\n",
+-			 get_current_process_id(), current->pid);
+-		delete_res = false;
+-		rc = -ESRCH;
+-		goto error;
++		IMDB_ERR("Can't find resources\n");
++		return -ESRCH;
+ 	}
+ 
+-	proc_res->ref_cnt--;
+-
+-	/* Delete resource node from list and
+-	 * release resources outside critical section
+-	 */
+-	if (proc_res->ref_cnt == 0) {
+-		list_del(&proc_res->list);
+-		delete_res = true;
++	if (is_resource_empty(proc_res)) {
++		kfree(proc_res);
++		return rc;
+ 	}
+ 
+-error:
+-	mutex_unlock(&proc_mgr.lock);
+-
+-	if (delete_res) {
+-		// Process manager is active or resources struct is empty
+-		if (is_resource_empty(proc_res) ||
+-		    atomic64_read(&proc_mgr.enable_cleanup)) {
+-			rc = clear_process_resource(proc_res);
+-			if (rc)
+-				IMDB_ERR(
+-					"Can't clear process resources, pid %d, tid %d\n",
+-					get_current_process_id(), current->pid);
+-
+-			return rc;
+-		}
+-
+-		mutex_lock(&proc_mgr.lock);
++	if (atomic64_read(&proc_mgr.enable_cleanup)) {
++		rc = clear_process_resource(proc_res);
++		if (rc)
++			IMDB_ERR("Can't clear process resources\n");
++		return rc;
++	}
+ 
++	mutex_lock(&proc_mgr.lock);
++	{
+ 		atomic64_inc(&proc_mgr.leaked);
+ 		list_add(&proc_res->list, &proc_mgr.leaked_process_list);
+-		IMDB_DBG("Tracked leakage by pid: %d, tid: %d; thread_mask: %x",
+-			 get_current_process_id(), current->pid,
+-			 proc_res->threads_mask);
+-		mutex_unlock(&proc_mgr.lock);
++		IMDB_DBG("Tracking leakage\n");
+ 	}
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	return rc;
+ }
+@@ -375,13 +371,13 @@ int imdb_enable_cleanup(void)
+ 	int rc = 0;
+ 
+ 	mutex_lock(&proc_mgr.lock);
++	{
++		atomic64_set(&proc_mgr.enable_cleanup, IMDB_ENABLE_CLEANUP);
+ 
+-	atomic64_set(&proc_mgr.enable_cleanup, IMDB_ENABLE_CLEANUP);
+-
+-	atomic64_set(&proc_mgr.leaked, 0);
+-	// splice list for critical section minimization
+-	list_splice_init(&proc_mgr.leaked_process_list, &list_tmp);
+-
++		atomic64_set(&proc_mgr.leaked, 0);
++		// splice list for critical section minimization
++		list_splice_init(&proc_mgr.leaked_process_list, &list_tmp);
++	}
+ 	mutex_unlock(&proc_mgr.lock);
+ 
+ 	list_for_each_entry_safe(proc_res, proc_res_tmp, &list_tmp, list) {
+@@ -399,7 +395,6 @@ bool imdb_get_proc_manager(void)
+ 
+ int imdb_reset_proc_manager(void)
+ {
+-	LIST_HEAD(list_active_tmp);
+ 	LIST_HEAD(list_leaked_tmp);
+ 
+ 	struct imdb_proc_res *proc_res = NULL, *proc_res_tmp = NULL;
+@@ -407,19 +402,14 @@ int imdb_reset_proc_manager(void)
+ 	bool have_leaks = false;
+ 
+ 	mutex_lock(&proc_mgr.lock);
++	{
++		// splice list for critical section minimization
++		list_splice_init(&proc_mgr.leaked_process_list,
++				 &list_leaked_tmp);
+ 
+-	// splice list for critical section minimization
+-	list_splice_init(&proc_mgr.active_process_list, &list_active_tmp);
+-	list_splice_init(&proc_mgr.leaked_process_list, &list_leaked_tmp);
+-
+-	have_leaks = atomic64_read(&proc_mgr.leaked) != 0;
+-
+-	mutex_unlock(&proc_mgr.lock);
+-
+-	list_for_each_entry_safe(proc_res, proc_res_tmp, &list_active_tmp,
+-				 list) {
+-		kfree(proc_res);
++		have_leaks = atomic64_read(&proc_mgr.leaked) != 0;
+ 	}
++	mutex_unlock(&proc_mgr.lock);
+ 
+ 	list_for_each_entry_safe(proc_res, proc_res_tmp, &list_leaked_tmp,
+ 				 list) {
+diff --git a/drivers/pnm/imdb_resource/proc_mgr.h b/drivers/pnm/imdb_resource/proc_mgr.h
+index b380aa551..513f2c51e 100644
+--- a/drivers/pnm/imdb_resource/proc_mgr.h
++++ b/drivers/pnm/imdb_resource/proc_mgr.h
+@@ -4,19 +4,22 @@
+ #ifndef __IMDB_PROC_MGR_H__
+ #define __IMDB_PROC_MGR_H__
+ 
++#include <linux/fs.h>
+ #include <linux/imdb_resources.h>
+ 
+ #define IMDB_ENABLE_CLEANUP 1
+ #define IMDB_DISABLE_CLEANUP 0
+ 
+-int imdb_register_process(void);
+-int imdb_release_process(void);
++int imdb_register_process(struct file *filp);
++int imdb_release_process(struct file *filp);
+ 
+-int imdb_register_allocation(const struct imdb_allocation *allocation);
+-int imdb_unregister_allocation(const struct imdb_allocation *allocation);
++int imdb_register_allocation(struct file *filp,
++			     const struct imdb_allocation *allocation);
++int imdb_unregister_allocation(struct file *filp,
++			       const struct imdb_allocation *allocation);
+ 
+-int imdb_register_thread(uint8_t thread);
+-int imdb_unregister_thread(uint8_t thread);
++int imdb_register_thread(struct file *filp, uint8_t thread);
++int imdb_unregister_thread(struct file *filp, uint8_t thread);
+ 
+ uint64_t imdb_get_leaked(void);
+ 
+diff --git a/drivers/pnm/imdb_resource/resource_device.c b/drivers/pnm/imdb_resource/resource_device.c
+index 8ec621502..ac7ea494b 100644
+--- a/drivers/pnm/imdb_resource/resource_device.c
++++ b/drivers/pnm/imdb_resource/resource_device.c
+@@ -31,11 +31,11 @@ static long imdb_ioctl(struct file *file, unsigned int cmd,
+ 	switch (cmd) {
+ 	case IMDB_IOCTL_ALLOCATE:
+ 	case IMDB_IOCTL_DEALLOCATE:
+-		result = allocator_ioctl(cmd, arg);
++		result = allocator_ioctl(file, cmd, arg);
+ 		break;
+ 	case IMDB_IOCTL_GET_THREAD:
+ 	case IMDB_IOCTL_RELEASE_THREAD:
+-		result = thread_sched_ioctl(cmd, arg);
++		result = thread_sched_ioctl(file, cmd, arg);
+ 		break;
+ 	default:
+ 		result = -ENOTTY;
+@@ -47,12 +47,12 @@ static long imdb_ioctl(struct file *file, unsigned int cmd,
+ 
+ static int imdb_open(struct inode *inode, struct file *file)
+ {
+-	return imdb_register_process();
++	return imdb_register_process(file);
+ }
+ 
+ static int imdb_close(struct inode *inode, struct file *file)
+ {
+-	return imdb_release_process();
++	return imdb_release_process(file);
+ }
+ 
+ static const struct file_operations imdb_resource_operation = {
+diff --git a/drivers/pnm/imdb_resource/thread_sched.c b/drivers/pnm/imdb_resource/thread_sched.c
+index f46a45fd8..3689266e1 100644
+--- a/drivers/pnm/imdb_resource/thread_sched.c
++++ b/drivers/pnm/imdb_resource/thread_sched.c
+@@ -134,7 +134,8 @@ void destroy_thread_sched(void)
+ 	mutex_destroy(&thread_sched.lock);
+ }
+ 
+-int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
++int thread_sched_ioctl(struct file *filp, unsigned int cmd,
++		       unsigned long __user arg)
+ {
+ 	int rc = -EFAULT;
+ 	int thread = 0;
+@@ -147,7 +148,7 @@ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
+ 
+ 		thread = rc;
+ 
+-		rc = imdb_register_thread(thread);
++		rc = imdb_register_thread(filp, thread);
+ 		if (likely(!rc))
+ 			rc = thread;
+ 
+@@ -156,7 +157,7 @@ int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg)
+ 	case IMDB_IOCTL_RELEASE_THREAD: {
+ 		rc = imdb_release_thread(arg);
+ 		if (likely(!rc))
+-			rc = imdb_unregister_thread(arg);
++			rc = imdb_unregister_thread(filp, arg);
+ 		break;
+ 	}
+ 	}
+diff --git a/drivers/pnm/imdb_resource/thread_sched.h b/drivers/pnm/imdb_resource/thread_sched.h
+index 3327f0baa..288035073 100644
+--- a/drivers/pnm/imdb_resource/thread_sched.h
++++ b/drivers/pnm/imdb_resource/thread_sched.h
+@@ -22,7 +22,8 @@ int init_thread_sched(void);
+ void destroy_thread_sched(void);
+ int reset_thread_sched(void);
+ 
+-int thread_sched_ioctl(unsigned int cmd, unsigned long __user arg);
++int thread_sched_ioctl(struct file *filp, unsigned int cmd,
++		       unsigned long __user arg);
+ 
+ bool get_thread_state(uint8_t thread);
+ 
+-- 
+2.34.1
+

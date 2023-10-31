@@ -1,7 +1,7 @@
 From cf9f920d6c4f0de1c1de7061f19c8f3f34d915a8 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Thu, 30 Jun 2022 19:50:21 +0300
-Subject: [PATCH 11/33] Add inference engine parameter to operator args
+Subject: [PATCH 11/34] Add inference engine parameter to operator args
 
 Adding parameter required for rank offsets calculation
 

@@ -15,9 +15,7 @@
 
 #include "core/device/sls/memblockhandler/base.h"
 #include "core/device/sls/memblockhandler/block_ops.h"
-#include "core/device/sls/rank_address.h"
-
-#include "common/topology_constants.h"
+#include "core/device/sls/utils/rank_address.h"
 
 #include <linux/sls_resources.h>
 
@@ -25,16 +23,14 @@
 
 namespace pnm::sls::device {
 
-template <typename AxdimmMemBLockHandler>
+template <typename AxdimmMemBlockHandlerImpl>
 class AxdimmMemBlockHandler
-    : public SLSMemBlockHandlerImpl<AxdimmMemBLockHandler> {
+    : public SlsMemBlockHandlerImpl<AxdimmMemBlockHandlerImpl> {
 public:
-  uint8_t num_compute_units_impl() const { return topo().NumOfRanks; }
-
   auto inst_writer() const { return RankedBlockWriter{}; }
 
-  auto cfgr_writer() const { return RawBlockWriter{}; }
-  auto cfgr_reader() const { return RawBlockReader{}; }
+  auto cfgr_writer() const { return RankedBlockWriter{}; }
+  auto cfgr_reader() const { return RankedBlockReader{}; }
 
   auto psum_writer() const { return UnsupportedBlockWriter{}; }
   /* tags_reader() must be implemented in derived class */
@@ -45,7 +41,7 @@ public:
   void *get_block_ptr_impl(sls_mem_blocks_e type, uint8_t compute_unit,
                            uint32_t offset) {
     const auto addr = this->mem_map()[compute_unit].addr[type];
-    return (InterleavedPointer(addr, rank_to_ha(compute_unit)) + offset)
+    return (InterleavedPointer(addr, cunit_to_ha(compute_unit)) + offset)
         .as<void>();
   }
 };

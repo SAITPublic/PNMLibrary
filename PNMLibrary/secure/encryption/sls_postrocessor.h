@@ -21,15 +21,15 @@
 #include <utility>
 #include <vector>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 using requests_view =
     std::pair<const uint64_t,
-              pnm::variable_row_view<const uint32_t, const uint32_t>>;
+              pnm::views::variable_row<const uint32_t, const uint32_t>>;
 using indices_t = std::vector<requests_view>;
 
-template <typename T> using psums_view = pnm::rowwise_view<T>;
-template <typename T> using tags_view = pnm::rowwise_view<T>;
+template <typename T> using psums_view = pnm::views::rowwise<T>;
+template <typename T> using tags_view = pnm::views::rowwise<T>;
 
 /*! \brief Interface for tables handler. Class that should handle base info
  * about tables structure.
@@ -44,7 +44,7 @@ public:
     perform_sls_impl(make_view(indices), psum, tags_view<T>{});
   }
 
-  void perform_sls(pnm::common_view<const requests_view> indices,
+  void perform_sls(pnm::views::common<const requests_view> indices,
                    psums_view<T> psum) const {
     perform_sls_impl(indices, psum, tags_view<T>{});
   }
@@ -58,27 +58,27 @@ public:
     perform_sls_impl(make_view(indices), psum, tags);
   }
 
-  void perform_sls(pnm::common_view<const requests_view> indices,
+  void perform_sls(pnm::views::common<const requests_view> indices,
                    psums_view<T> psum, tags_view<T> tags) const {
     perform_sls_impl(indices, psum, tags);
   }
 
   bool decrypt_psum(psums_view<T> psums, psums_view<T> epsums,
                     tags_view<T> ctags, tags_view<T> etags,
-                    pnm::common_view<uint8_t> check_result) const {
+                    pnm::views::common<uint8_t> check_result) const {
     return decrypt_psum_impl(psums, epsums, ctags, etags, check_result);
   }
 
 private:
-  virtual void perform_sls_impl(pnm::common_view<const requests_view> indices,
+  virtual void perform_sls_impl(pnm::views::common<const requests_view> indices,
                                 psums_view<T> psum,
                                 tags_view<T> tags) const = 0;
 
   virtual bool
   decrypt_psum_impl(psums_view<T> psums, psums_view<T> epsums,
                     tags_view<T> ctags, tags_view<T> etags,
-                    pnm::common_view<uint8_t> check_result) const = 0;
+                    pnm::views::common<uint8_t> check_result) const = 0;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // SLS_SECURE_POSTROCESSOR_H

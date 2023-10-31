@@ -1,7 +1,7 @@
 From 1dc5633c5b8534a2742823c24238753472e88e3f Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 28 Jun 2022 19:31:07 +0900
-Subject: [PATCH 08/33] Fix deadlock introduced in 05a1f614a8f03e
+Subject: [PATCH 08/34] Fix deadlock introduced in 05a1f614a8f03e
 
 The join should be done right before exiting main thread.
 

@@ -23,7 +23,6 @@
 
 #include <fmt/core.h>
 
-#include <sched.h>
 #include <semaphore.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -40,7 +39,7 @@
 /*! Run SecNDP in sequential mode.
  * */
 template <typename T, template <typename DataType = T> typename Runner,
-          typename SLSDevice>
+          typename SlsDevice>
 class SecNDPSlsSequential {
 public:
   using runner_type = Runner<T>;
@@ -53,10 +52,9 @@ public:
            const std::string &indices_set_name) const {
     auto dataset = TestLoader<T>(root, indices_set_name);
     Runner<T> runner;
-    auto params =
-        sls::tests::SimpleDeviceParamsGenerator<SLSDevice>::generate_params(
-            pnm::make_view(dataset.tables_meta().rows()),
-            dataset.tables_meta().cols(), with_tag_);
+    auto params = tools::gen::sls::SimpleDeviceParamsGenerator<SlsDevice>::
+        generate_params(pnm::views::make_view(dataset.tables_meta().rows()),
+                        dataset.tables_meta().cols(), with_tag_);
     runner.init(&params);
     run_impl(runner, dataset);
   }
@@ -79,15 +77,15 @@ protected:
 };
 
 template <typename T, template <typename DataType = T> typename Runner,
-          typename SLSDevice>
-void SecNDPSlsSequential<T, Runner, SLSDevice>::run_impl(
+          typename SlsDevice>
+void SecNDPSlsSequential<T, Runner, SlsDevice>::run_impl(
     Runner<T> &runner, TestLoader<T> &dataset) const {
   TimeStatistics t("MAIN TEST RUN");
 
-  fmt::print("Encrypt and offload embedded tables to device...\n");
+  fmt::print("Encrypt and offload embedding tables to device...\n");
   t.start_section("- Tables encryption/offload");
   runner.load_tables(dataset.tables().data(),
-                     pnm::make_view(dataset.tables_meta().rows()),
+                     pnm::views::make_view(dataset.tables_meta().rows()),
                      dataset.tables_meta().cols(), with_tag_);
   t.end_section("- Tables encryption/offload");
   fmt::print("Done!\n");
@@ -105,11 +103,12 @@ void SecNDPSlsSequential<T, Runner, SLSDevice>::run_impl(
   t.start_section(sls_label_name.c_str());
   bool result = true;
   for (auto i = 0; i < NUM_RUNS; ++i) {
-    result &= runner.run(dataset.indices_meta().minibatch_size(),
-                         pnm::make_view(dataset.indices_meta().lengths()),
-                         pnm::make_view(dataset.indices()),
-                         pnm::view_cast<uint8_t>(pnm::make_view(psum)),
-                         pnm::make_view(row_checks));
+    result &=
+        runner.run(dataset.indices_meta().minibatch_size(),
+                   pnm::views::make_view(dataset.indices_meta().lengths()),
+                   pnm::views::make_view(dataset.indices()),
+                   pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)),
+                   pnm::views::make_view(row_checks));
   }
   t.end_section(sls_label_name.c_str());
 
@@ -125,11 +124,11 @@ void SecNDPSlsSequential<T, Runner, SLSDevice>::run_impl(
 /*! Run SecNDP in multithread mode
  * */
 template <typename T, template <typename DataType = T> typename Runner,
-          typename SLSDevice>
-class SecNDPSlsMultiThreads : public SecNDPSlsSequential<T, Runner, SLSDevice> {
+          typename SlsDevice>
+class SecNDPSlsMultiThreads : public SecNDPSlsSequential<T, Runner, SlsDevice> {
 public:
   SecNDPSlsMultiThreads(unsigned num_threads, bool with_tag)
-      : SecNDPSlsSequential<T, Runner, SLSDevice>(num_threads, with_tag),
+      : SecNDPSlsSequential<T, Runner, SlsDevice>(num_threads, with_tag),
         nthreads_{num_threads} {}
 
   const std::string &get_name() const override {
@@ -143,8 +142,8 @@ public:
 
     std::vector<std::future<void>> workers;
     const auto params =
-        sls::tests::GroupedParameterGenerator<SLSDevice>::generate_params(
-            pnm::make_view(dataset.tables_meta().rows()),
+        tools::gen::sls::GroupedParameterGenerator<SlsDevice>::generate_params(
+            pnm::views::make_view(dataset.tables_meta().rows()),
             dataset.tables_meta().cols(), nthreads_, this->with_tag_);
     for (auto i = 0U; i < nthreads_; ++i) {
       auto core = [this, i, &dataset, &params]() {
@@ -166,12 +165,12 @@ private:
 /*! Run SecNDP in multithread mode
  * */
 template <typename T, template <typename DataType = T> typename Runner,
-          typename SLSDevice>
+          typename SlsDevice>
 class SecNDPSlsMultiProcesses
-    : public SecNDPSlsSequential<T, Runner, SLSDevice> {
+    : public SecNDPSlsSequential<T, Runner, SlsDevice> {
 public:
   SecNDPSlsMultiProcesses(unsigned num_process, bool with_tag)
-      : SecNDPSlsSequential<T, Runner, SLSDevice>(num_process, with_tag),
+      : SecNDPSlsSequential<T, Runner, SlsDevice>(num_process, with_tag),
         nproc_{num_process} {}
 
   const std::string &get_name() const override {
@@ -189,7 +188,7 @@ public:
     static constexpr auto SHARE_PROCESS = 1;
     ASSERT_EQ(sem_init(semaphore, SHARE_PROCESS, 0), 0) << "errno: " << errno;
 
-    std::vector<pid_t> child;
+    std::vector<pid_t> child; // NOLINT(misc-include-cleaner)
     size_t child_id;
     for (child_id = 0U; child_id < nproc_; ++child_id) {
       auto pid = fork();
@@ -214,15 +213,16 @@ public:
         int status;
         ASSERT_EQ(waitpid(pid, &status, 0), pid)
             << "errno: " << errno << " Status:" << status;
+        ASSERT_EQ(status, 0);
       }
 
       ASSERT_EQ(sem_destroy(semaphore), 0);
       munmap(semaphore, sizeof(*semaphore));
     } else { // Child code
       ASSERT_EQ(sem_wait(semaphore), 0) << "errno: " << errno;
-      const auto params =
-          sls::tests::GroupedParameterGenerator<SLSDevice>::generate_params(
-              pnm::make_view(dataset.tables_meta().rows()),
+      const auto params = tools::gen::sls::
+          GroupedParameterGenerator<SlsDevice>::generate_params(
+              pnm::views::make_view(dataset.tables_meta().rows()),
               dataset.tables_meta().cols(), nproc_, this->with_tag_);
       {
         Runner<T> runner;

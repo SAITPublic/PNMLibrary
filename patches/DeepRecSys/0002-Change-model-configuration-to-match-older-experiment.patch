@@ -1,7 +1,7 @@
 From 10e1eb83bee89b94c07320f66d8667739d013272 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 14 Feb 2022 09:34:36 +0900
-Subject: [PATCH 02/33] Change model configuration to match older experiments
+Subject: [PATCH 02/34] Change model configuration to match older experiments
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

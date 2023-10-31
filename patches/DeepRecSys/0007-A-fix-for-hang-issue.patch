@@ -1,7 +1,7 @@
 From ca46e554489e332e34ebcee1c2dacb14a4b12c7b Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 28 Jun 2022 18:14:38 +0900
-Subject: [PATCH 07/33] A fix for hang issue
+Subject: [PATCH 07/34] A fix for hang issue
 
 Un-daemonize inferernce thread and join it before exit instead of relying
 on timeout value. Otherwise main thread can die before inference thread which

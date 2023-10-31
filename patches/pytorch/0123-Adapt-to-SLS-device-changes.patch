@@ -1,7 +1,7 @@
 From 5bfd2060b79719da1fb085f4b68a10fe91a86852 Mon Sep 17 00:00:00 2001
 From: Valentin Iliushin <v.iliushin@partner.samsung.com>
 Date: Mon, 22 May 2023 13:26:27 +0000
-Subject: [PATCH 123/128] Adapt to SLS device changes
+Subject: [PATCH 123/135] Adapt to SLS device changes
 
 Adapt to changes in SlsDevice and PNMContext
 

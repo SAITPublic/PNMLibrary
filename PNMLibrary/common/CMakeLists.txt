@@ -2,7 +2,7 @@ include(FetchContent)
 FetchContent_Declare(
     fmt
     GIT_REPOSITORY https://github.com/fmtlib/fmt
-    GIT_TAG        a33701196adfad74917046096bf5a2aa0ab0bb50  # v9.1.0
+    GIT_TAG        f5e54359df4c26b6230fc61d38aa294581393084  # v10.1.1
 )
 FetchContent_Declare(
     spdlog
@@ -22,6 +22,10 @@ set(FMT_SYSTEM_HEADERS ON)
 set(SPDLOG_FMT_EXTERNAL ON)
 
 FetchContent_MakeAvailable(fmt spdlog cli11)
+
+# [TODO: s-lavrentiev] Temporary work around for tidy-18 error
+# with 'AnalyzeTemporaryDtors' keyword
+file(REMOVE ${spdlog_SOURCE_DIR}/.clang-tidy)
 
 add_library(pnm_common INTERFACE)
 target_link_libraries(pnm_common INTERFACE fmt::fmt spdlog::spdlog)

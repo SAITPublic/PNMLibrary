@@ -1,7 +1,7 @@
 From ccce177f9cfa3f63907a01c6408c02ae55368399 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Fri, 30 Sep 2022 12:39:23 +0000
-Subject: [PATCH 043/161] [config-axdimm][scripting][docs] Speed up and
+Subject: [PATCH 043/225] [config-axdimm][scripting][docs] Speed up and
  simplify deb build
 
 Remove CONFIG_DEBUG_INFO, which on its own contributes a ton

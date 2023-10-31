@@ -1,7 +1,7 @@
 From 74e6f0539328a6c4cd3d9e23a9a61ce540b6bd00 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Mon, 3 Apr 2023 15:59:42 +0300
-Subject: [PATCH 089/161] [dba] Set the DBA's allocator granularity to 2M
+Subject: [PATCH 089/225] [dba] Set the DBA's allocator granularity to 2M
 
 Set the allocator granularity to 2M to fit the DAX restrictions.
 

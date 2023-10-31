@@ -1,7 +1,7 @@
 From ed70c540ee91cc48b30358fd6ef9c502bd5c11ce Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Tue, 25 Jul 2023 21:26:56 -0400
-Subject: [PATCH 150/161] [zSwap] Make pnm_zswapsim a dynamic module
+Subject: [PATCH 150/225] [zSwap] Make pnm_zswapsim a dynamic module
 
 - cleanup pnm_cxl_sim module,
 remove extra init/exit functions,

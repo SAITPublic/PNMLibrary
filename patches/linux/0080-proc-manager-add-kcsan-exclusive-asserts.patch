@@ -1,7 +1,7 @@
 From 6622a879c5dadf414111c2a4d007cff1d3af850b Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Thu, 26 Jan 2023 15:01:35 +0300
-Subject: [PATCH 080/161] [proc manager] add kcsan exclusive asserts
+Subject: [PATCH 080/225] [proc manager] add kcsan exclusive asserts
 
 add exclusive access asserts to process manager's active and leaked lists
 

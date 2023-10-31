@@ -1,7 +1,7 @@
 From 86782ce0558444640a3d886e213b6b3a78c32684 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Fri, 14 Oct 2022 12:20:29 +0300
-Subject: [PATCH 053/161] [drivers/dax/axdimm] Print ioctl cmd components.
+Subject: [PATCH 053/225] [drivers/dax/axdimm] Print ioctl cmd components.
 
 Instead of printing the ioctl cmd as a raw hex number, print its _IOC_NR
 if the ioctl is known and all its components if not.

@@ -1,7 +1,7 @@
 From 1897401603f190f89e46f0e3c41f19fdc59c433d Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Tue, 17 Jan 2023 11:18:09 +0300
-Subject: [PATCH 078/161] [allocator][kcsan] Add kcsan access asserts
+Subject: [PATCH 078/225] [allocator][kcsan] Add kcsan access asserts
 
 Add kcsan exclusive access asserts to allocator's structure
 

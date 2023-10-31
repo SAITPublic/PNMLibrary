@@ -1,7 +1,7 @@
 From 35828cac53570cc28b1171d7fad13b66f329b447 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 13 Apr 2023 11:20:05 +0300
-Subject: [PATCH 20/23] Add warmup iteration into pytorch DLRM
+Subject: [PATCH 20/24] Add warmup iteration into pytorch DLRM
 
 The warmup iterations were added into pytorch DLRM to reduce influence of random
 events that leads to performance degradation during the first iterations in the

@@ -1,7 +1,7 @@
 From c41f429a140cc7a0c296c090682345fc040a2535 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Thu, 7 Jul 2022 18:13:49 +0300
-Subject: [PATCH 059/128] [lengths_reducer_ops_sec_axdimm.h] Fix tables offset
+Subject: [PATCH 059/135] [lengths_reducer_ops_sec_axdimm.h] Fix tables offset
  with tag for axdimm
 
 Signed-off-by: Nikita Enin <n.enin@samsung.com>

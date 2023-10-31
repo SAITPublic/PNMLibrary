@@ -21,10 +21,11 @@
 #include "core/device/sls/rank_memory.h"
 #include "core/operation/internal.h"
 #include "core/operation_runner/internal_runner.h"
-#include "core/operation_runner/sls_execution_pool.h"
 
 #include "common/log.h"
 #include "common/make_error.h"
+#include "common/threads/producer_consumer.h"
+#include "common/threads/workers_storage.h"
 
 #include "pnmlib/core/device.h"
 
@@ -35,13 +36,18 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <memory>
+#include <mutex>
 
 namespace pnm::sls {
+
+using pnm::threads::ProducerConsumer;
 
 template <typename Implementation>
 class ReductionRunner : public InternalRunner {
 protected:
-  explicit ReductionRunner(Device *device) {
+  explicit ReductionRunner(Device *device, unsigned int num_of_workers)
+      : num_of_workers_(num_of_workers) {
     if (device == nullptr) {
       throw pnm::error::InvalidArguments("Expected device.");
     }
@@ -62,7 +68,7 @@ protected:
         if (!pack_for_main_thread) { // Create task for main thread
           pack_for_main_thread = pack;
         } else { // Push task to ActionQueue if main task exists
-          run_queue[exec_queue] = sls::ExecutionPool::get().run(
+          run_queue[exec_queue] = pool_->run(
               &Implementation::run_on_pack, static_cast<Implementation *>(this),
               std::ref(op), pack);
           ++exec_queue;
@@ -93,7 +99,7 @@ protected:
                            uint8_t pack, uint32_t exec_id) {
     auto dispatch_read_op = [](uint8_t output_id,
                                ComputeUnit<ComputeUnitImpl> &compute_unit,
-                               pnm::common_view<uint8_t> dst) {
+                               pnm::views::common<uint8_t> dst) {
       switch (output_id) {
       case 0:
         compute_unit.read_buffer(BlockType::PSUM, dst);
@@ -123,7 +129,17 @@ protected:
     pnm::log::debug("----------------------------------------------------");
   }
 
+  void init_impl() override {
+    std::call_once(pool_init_flag_, [this]() {
+      pool_ = std::make_unique<ProducerConsumer<pnm::threads::Manager>>(
+          num_of_workers_, pnm::threads::Manager{}, "ReductionRunnerThread-");
+    });
+  }
+
   sls::device::BaseDevice *device_{};
+  std::unique_ptr<ProducerConsumer<pnm::threads::Manager>> pool_;
+  uint64_t num_of_workers_{};
+  std::once_flag pool_init_flag_;
 };
 } // namespace pnm::sls
 

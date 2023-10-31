@@ -1,0 +1,157 @@
+From e5df9447ea8c66bd4669d03cbdfdda13938e2c58 Mon Sep 17 00:00:00 2001
+From: Valentin Iliushin <v.iliushin@partner.samsung.com>
+Date: Wed, 13 Sep 2023 12:08:54 +0000
+Subject: [PATCH 187/225] [zswap] Benchmark integration
+
+Integrate data collection for benchmark into zswap simulator
+
+Resolves: MCS23-1537
+
+Signed-off-by: Valentin Iliushin <v.iliushin@partner.samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 72 +++++++++++++++++++++++++++++++++++++++++
+ drivers/pnm/zswap/sim.h |  5 +++
+ 2 files changed, 77 insertions(+)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index bd54c1256..853c726fa 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -27,6 +27,10 @@
+ #include <linux/vmalloc.h>
+ #include <linux/workqueue.h>
+ 
++#include <linux/fs.h>
++#include <linux/proc_fs.h>
++#include <linux/seq_file.h>
++
+ #include "fs_compression.h"
+ #include "ps_compression.h"
+ #include "sim.h"
+@@ -35,6 +39,8 @@ static struct pnm_info *pnm_ctrl;
+ 
+ static bool sim_is_active;
+ 
++static struct benchmark_data bench_data;
++
+ /*********************************
+  * PNM Simulator Parameters
+  **********************************/
+@@ -67,6 +73,9 @@ module_param_named(unit_poll_ns, unit_poll_ns, ulong, 0644);
+ static unsigned long read_poll_ns = 10000000000;
+ module_param_named(read_poll_ns, read_poll_ns, ulong, 0644);
+ 
++static bool pnm_bench_enabled = true;
++module_param_named(pnm_bench_enabled, pnm_bench_enabled, bool, 0644);
++
+ /* Enable/disable pnm_simulator */
+ static bool pnm_sim_enabled;
+ static int pnm_sim_setup(const char *, const struct kernel_param *);
+@@ -155,6 +164,10 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 					tid, pnm_id, *out_len);
+ 
+ 			WRITE_ONCE(pnm_ctrl->compress[pnm_id].done, false);
++			if (unlikely(pnm_bench_enabled)) {
++				bench_data.comp_cycle[pnm_id] +=
++					rdtsc() - started;
++			}
+ 			return READ_ONCE(
+ 				pnm_ctrl->compress[pnm_id].commit.status);
+ 		}
+@@ -240,6 +253,10 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 					tid, pnm_id, *out_len);
+ 
+ 			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].done, false);
++			if (unlikely(pnm_bench_enabled)) {
++				bench_data.decomp_cycle[pnm_id] +=
++					rdtsc() - started;
++			}
+ 			return READ_ONCE(
+ 				pnm_ctrl->decompress[pnm_id].commit.status);
+ 		}
+@@ -594,6 +611,59 @@ int pnm_decompress_unit(void *p)
+ 	return 0;
+ }
+ 
++static void init_benchmark_data(void)
++{
++	memset(bench_data.comp_cycle, 0, sizeof(bench_data.comp_cycle));
++	memset(bench_data.decomp_cycle, 0, sizeof(bench_data.decomp_cycle));
++}
++
++static ssize_t pnm_proc_write(struct file *file, const char __user *buffer,
++			      size_t count, loff_t *ppos)
++{
++	memset(bench_data.comp_cycle, 0, sizeof(bench_data.comp_cycle));
++	memset(bench_data.decomp_cycle, 0, sizeof(bench_data.decomp_cycle));
++	return count;
++}
++
++static int pnm_proc_show(struct seq_file *m, void *v)
++{
++	if (!pnm_bench_enabled) {
++		seq_puts(m, "ZSwap benchmark has been disabled!\n");
++		return 0;
++	}
++
++	for (int i = 0; i < pnm_ctrl->num_compress; i++) {
++		seq_printf(m, "comp_cycle[%d]: %llu\n", i,
++			   bench_data.comp_cycle[i]);
++	}
++	for (int i = 0; i < pnm_ctrl->num_decompress; i++) {
++		seq_printf(m, "decomp_cycle[%d]: %llu\n", i,
++			   bench_data.decomp_cycle[i]);
++	}
++	return 0;
++}
++
++static int pnm_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, pnm_proc_show, NULL);
++}
++
++static const struct proc_ops pnm_cycle_fops = {
++	.proc_open = pnm_proc_open,
++	.proc_read = seq_read,
++	.proc_lseek = seq_lseek,
++	.proc_release = single_release,
++	.proc_write = pnm_proc_write,
++};
++
++static void init_procfs(void)
++{
++	struct proc_dir_entry *proc_fs_pnm;
++
++	proc_fs_pnm = proc_mkdir("pnm", NULL);
++	proc_create("zswap_bench", 0644, proc_fs_pnm, &pnm_cycle_fops);
++}
++
+ static void cxl_pnm_sim_shutdown(void)
+ {
+ 	int i;
+@@ -782,6 +852,8 @@ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ 	if (enable_sim) {
+ 		WRITE_ONCE(sim_is_active, true);
+ 		pr_info("[pnm_sim] pnm simulator engine loaded!\n");
++		init_benchmark_data();
++		init_procfs();
+ 		pnm_sim_init();
+ 		pnm_unit_gen();
+ 	} else {
+diff --git a/drivers/pnm/zswap/sim.h b/drivers/pnm/zswap/sim.h
+index f2a026f14..ed9972b89 100644
+--- a/drivers/pnm/zswap/sim.h
++++ b/drivers/pnm/zswap/sim.h
+@@ -129,4 +129,9 @@ struct compression_core {
+ 			       struct unit_info *unit);
+ };
+ 
++struct benchmark_data {
++	u64 comp_cycle[MAX_UNIT];
++	u64 decomp_cycle[MAX_UNIT];
++};
++
+ #endif //__ZSWAP_SIM_H__
+-- 
+2.34.1
+

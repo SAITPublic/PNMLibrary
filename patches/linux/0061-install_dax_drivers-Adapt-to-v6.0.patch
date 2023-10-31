@@ -1,7 +1,7 @@
 From 65af1e56ce11612b2c89c3c2238d212ed045b206 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Tue, 1 Nov 2022 15:10:55 +0000
-Subject: [PATCH 061/161] [install_dax_drivers] Adapt to v6.0
+Subject: [PATCH 061/225] [install_dax_drivers] Adapt to v6.0
 
 Related to AXDIMM-423.
 ---

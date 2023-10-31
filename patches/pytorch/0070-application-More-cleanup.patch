@@ -1,7 +1,7 @@
 From 14e0fd7eaa8eaf8c75b18faff0664c44a3551c98 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 20 Sep 2022 15:55:43 +0300
-Subject: [PATCH 070/128] [application] More cleanup
+Subject: [PATCH 070/135] [application] More cleanup
 
 Related to: AXDIMM-319
 ---

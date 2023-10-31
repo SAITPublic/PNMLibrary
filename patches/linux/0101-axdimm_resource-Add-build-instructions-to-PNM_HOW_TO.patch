@@ -1,7 +1,7 @@
 From e2012b50883b3c7f3aa1c4aab07613757368e846 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Mon, 10 Apr 2023 17:23:20 +0300
-Subject: [PATCH 101/161] [axdimm_resource] Add build instructions to
+Subject: [PATCH 101/225] [axdimm_resource] Add build instructions to
  PNM_HOW_TO_BUILD.md
 
 Add instructions for building and installing the `axdimm_resource` module

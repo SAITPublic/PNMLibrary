@@ -1,7 +1,7 @@
 From 017974d3bc3d243819b79a30d29888a4273a57c5 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Sat, 29 Oct 2022 01:40:41 +0300
-Subject: [PATCH 085/128] [aten,caffe] Move SecureTypeTraits to aten
+Subject: [PATCH 085/135] [aten,caffe] Move SecureTypeTraits to aten
 
 Resolves: AXDIMM-337
 

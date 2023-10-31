@@ -1,7 +1,7 @@
 From f3a1a6e4ae1477273d7a286c63bf6682e28b3ad7 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 25 Apr 2022 15:15:10 +0900
-Subject: [PATCH 021/161] [config-axdimm] Align config for v5.16
+Subject: [PATCH 021/225] [config-axdimm] Align config for v5.16
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

@@ -1,7 +1,7 @@
 From 2c2439c1d5bab2b23ceffd7dd4d00577e4ada6aa Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 3 Nov 2021 12:39:38 +0900
-Subject: [PATCH 017/128] [c10/core] Add missing device type handling code
+Subject: [PATCH 017/135] [c10/core] Add missing device type handling code
 
 * add 'AXDIMM' type to 'computeDispatchKey'.
 * add 'IsAXDIMMDeviceType' similarly to CPU/GPU.

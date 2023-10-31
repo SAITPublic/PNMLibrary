@@ -41,10 +41,6 @@ const std::filesystem::path DRV_PATH_V(SLS_MEMDEV_PATH);
          std::filesystem::file_type::symlink;
 }
 
-[[nodiscard]] bool does_file_exist(const std::filesystem::path &path) {
-  return std::filesystem::exists(path);
-}
-
 [[nodiscard]] ndctl_ctx *create_ndctl_context() {
   ndctl_ctx *ctx;
   ndctl_new(&ctx);
@@ -148,7 +144,7 @@ void SetupDaxDevice::execute() {
     ndctl_namespace_enable(nd_namespace);
   }
 
-  if (does_file_exist(DAX_PATH_V) && !does_symlink_exist(DRV_PATH_V)) {
+  if (std::filesystem::exists(DAX_PATH_V) && !does_symlink_exist(DRV_PATH_V)) {
     std::filesystem::create_symlink(DAX_PATH_V, DRV_PATH_V);
   }
 
@@ -158,7 +154,7 @@ void SetupDaxDevice::execute() {
       std::filesystem::perms::others_read |
       std::filesystem::perms::others_write;
 
-  if (does_file_exist(DAX_PATH_V)) {
+  if (std::filesystem::exists(DAX_PATH_V)) {
     std::filesystem::permissions(DAX_PATH_V, permissions,
                                  std::filesystem::perm_options::replace);
     return;

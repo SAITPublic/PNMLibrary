@@ -15,6 +15,8 @@
 
 #include <cstdint>
 
+namespace tools::gen::sls {
+
 template <typename T> struct DataTypeTraits;
 
 template <> struct DataTypeTraits<float> {
@@ -26,5 +28,7 @@ template <> struct DataTypeTraits<uint32_t> {
   constexpr static const char *name = "uint32_t";
   constexpr static const uint32_t seed_sparse_feature_val = 1;
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_TRAITS_H

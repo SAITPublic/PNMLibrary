@@ -17,10 +17,10 @@
 #include "core.h"
 
 #include "sls/compute_unit/compute_unit.h"
-#include "sls/operation/inst_generator.h"
 #include "sls/operation/reduction_operation.h"
 
 #include "core/device/sls/base.h"
+#include "core/device/sls/utils/inst_generator.h"
 
 #include "pnmlib/core/device.h"
 
@@ -33,17 +33,19 @@
 namespace pnm::sls {
 
 template <typename ComputeUnit>
-class AXDIMMReductionRunner
-    : public ReductionRunner<AXDIMMReductionRunner<ComputeUnit>> {
-  using ReductionRunner<AXDIMMReductionRunner<ComputeUnit>>::device_;
+class AxdimmReductionRunner
+    : public ReductionRunner<AxdimmReductionRunner<ComputeUnit>> {
+  using ReductionRunner<AxdimmReductionRunner<ComputeUnit>>::device_;
   using ReductionRunner<
-      AXDIMMReductionRunner<ComputeUnit>>::read_output_buffers;
+      AxdimmReductionRunner<ComputeUnit>>::read_output_buffers;
   using ReductionRunner<
-      AXDIMMReductionRunner<ComputeUnit>>::print_processed_inst;
+      AxdimmReductionRunner<ComputeUnit>>::print_processed_inst;
 
 public:
-  explicit AXDIMMReductionRunner(Device *sls_device)
-      : ReductionRunner<AXDIMMReductionRunner<ComputeUnit>>(sls_device) {}
+  explicit AxdimmReductionRunner(Device *sls_device,
+                                 unsigned int num_of_workers)
+      : ReductionRunner<AxdimmReductionRunner<ComputeUnit>>(sls_device,
+                                                            num_of_workers) {}
 
   void run_on_pack(ReductionOperation &op, uint8_t pack);
 
@@ -56,7 +58,7 @@ private:
 };
 
 template <typename ComputeUnit>
-void AXDIMMReductionRunner<ComputeUnit>::run_on_pack(ReductionOperation &op,
+void AxdimmReductionRunner<ComputeUnit>::run_on_pack(ReductionOperation &op,
                                                      uint8_t pack) {
   const uint32_t num_execs = op.get_num_exec_iterations(pack);
   ComputeUnit compute_unit(device_, pack);
@@ -66,6 +68,7 @@ void AXDIMMReductionRunner<ComputeUnit>::run_on_pack(ReductionOperation &op,
     const auto &traces = op.generate_instructions(pack, compute_unit.id(), i);
     /* Write Instruction */
     submit_instructions(compute_unit, i, traces);
+
     if (i > 0) {
       read_output_buffers(op, compute_unit, pack, i - 1);
     }
@@ -79,6 +82,7 @@ void AXDIMMReductionRunner<ComputeUnit>::run_on_pack(ReductionOperation &op,
    * buffer and provide correct read pointer for last read_and_reset_psum call.
    */
   wait_and_start(compute_unit, sls::dummy_inst);
+
   /* Read psum output of the last non-dummy execution trace */
   read_output_buffers(op, compute_unit, pack, num_execs - 1);
 
@@ -91,14 +95,15 @@ void AXDIMMReductionRunner<ComputeUnit>::run_on_pack(ReductionOperation &op,
 }
 
 template <typename ComputeUnit>
-void AXDIMMReductionRunner<ComputeUnit>::submit_instructions(
+void AxdimmReductionRunner<ComputeUnit>::submit_instructions(
     ComputeUnit &compute_unit, uint32_t exec_id,
     const std::vector<uint64_t> &trace) {
   /* 1st execution exception */
   if (exec_id == 0) {
     /* Write instruction & execution */
-    compute_unit.write_buffer(BlockType::INST,
-                              view_cast<const uint8_t>(make_view(trace)));
+    compute_unit.write_buffer(
+        BlockType::INST,
+        pnm::views::view_cast<const uint8_t>(pnm::views::make_view(trace)));
     compute_unit.run_async();
   } else {
     wait_and_start(compute_unit, trace);
@@ -106,15 +111,17 @@ void AXDIMMReductionRunner<ComputeUnit>::submit_instructions(
 }
 
 template <typename ComputeUnit>
-void AXDIMMReductionRunner<ComputeUnit>::wait_and_start(
+void AxdimmReductionRunner<ComputeUnit>::wait_and_start(
     ComputeUnit &compute_unit, const std::vector<uint64_t> &trace) {
   if (SINGLE_DOUBLE) {
     compute_unit.wait();
-    compute_unit.write_buffer(BlockType::INST,
-                              view_cast<const uint8_t>(make_view(trace)));
+    compute_unit.write_buffer(
+        BlockType::INST,
+        pnm::views::view_cast<const uint8_t>(pnm::views::make_view(trace)));
   } else {
-    compute_unit.write_buffer(BlockType::INST,
-                              view_cast<const uint8_t>(make_view(trace)));
+    compute_unit.write_buffer(
+        BlockType::INST,
+        pnm::views::view_cast<const uint8_t>(pnm::views::make_view(trace)));
     compute_unit.wait();
   }
 

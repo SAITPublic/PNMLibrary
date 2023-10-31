@@ -12,7 +12,7 @@
 
 #include "pnmlib/core/buffer.h"
 
-#include "common/make_error.h"
+#include "test/utils/pnm_fmt.h"
 
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/device.h"
@@ -23,7 +23,6 @@
 
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
-#include <gtest/internal/gtest-param-util.h>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -31,31 +30,15 @@
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
-#include <string>
 #include <utility>
 #include <vector>
 
 class Buffer : public testing::TestWithParam<pnm::Device::Type> {};
 
-std::string
-generate_param_name(const testing::TestParamInfo<Buffer::ParamType> &info) {
-  switch (info.param) {
-  case pnm::Device::Type::SLS_AXDIMM:
-    return "SLS_AXDIMM";
-  case pnm::Device::Type::SLS_CXL:
-    return "SLS_CXL";
-  case pnm::Device::Type::IMDB_CXL:
-    return "IMDB_CXL";
-  }
-
-  throw pnm::error::make_inval("Unknown device type {}.",
-                               static_cast<int>(info.param));
-}
-
 INSTANTIATE_TEST_SUITE_P(BufferParamSuite, Buffer,
-                         ::testing::Values(pnm::Device::Type::IMDB_CXL,
-                                           pnm::Device::Type::SLS_AXDIMM),
-                         generate_param_name);
+                         ::testing::Values(pnm::Device::Type::IMDB,
+                                           pnm::Device::Type::SLS),
+                         print_fmt_test_params);
 
 TEST_P(Buffer, Create) {
   auto context = pnm::make_context(GetParam());
@@ -71,7 +54,7 @@ TEST_P(Buffer, Create) {
 
   std::vector input{4, 8, 28, 42};
 
-  pnm::memory::Buffer bound_buffer(pnm::make_view(input), context);
+  pnm::memory::Buffer bound_buffer(pnm::views::make_view(input), context);
   ASSERT_EQ(bound_buffer.size(), input.size());
 
   ASSERT_TRUE(bound_buffer.is_offloaded());
@@ -108,10 +91,10 @@ TEST_P(Buffer, Create) {
 }
 
 TEST_P(Buffer, Sls) {
-  auto context = pnm::make_context(pnm::Device::Type::SLS_CXL);
+  auto context = pnm::make_context(pnm::Device::Type::SLS);
 
   std::vector input{4, 8, 28, 42};
-  pnm::memory::Buffer bound_buffer(pnm::make_view(input), context);
+  pnm::memory::Buffer bound_buffer(pnm::views::make_view(input), context);
   ASSERT_EQ(bound_buffer.size(), input.size());
   ASSERT_NO_THROW(
       std::get<pnm::memory::RankedRegion>(bound_buffer.device_region()));
@@ -131,7 +114,7 @@ TEST_P(Buffer, Sls) {
 }
 
 TEST_P(Buffer, BindUserRange) {
-  auto ctx = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  auto ctx = pnm::make_context(pnm::Device::Type::IMDB);
   static constexpr auto N = 1024;
   pnm::memory::Buffer<uint64_t> buffer(N, ctx);
 
@@ -139,14 +122,14 @@ TEST_P(Buffer, BindUserRange) {
   std::iota(acc.begin(), acc.end(), 10);
 
   std::vector<uint64_t> user_space(10);
-  ASSERT_THROW(buffer.bind_user_region(pnm::make_view(user_space)),
+  ASSERT_THROW(buffer.bind_user_region(pnm::views::make_view(user_space)),
                pnm::error::InvalidArguments);
   user_space.resize(1500);
-  ASSERT_THROW(buffer.bind_user_region(pnm::make_view(user_space)),
+  ASSERT_THROW(buffer.bind_user_region(pnm::views::make_view(user_space)),
                pnm::error::InvalidArguments);
 
   user_space.resize(buffer.size());
-  ASSERT_NO_THROW(buffer.bind_user_region(pnm::make_view(user_space)));
+  ASSERT_NO_THROW(buffer.bind_user_region(pnm::views::make_view(user_space)));
 
   ASSERT_EQ(buffer.copy_from_device(), buffer.size());
 
@@ -156,7 +139,7 @@ TEST_P(Buffer, BindUserRange) {
 }
 
 TEST_P(Buffer, MoveOperation) {
-  auto context = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  auto context = pnm::make_context(pnm::Device::Type::IMDB);
   static constexpr char msg[] = "Lazy brown fox jumps over the huge dog.";
   pnm::memory::Buffer<char> buff(sizeof(msg), context);
   auto acc = buff.direct_access();

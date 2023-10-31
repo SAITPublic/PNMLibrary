@@ -1,7 +1,7 @@
 From 5f2dcffe57b62f56533e025f8924bebca943f7d7 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Mon, 19 Jun 2023 14:06:15 +0000
-Subject: [PATCH 122/161] [drivers/pnm] Clean up resources if partially initted
+Subject: [PATCH 122/225] [drivers/pnm] Clean up resources if partially initted
 
 * Call cleanup functions on successfully initialized subsystems in
   `dba_resource` and `sls_resource`

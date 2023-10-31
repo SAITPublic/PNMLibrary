@@ -1,0 +1,59 @@
+From be727148c0548b8dcf09136448c0c55b9cc67845 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 5 Oct 2023 04:03:40 +0000
+Subject: [PATCH 5/6] [trace_conv.py] Update "psum read" trigger condition
+
+With recent PNMLibrary update, use "SLS done" memory operation
+(FS sets POLL_DONE register to 0xffffffff) as a trigger to collect PSUM
+read trace.
+
+Resolves: MCS23-1731.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ scripts_real_app_mode/trace_conv.py | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/scripts_real_app_mode/trace_conv.py b/scripts_real_app_mode/trace_conv.py
+index b9dbeae..3f8d044 100644
+--- a/scripts_real_app_mode/trace_conv.py
++++ b/scripts_real_app_mode/trace_conv.py
+@@ -34,6 +34,9 @@ fs_trace_r_p = re.compile("READ addr: ([0-9a-z]+), size: ([0-9]+)")
+ # set 0xcafe
+ is_set = [False for i in range(CH_NUM)]
+ 
++# simulator sets when it's done 0xfffffff
++is_sim_done = [False for i in range(CH_NUM)]
++
+ # for debug
+ cnt_write_inst = [0 for i in range(CH_NUM)]
+ cnt_read_psum = [0 for i in range(CH_NUM)]
+@@ -68,6 +71,7 @@ class Address:
+ 
+ def trace_conv(fs_addr, fs_size, fs_val, ch, is_write):
+     global is_set
++    global is_sim_done
+     global CLK
+     global trace_list
+ 
+@@ -78,13 +82,15 @@ def trace_conv(fs_addr, fs_size, fs_val, ch, is_write):
+                 trace_list.append(hex(PS_CFGR_BASE[ch]) + " MFENCE " + str(CLK))
+                 CLK += CLK_INTERVAL
+             is_set[ch] = False
+-        elif fs_addr == FS_CFGR_BASE + 0x40:
++        elif fs_addr == FS_CFGR_BASE + 0x40 and fs_val != 0:
+             conv_cfgr(ch, fs_addr)
++        elif fs_addr == FS_CFGR_BASE + 0x444:
++            is_sim_done[ch] = True if fs_val == 0xffffffff else False
+         """
+         else:
+             sys.stdout.write("[debug] Don't care\n")
+         """
+-    elif (is_set[ch]):
++    elif (is_sim_done[ch]):
+         if fs_addr >= FS_PSUM_BASE and fs_addr < FS_PSUM_BASE + BUF_SIZE:
+             conv_psum(ch, fs_addr)
+         """
+-- 
+2.34.1
+

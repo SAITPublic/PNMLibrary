@@ -1,7 +1,7 @@
 From bd2a01de8debfbf2b10b2beb44c2caafd9882bee Mon Sep 17 00:00:00 2001
 From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
 Date: Fri, 21 Jul 2023 03:35:40 +0300
-Subject: [PATCH 27/27] [pnm][sls/imdb] fixup device path
+Subject: [PATCH 27/29] [pnm][sls/imdb] fixup device path
 
 Refers to MCS23-1024
 

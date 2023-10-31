@@ -1,7 +1,7 @@
 From 2a2ff0a93ca1e070aaa2267d0ebdfa40fcec4ad4 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Thu, 10 Aug 2023 14:40:30 +0300
-Subject: [PATCH 159/161] [sls_resource][bug] Fix device type default value
+Subject: [PATCH 159/225] [sls_resource][bug] Fix device type default value
 
 - if device type not specified, than default value in sysfs will be empty,
 because string pointer is NULL

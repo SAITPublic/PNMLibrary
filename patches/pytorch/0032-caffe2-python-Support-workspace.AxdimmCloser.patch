@@ -1,7 +1,7 @@
 From 209bc2378bd77edf5f8e2a5a7eff81af81e3e5c0 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 23 Nov 2021 09:21:57 +0900
-Subject: [PATCH 032/128] [caffe2/python] Support 'workspace.AxdimmCloser()'
+Subject: [PATCH 032/135] [caffe2/python] Support 'workspace.AxdimmCloser()'
 
 Support AXDIMM closer in Caffe2, this allows us to get rid of python
 bindings in AXDIMM library.

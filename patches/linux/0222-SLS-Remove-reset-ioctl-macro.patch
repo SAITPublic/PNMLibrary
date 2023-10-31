@@ -1,0 +1,88 @@
+From 2da77191f1b128014cc1c2bbbf160b1433cdd11a Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Mon, 30 Oct 2023 08:47:30 +0000
+Subject: [PATCH 222/225] [SLS] Remove reset ioctl macro
+
+Compare to sysfs using ioctl for resetting is dangerous,
+so this patch remove it
+Also this patch align reset with imdb logic
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/sls.c         |  5 -----
+ drivers/pnm/sls_resource/sysfs/sysfs.c | 23 ++++++++++++++++-------
+ include/uapi/linux/sls_resources.h     |  5 +----
+ 3 files changed, 17 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 8cb0e4082..d3752f026 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -70,11 +70,6 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	PNM_DBG("Handling SLS ioctl %u with arg 0x%lx\n", _IOC_NR(cmd), arg);
+ 
+ 	switch (cmd) {
+-	case DEVICE_IOCRESET:
+-		reset_cunit_sched();
+-		retval = reset_sls_allocator();
+-		reset_process_manager();
+-		break;
+ 	case ALLOCATE_MEMORY:
+ 	case DEALLOCATE_MEMORY:
+ 	case MAKE_SHARED_ALLOC:
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs.c b/drivers/pnm/sls_resource/sysfs/sysfs.c
+index ac8dd3d60..5eb06989a 100644
+--- a/drivers/pnm/sls_resource/sysfs/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.c
+@@ -79,17 +79,26 @@ static DEVICE_ATTR_RW(acq_timeout);
+ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ 			   const char *buf, size_t count)
+ {
+-	if (sysfs_streq(buf, "1")) {
+-		PNM_DBG("Resetting SLS device via sysfs\n");
+-		if (sls_ioctl(NULL, DEVICE_IOCRESET, 0))
+-			PNM_ERR("Failed to reset device via sysfs.\n");
+-	} else {
+-		// Usual behavior is to silently ignore this, so there is no reason
+-		// to make it as PNM_WRN.
++	int rc = -EINVAL;
++
++	if (!sysfs_streq(buf, "1")) {
+ 		PNM_DBG("Ignoring invalid value ('%s') written into sysfs 'reset' file\n",
+ 			buf);
++		return count;
+ 	}
+ 
++	PNM_DBG("Resetting SLS device via sysfs\n");
++
++	reset_cunit_sched();
++
++	rc = reset_sls_allocator();
++	if (unlikely(rc)) {
++		PNM_ERR("Can't reset allocator\n");
++		return rc;
++	}
++
++	reset_process_manager();
++
+ 	return count;
+ }
+ static DEVICE_ATTR_WO(reset);
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 66ab38808..ce4b54736 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -185,9 +185,6 @@ enum sls_user_preferences {
+ // [TODO: @y-lavrinenko] Get rid when firmware be more stable
+ #define NOP _IO(SLS_IOC_MAGIC, 6)
+ 
+-// [TODO: b.palkin] Remove DEVICE_IOCRESET
+-#define DEVICE_IOCRESET _IO(SLS_IOC_MAGIC, 7)
+-
+-#define SLS_IOC_MAXNR (7)
++#define SLS_IOC_MAXNR (6)
+ 
+ #endif /* __SLS_RESOURCES_H__ */
+-- 
+2.34.1
+

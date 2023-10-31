@@ -1,0 +1,29 @@
+From 294e18dff8ee8e26088232f8fffeeb083d59f6aa Mon Sep 17 00:00:00 2001
+From: Alex Antonov <alex.antonov@samsung.com>
+Date: Mon, 9 Oct 2023 19:14:40 +0300
+Subject: [PATCH 204/225] [nvdimm] Add missed pgmap->type setting
+
+DAX subsystem was redesigned to use dev_pagemap type
+from filled pgmap. So this type setting must be added
+here.
+
+Signed-off-by: Alex Antonov <alex.antonov@samsung.com>
+---
+ drivers/nvdimm/pfn_devs.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/nvdimm/pfn_devs.c b/drivers/nvdimm/pfn_devs.c
+index 61af072ac..3def5bd3a 100644
+--- a/drivers/nvdimm/pfn_devs.c
++++ b/drivers/nvdimm/pfn_devs.c
+@@ -696,6 +696,7 @@ static int __nvdimm_setup_pfn(struct nd_pfn *nd_pfn, struct dev_pagemap *pgmap)
+ 		.end = nsio->res.end - end_trunc,
+ 	};
+ 	pgmap->nr_range = 1;
++	pgmap->type = MEMORY_DEVICE_GENERIC;
+ 	if (nd_pfn->mode == PFN_MODE_RAM) {
+ 		if (offset < reserve)
+ 			return -EINVAL;
+-- 
+2.34.1
+

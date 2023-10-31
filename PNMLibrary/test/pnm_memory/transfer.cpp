@@ -12,9 +12,13 @@
 
 #include "sls_suppl.h"
 
-#include "core/device/sls/rank_address.h"
+#include "core/device/sls/base.h"
 #include "core/memory/imdb/accessor.h"
 #include "core/memory/sls/accessor.h"
+#include "core/memory/sls/cxl/channel_accessor.h"
+
+#include "common/make_error.h"
+#include "common/topology_constants.h"
 
 #include "pnmlib/core/accessor.h"
 #include "pnmlib/core/allocator.h"
@@ -33,20 +37,21 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <numeric>
 #include <vector>
 
 struct TransferManager : ::testing::Test {
 protected:
   void SetUp() override {
-    ctx = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+    ctx = pnm::make_context(pnm::Device::Type::IMDB);
     region = ctx->allocator()->allocate(bytes);
   }
   void TearDown() override { ctx->allocator()->deallocate(region); }
 
   auto get_accessor() {
     return pnm::memory::Accessor<uint32_t>::create<
-        pnm::memory::IMDBAccessorCore>(region, ctx->device());
+        pnm::memory::ImdbAccessorCore>(region, ctx->device());
   };
 
   static constexpr auto N = 256;
@@ -68,13 +73,13 @@ TEST_F(TransferManager, Forward) {
   auto acc = get_accessor();
   std::fill(acc.begin(), acc.end(), 0);
 
-  EXPECT_THROW(ctx->transfer_manager()->copy_to_device(pnm::make_view(big),
-                                                       get_accessor()),
+  EXPECT_THROW(ctx->transfer_manager()->copy_to_device(
+                   pnm::views::make_view(big), get_accessor()),
                pnm::error::InvalidArguments);
 
   uint64_t transfered_size;
   EXPECT_NO_THROW(transfered_size = ctx->transfer_manager()->copy_to_device(
-                      pnm::make_view(small), get_accessor()));
+                      pnm::views::make_view(small), get_accessor()));
   EXPECT_EQ(transfered_size, small.size());
   EXPECT_TRUE(std::equal(small.begin(), small.end(), acc.begin()));
 
@@ -85,7 +90,7 @@ TEST_F(TransferManager, Forward) {
 
   std::fill(acc.begin(), acc.end(), 0);
   EXPECT_NO_THROW(transfered_size = ctx->transfer_manager()->copy_to_device(
-                      pnm::make_view(equal), get_accessor()));
+                      pnm::views::make_view(equal), get_accessor()));
   EXPECT_EQ(transfered_size, equal.size());
   EXPECT_TRUE(std::equal(equal.begin(), equal.end(), acc.begin()));
 }
@@ -98,13 +103,13 @@ TEST_F(TransferManager, Backward) {
   auto acc = get_accessor();
   std::iota(acc.begin(), acc.end(), 42);
 
-  EXPECT_THROW(ctx->transfer_manager()->copy_from_device(get_accessor(),
-                                                         pnm::make_view(small)),
+  EXPECT_THROW(ctx->transfer_manager()->copy_from_device(
+                   get_accessor(), pnm::views::make_view(small)),
                pnm::error::InvalidArguments);
 
   uint64_t transfered_size;
   EXPECT_NO_THROW(transfered_size = ctx->transfer_manager()->copy_from_device(
-                      get_accessor(), pnm::make_view(big)));
+                      get_accessor(), pnm::views::make_view(big)));
   EXPECT_EQ(transfered_size, acc.size());
   EXPECT_TRUE(std::equal(acc.begin(), acc.end(), big.begin()));
 
@@ -113,17 +118,27 @@ TEST_F(TransferManager, Backward) {
       std::all_of(zeroes_start, big.end(), [](auto &e) { return e == 0; }));
 
   EXPECT_NO_THROW(transfered_size = ctx->transfer_manager()->copy_from_device(
-                      get_accessor(), pnm::make_view(equal)));
+                      get_accessor(), pnm::views::make_view(equal)));
   EXPECT_EQ(transfered_size, equal.size());
   EXPECT_TRUE(std::equal(acc.begin(), acc.end(), equal.begin()));
 }
 
-template <typename T> struct AXDIMMTransferManager : public SLSFixture<T> {
+template <typename T> struct SlsTransferManager : public SlsFixture<T> {
 protected:
   auto make_accessor(const pnm::memory::DeviceRegion &region) {
-    return pnm::memory::Accessor<typename SLSFixture<T>::value_type>::
-        template create<pnm::memory::SLSAccessorCore>(region,
-                                                      this->ctx_->device());
+    switch (pnm::sls::device::topo().Bus) {
+
+    case pnm::sls::device::BusType::AXDIMM:
+      return pnm::memory::Accessor<typename SlsFixture<T>::value_type>::
+          template create<pnm::memory::SlsAccessorCore>(region,
+                                                        this->ctx_->device());
+    case pnm::sls::device::BusType::CXL:
+      return pnm::memory::Accessor<typename SlsFixture<T>::value_type>::
+          template create<pnm::memory::ChannelAccessorCore>(
+              region, this->ctx_->device());
+    }
+
+    throw pnm::error::make_inval("SLS device type");
   }
 
   auto allocate(pnm::memory::property::AllocPolicy policy) {
@@ -136,7 +151,7 @@ protected:
 
   void round_transfer_check(const pnm::memory::DeviceRegion &addr) {
     auto count = this->ctx_->transfer_manager()->copy_to_device(
-        pnm::make_view(this->data_), this->make_accessor(addr));
+        pnm::views::make_view(this->data_), this->make_accessor(addr));
     ASSERT_EQ(count, this->data_.size());
 
     auto probe_accessor = this->make_accessor(addr);
@@ -147,7 +162,7 @@ protected:
         this->data_.size());
 
     count = this->ctx_->transfer_manager()->copy_from_device(
-        std::move(probe_accessor), pnm::make_view(out));
+        std::move(probe_accessor), pnm::views::make_view(out));
     ASSERT_EQ(count, out.size());
 
     ASSERT_EQ(out, this->data_);
@@ -157,9 +172,9 @@ protected:
 using TestedTypes =
     ::testing::Types<uint16_t, uint32_t, uint64_t, unsigned __int128>;
 
-TYPED_TEST_SUITE(AXDIMMTransferManager, TestedTypes);
+TYPED_TEST_SUITE(SlsTransferManager, TestedTypes);
 
-TYPED_TEST(AXDIMMTransferManager, Distribute) {
+TYPED_TEST(SlsTransferManager, Distribute) {
   pnm::memory::DeviceRegion addr;
 
   ASSERT_NO_THROW(addr = this->allocate(
@@ -170,7 +185,7 @@ TYPED_TEST(AXDIMMTransferManager, Distribute) {
   this->deallocate(addr);
 }
 
-TYPED_TEST(AXDIMMTransferManager, Replicate) {
+TYPED_TEST(SlsTransferManager, Replicate) {
   pnm::memory::DeviceRegion addr;
 
   ASSERT_NO_THROW(addr = this->allocate(pnm::memory::property::AllocPolicy(
@@ -179,17 +194,26 @@ TYPED_TEST(AXDIMMTransferManager, Replicate) {
   this->round_transfer_check(addr);
 
   for (auto &r : std::get<pnm::memory::RankedRegion>(addr).regions) {
-    ASSERT_NE(r.location, -1);
+    ASSERT_TRUE(r.location.has_value());
 
-    auto iptr = pnm::sls::device::InterleavedPointer(
-                    this->rank_mem_[r.location].data(),
-                    pnm::sls::device::rank_to_ha(r.location)) +
-                r.start;
+    const auto cunit = *r.location;
 
+    const pnm::sls::device::BaseDevice *dev =
+        this->ctx_->device()->template as<pnm::sls::device::BaseDevice>();
+
+    uintptr_t offset = 0;
     for (auto e : this->data_) {
       using vtype = typename decltype(this->data_)::value_type;
-      ASSERT_EQ(*iptr.as<vtype>(), e);
-      iptr += sizeof(vtype);
+      vtype val;
+
+      const auto *ptr = dev->mem_block_handler()->get_mem_block_ptr(
+          SLS_BLOCK_BASE, cunit, offset);
+
+      std::memcpy(&val, ptr, sizeof(val));
+
+      ASSERT_EQ(val, e);
+
+      offset += sizeof(vtype);
     }
   }
 

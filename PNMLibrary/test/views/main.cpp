@@ -30,22 +30,22 @@
 #include <type_traits>
 #include <vector>
 
-using pnm::common_view;
-using pnm::make_rowwise_view;
-using pnm::make_variable_row_view;
-using pnm::make_view;
+using pnm::views::common;
+using pnm::views::make_rowwise_view;
+using pnm::views::make_variable_row_view;
+using pnm::views::make_view;
 
 constexpr char cmem[] = "The brown fox jumps over lazy dog";
 constexpr auto N = sizeof(cmem);
 
 TEST(View, SequentialConstMemory) {
-  common_view full_range{cmem, cmem + N};
+  common full_range{cmem, cmem + N};
   static_assert(std::is_same_v<decltype(full_range.begin()), const char *>,
                 "CTAD Failed");
   ASSERT_EQ(full_range.size(), N);
   ASSERT_TRUE(std::equal(full_range.begin(), full_range.end(), cmem, cmem + N));
 
-  common_view slice{cmem + 4, cmem + 9};
+  common slice{cmem + 4, cmem + 9};
   ASSERT_EQ(slice.size(), 5);
   ASSERT_TRUE(std::equal(slice.begin(), slice.end(), "brown"));
 
@@ -61,14 +61,14 @@ TEST(View, SequentialMutableMemory) {
   char mem[N];
   std::copy_n(cmem, N, mem);
 
-  common_view full_range{mem, mem + N};
+  common full_range{mem, mem + N};
   static_assert(std::is_same_v<decltype(full_range.begin()), char *>,
                 "CTAD Failed");
 
   ASSERT_EQ(full_range.size(), N);
   ASSERT_TRUE(std::equal(full_range.begin(), full_range.end(), mem, mem + N));
 
-  common_view slice{mem + 4, mem + 9};
+  common slice{mem + 4, mem + 9};
   ASSERT_EQ(slice.size(), 5);
   ASSERT_TRUE(std::equal(slice.begin(), slice.end(), "brown"));
 
@@ -117,7 +117,7 @@ TEST(View, FunctionCalls) {
   std::vector mem{1, 2, 3, 4, 5, 6, 7};
   const auto &cref = mem;
 
-  auto rng_value = [](common_view<int> r) {
+  auto rng_value = [](common<int> r) {
     std::transform(r.begin(), r.end(), r.begin(), r.begin(), std::plus{});
   };
   static_assert(
@@ -127,7 +127,7 @@ TEST(View, FunctionCalls) {
   rng_value(make_view(mem));
   ASSERT_EQ(mem, (std::vector{2, 4, 6, 8, 10, 12, 14}));
 
-  auto rng_const_value = [](common_view<const int> r) {
+  auto rng_const_value = [](common<const int> r) {
     return std::accumulate(r.begin(), r.end(), 0);
   };
   static_assert(
@@ -135,10 +135,10 @@ TEST(View, FunctionCalls) {
       "FTAD Failed. Check make_view func.");
   ASSERT_EQ(rng_const_value(make_view(cref)), 56);
 
-  [[maybe_unused]] auto rng_ref = [](common_view<int> &r) {
+  [[maybe_unused]] auto rng_ref = [](common<int> &r) {
     std::transform(r.begin(), r.end(), r.begin(), r.begin(), std::plus{});
   };
-  [[maybe_unused]] auto rng_cref = [](const common_view<int> &r) {
+  [[maybe_unused]] auto rng_cref = [](const common<int> &r) {
     fmt::print("{}", fmt::join(r, " "));
   };
 
@@ -229,8 +229,7 @@ TEST(ViewArray, ConstBeginEnd) {
   const auto &av = nc_av;
   auto it = av.begin();
 
-  static_assert(
-      std::is_same_v<decltype(it.operator*()), common_view<const int> &>);
+  static_assert(std::is_same_v<decltype(it.operator*()), common<const int> &>);
 
   for (; it != av.end(); ++it) {
     const auto &sv = *it;
@@ -305,8 +304,8 @@ TEST(ViewArray, PsumWithTag) {
 
   // Same stuff but with std::vector
   {
-    std::vector<common_view<uint32_t>> psum_view(PSUM_NUM);
-    std::vector<common_view<uint32_t>> tag_view(PSUM_NUM);
+    std::vector<common<uint32_t>> psum_view(PSUM_NUM);
+    std::vector<common<uint32_t>> tag_view(PSUM_NUM);
 
     for (auto col = 0; col < PSUM_NUM; ++col) {
       auto shift = (COLS_NUM + TAG_COLS) * col;

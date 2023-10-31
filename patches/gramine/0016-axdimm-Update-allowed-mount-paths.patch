@@ -1,7 +1,7 @@
 From 135236dbe9cde69c59e54db0f50ed2366796b0ed Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Mon, 10 Apr 2023 17:31:47 +0300
-Subject: [PATCH 16/27] [axdimm] Update allowed/mount paths.
+Subject: [PATCH 16/29] [axdimm] Update allowed/mount paths.
 
 Update Gramine mounts and allowed paths for AXDIMM, as they were changed
 when separating DAX device and AXDIMM resource manager in

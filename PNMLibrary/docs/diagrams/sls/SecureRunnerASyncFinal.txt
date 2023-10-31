@@ -1,5 +1,5 @@
 @startuml
-title axdimm::secure::ProdConsCPURunner
+title axdimm::secure::ProdConsCpuRunner
 box "SecNDP runtime" #LightYellow
     participant ":DLRM" as in <<E, #990000>>
     participant "::SecureRunner" as SR <<C, #00AA00>>

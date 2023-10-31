@@ -19,9 +19,9 @@
 
 #include <filesystem>
 
-namespace sls::tests {
+namespace tools::gen::sls {
 
-/*! \brief Class that allows to read embedded tables via mmap */
+/*! \brief Class that allows to read embedding tables via mmap */
 class TablesMmap {
 public:
   TablesMmap() = default;
@@ -34,6 +34,6 @@ public:
   TablesInfo info;
 };
 
-} // namespace sls::tests
+} // namespace tools::gen::sls
 
 #endif // SLS_TEST_TABLES_MMAP_H

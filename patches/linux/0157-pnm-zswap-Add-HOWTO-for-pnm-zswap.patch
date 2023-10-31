@@ -1,7 +1,7 @@
 From c63512bce6d23944deb1a618aefbd3a60cc96628 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Thu, 3 Aug 2023 05:42:42 -0400
-Subject: [PATCH 157/161] [pnm][zswap] Add HOWTO for pnm zswap
+Subject: [PATCH 157/225] [pnm][zswap] Add HOWTO for pnm zswap
 
 The HOWTO document was added. The manual contains brief description how
 to build and run kernel with pnm-zswap support.

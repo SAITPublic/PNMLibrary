@@ -18,10 +18,10 @@
 #include <cstdint>
 #include <memory>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 /*! \brief Interface for tables preprocessor. Class that should handle base info
- * about tables structure and perform encryption of embedded tables
+ * about tables structure and perform encryption of embedding tables
  * @tparam T -- type of table's entry
  * */
 template <typename T> class IPreprocessor {
@@ -40,6 +40,6 @@ private:
 
   virtual uint64_t encrypted_buffer_size_impl(bool include_tag) const = 0;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // SLS_SECURE_PREPROCESSOR_H

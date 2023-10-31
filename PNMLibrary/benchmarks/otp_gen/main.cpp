@@ -29,9 +29,9 @@
 
 auto key() {
   static constexpr auto aes_key_size =
-      static_cast<int>(sls::secure::AES_KEY_SIZE::AES_128) / 8;
+      static_cast<int>(pnm::sls::secure::AES_KEY_SIZE::AES_128) / 8;
   static constexpr auto key_str = "12345678901234561234567890123456";
-  sls::FixedVector<uint8_t, aes_key_size> key;
+  pnm::types::FixedVector<uint8_t, aes_key_size> key;
   std::copy_n(key_str, aes_key_size, key.begin());
   return key;
 }
@@ -51,7 +51,7 @@ constexpr auto sls_op = [](auto sum, const auto &e) {
 
 void benchmark_core_old(int minibatch_size, int num_lookup,
                         benchmark::State &state) {
-  const sls::secure::EncryptionEngine<uint32_t> engine(42, key());
+  const pnm::sls::secure::EncryptionEngine<uint32_t> engine(42, key());
 
   std::vector<uint32_t> result(sparce_feature_size, 0U);
 
@@ -66,7 +66,7 @@ void benchmark_core_old(int minibatch_size, int num_lookup,
 #pragma GCC diagnostic push // Clang accept this too??
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
       engine.offset_transform_reduce(&(*indices.begin()), &(*indices.end()),
-                                     pnm::make_view(result), sls_op);
+                                     pnm::views::make_view(result), sls_op);
 #pragma GCC diagnostic pop
       benchmark::DoNotOptimize(result);
     }
@@ -77,7 +77,7 @@ void benchmark_core_old(int minibatch_size, int num_lookup,
 
 void benchmark_core(int minibatch_size, int num_lookup,
                     benchmark::State &state) {
-  const sls::secure::EncryptionEngine<uint32_t> engine(42, key());
+  const pnm::sls::secure::EncryptionEngine<uint32_t> engine(42, key());
 
   std::vector<uint32_t> result(sparce_feature_size, 0U);
 
@@ -90,7 +90,7 @@ void benchmark_core(int minibatch_size, int num_lookup,
   for ([[maybe_unused]] auto _ : state) {
     for (auto &indices : batches) {
       engine.offset_transform_reduce_vec(&(*indices.begin()), &(*indices.end()),
-                                         pnm::make_view(result), sls_op);
+                                         pnm::views::make_view(result), sls_op);
       benchmark::DoNotOptimize(result);
     }
   }

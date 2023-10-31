@@ -129,7 +129,7 @@ void TraceGeneratorCore::init(uint32_t sparse_feature_size,
                               uint32_t max_tables_rows_num, bool is_tagged) {
   const auto extended_spase_feature_size =
       sparse_feature_size +
-      (is_tagged ? pnm::device::topo().AlignedTagSize : 0);
+      (is_tagged ? pnm::sls::device::topo().AlignedTagSize : 0);
   init_mapping(extended_spase_feature_size, max_tables_rows_num);
 
   pnm::log::debug("SLS instruction generator is initialized.");

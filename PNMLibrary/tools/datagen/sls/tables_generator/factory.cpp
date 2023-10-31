@@ -19,6 +19,8 @@
 #include <memory>
 #include <sstream>
 
+namespace tools::gen::sls {
+
 TablesGeneratorFactory &TablesGeneratorFactory::default_factory() {
   static TablesGeneratorFactory factory;
   // Register your builder here by calling fabric.register_builder(....)
@@ -58,3 +60,5 @@ TablesGeneratorFactory &TablesGeneratorFactory::default_factory() {
 
   return factory;
 }
+
+} // namespace tools::gen::sls

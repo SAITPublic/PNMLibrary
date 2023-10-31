@@ -1,7 +1,7 @@
 From b1dd01159e74db93aa98ca508407e612359f598d Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 24 Jan 2023 11:56:23 +0000
-Subject: [PATCH 26/33] Delete --sls_accel parameter
+Subject: [PATCH 26/34] Delete --sls_accel parameter
 
 Previously "--sls_accel cpu" was used to test secure operator code.
 

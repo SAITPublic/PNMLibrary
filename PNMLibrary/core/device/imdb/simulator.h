@@ -25,7 +25,7 @@
 
 namespace pnm::imdb::device {
 
-class SimulatorDevice final : public BaseDevice {
+class SimulatorDevice : public BaseDevice {
 public:
   SimulatorDevice();
   ~SimulatorDevice() override;

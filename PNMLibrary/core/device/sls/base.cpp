@@ -15,11 +15,9 @@
 
 #include "base.h"
 
-#include "control.h"
-
-#include "core/device/sls/memblockhandler/axdimm/sim.h"
 #include "core/device/sls/memblockhandler/base.h"
-#include "core/device/sls/memblockhandler/cxl/sim.h"
+#include "core/device/sls/simulator/sim.h"
+#include "core/device/sls/utils/constants.h"
 
 #include "common/compiler_internal.h"
 #include "common/log.h"
@@ -27,14 +25,13 @@
 #include "common/timer.h"
 #include "common/topology_constants.h"
 
+#include "pnmlib/sls/control.h"
+
 #include "pnmlib/core/device.h"
 
 #include "pnmlib/common/128bit_math.h"
 #include "pnmlib/common/error.h"
-#include "pnmlib/common/misc_utils.h"
 #include "pnmlib/common/rowwise_view.h"
-
-#include <fmt/core.h>
 
 #include <linux/sls_resources.h>
 
@@ -42,7 +39,6 @@
 #include <sys/ioctl.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -53,27 +49,24 @@
 
 namespace pnm::sls::device {
 
-using pnm::device::topo;
-
 namespace {
 
 inline void check_memory_access([[maybe_unused]] uint8_t compute_unit) {
-  assert(compute_unit < topo().NumOfRanks);
+  assert(compute_unit < topo().NumOfCUnits);
 }
 
 auto &cunit_tmp_storages(int compute_unit) {
   static std::vector<std::vector<uint8_t>> buf(
-      topo().NumOfRanks, std::vector<uint8_t>(topo().TagsBufSize));
+      topo().NumOfCUnits, std::vector<uint8_t>(topo().TagsBufSize));
   return buf[compute_unit];
 }
 
 } // namespace
 
-BaseDevice::BaseDevice(Device::Type dev_type,
-                       const std::filesystem::path &data_path)
+BaseDevice::BaseDevice(BusType type, const std::filesystem::path &data_path)
     : control_fd_(SLS_RESOURCE_PATH, O_RDWR), data_fd_(data_path, O_RDWR),
-      mem_block_handler_(ISLSMemBlockHandler::create(dev_type)),
-      tsan_mutexes_(topo().NumOfRanks), dev_type_{dev_type} {
+      tsan_mutexes_(topo().NumOfCUnits),
+      mem_block_handler_(ISlsMemBlockHandler::create(type)), bus_type_(type) {
   if (topo().NumOfInstBuf > 2) {
     throw pnm::error::NotSupported("Invalid number of instruction buffers.");
   }
@@ -83,80 +76,45 @@ BaseDevice::BaseDevice(Device::Type dev_type,
   }
 
   const auto mem_info = control_.get_mem_info();
-  mem_block_handler_->init(mem_info, *data_fd_, dev_type);
+  mem_block_handler_->init(mem_info, *data_fd_);
 
   pnm::log::info("sls::BaseDevice is initialized.");
-
-  if constexpr (PNM_PLATFORM != HARDWARE) {
-    setup_sim();
-  }
 }
 
-volatile std::atomic<uint32_t> *
-BaseDevice::psum_poll_register(uint8_t compute_unit) const {
+uint32_t *BaseDevice::psum_poll_register(uint8_t compute_unit) const {
   check_memory_access(compute_unit);
-  auto *poll_addr_atomic =
-      pnm::utils::as_vatomic<uint32_t>(mem_block_handler_->get_mem_block_ptr(
-          SLS_BLOCK_CFGR, compute_unit, topo().RegPolling + sizeof(uint32_t)));
   // The writer side is SLS hardware, don't mess up with ordering
-  // and use conservative memory_order_seq_cst
-  return poll_addr_atomic;
+  return static_cast<uint32_t *>(mem_block_handler_->get_mem_block_ptr(
+      SLS_BLOCK_CFGR, compute_unit, topo().RegPolling + sizeof(uint32_t)));
 }
 
-volatile std::atomic<uint32_t> *
-BaseDevice::exec_sls_register(uint8_t compute_unit) {
-  //[TODO: y-lavrinenko] Get rid after simulator refactor
-  if constexpr (PNM_PLATFORM != HARDWARE) {
-    if (UNLIKELY(mem_block_handler_.get() == nullptr)) {
-      throw pnm::error::Failure("MemBlockHandler hasn't been initialized.");
-    }
-
-    exec_trace_(compute_unit);
-  }
-
-  auto *sls_exec_addr_atomic =
-      pnm::utils::as_vatomic<uint32_t>(mem_block_handler_->get_mem_block_ptr(
-          SLS_BLOCK_CFGR, compute_unit, topo().RegSLSExec));
-  return sls_exec_addr_atomic;
+uint32_t *BaseDevice::exec_sls_register(uint8_t compute_unit) {
+  return static_cast<uint32_t *>(mem_block_handler_->get_mem_block_ptr(
+      SLS_BLOCK_CFGR, compute_unit, topo().RegSlsExec));
 }
 
-volatile std::atomic<uint32_t> *
-BaseDevice::control_switch_register(uint8_t compute_unit) {
-  //[TODO: y-lavrinenko] Get rid after simulator refactor
-  if constexpr (PNM_PLATFORM != HARDWARE) {
-    if (UNLIKELY(mem_block_handler_.get() == nullptr)) {
-      throw pnm::error::Failure("MemBlockHandler hasn't been initialized.");
-    }
-
-    // Clear PSUM and TAGS DRAM memory from garbage.
-    // This garbage may have come from either initial values in DRAM memory or
-    // from dummy instruction execution result.
-    clear_buffer_(compute_unit);
-  }
-
-  auto *sls_en_addr_atomic =
-      pnm::utils::as_vatomic<uint32_t>(mem_block_handler_->get_mem_block_ptr(
-          SLS_BLOCK_CFGR, compute_unit, topo().RegSLSEn));
-  return sls_en_addr_atomic;
+uint32_t *BaseDevice::control_switch_register(uint8_t compute_unit) {
+  return static_cast<uint32_t *>(mem_block_handler_->get_mem_block_ptr(
+      SLS_BLOCK_CFGR, compute_unit, topo().RegSlsEn));
 }
 
-uint8_t BaseDevice::acquire_idle_cunit_from_range(bit_mask cunit_mask) const {
+uint8_t BaseDevice::acquire_idle_cunit_from_range(cunit cunit_mask) const {
 
   const unsigned long mask = cunit_mask.to_ulong();
-  int res = ioctl(*control_fd_, GET_RANK_FOR_WRITE, mask);
+  int res = ioctl(*control_fd_, GET_CUNIT, mask);
 
   if (res < 0) {
-    res = topo().NumOfRanks;
+    res = topo().NumOfCUnits;
   }
 
   return res;
 }
 
-bool BaseDevice::acquire_cunit_for_write_from_range(uint8_t *compute_unit,
-                                                    bit_mask cunit_mask) {
+bool BaseDevice::acquire_cunit_from_range(uint8_t *compute_unit,
+                                          cunit cunit_mask) {
   const auto cunit_tmp = acquire_idle_cunit_from_range(cunit_mask);
 
-  if (cunit_tmp == topo().NumOfRanks) {
+  if (cunit_tmp == topo().NumOfCUnits) {
     return false;
   }
   *compute_unit = cunit_tmp;
@@ -169,58 +127,43 @@ bool BaseDevice::acquire_cunit_for_write_from_range(uint8_t *compute_unit,
   return true;
 }
 
-bool BaseDevice::acquire_cunit_for_read(uint8_t compute_unit) const {
-  return ioctl(*control_fd_, GET_RANK_FOR_READ, compute_unit) >= 0;
-}
-
-void BaseDevice::release_cunit_for_write(uint8_t compute_unit) const {
+void BaseDevice::release_cunit(uint8_t compute_unit) const {
   if constexpr (TSAN) {
     tsan_mutexes_[compute_unit].unlock();
   }
 
-  const int res = ioctl(*control_fd_, RELEASE_WRITE_RANK, compute_unit);
+  const int res = ioctl(*control_fd_, RELEASE_CUNIT, compute_unit);
   if (res < 0) {
-    PNM_LOG_ERROR("Failed to release compute unit after write.");
-    throw pnm::error::Failure("ioctl RELEASE_WRITE_RANK.");
+    PNM_LOG_ERROR("Failed to release compute unit.");
+    throw pnm::error::Failure("ioctl RELEASE_CUNIT.");
   }
 
   pnm::log::debug("Released compute unit {}", compute_unit);
 }
 
-void BaseDevice::release_cunit_for_read(uint8_t compute_unit) const {
-  const int res = ioctl(*control_fd_, RELEASE_READ_RANK, compute_unit);
-  if (res < 0) {
-    PNM_LOG_ERROR("Failed to release compute unit after read.");
-    throw pnm::error::Failure("ioctl RELEASE_READ_RANK.");
-  }
-}
+std::unique_ptr<BaseDevice> BaseDevice::make_device() {
+  const auto bus_type = topo().Bus;
 
-std::unique_ptr<BaseDevice> BaseDevice::make_device(Device::Type dev_type) {
-  switch (dev_type) {
-  case Type::SLS_AXDIMM: {
-    constexpr auto *mem_path =
-        (PNM_PLATFORM == FUNCSIM) ? "/dev/shm/sls" : SLS_MEMDEV_PATH;
-    return std::make_unique<BaseDevice>(dev_type, mem_path);
+  switch (bus_type) {
+  case BusType::AXDIMM:
+  case BusType::CXL: {
+    const auto mem_path = get_device_path();
+    return ((PNM_PLATFORM == HARDWARE)
+                ? std::make_unique<BaseDevice>(bus_type, mem_path)
+                : std::make_unique<SimulatorDevice>(bus_type, mem_path));
   }
-  case Type::SLS_CXL: {
-    constexpr auto *mem_path =
-        (PNM_PLATFORM == FUNCSIM) ? "/dev/shm/sls" : DAX_PATH;
-    return std::make_unique<BaseDevice>(dev_type, mem_path);
-  }
-  case Type::IMDB_CXL:
-    break;
   }
 
   throw pnm::error::make_not_sup(
       "Device type {} for SLS.",
-      std::underlying_type_t<Device::Type>(dev_type));
+      std::underlying_type_t<Device::Type>(bus_type));
 }
 
 void BaseDevice::read_and_reset_tags(uint8_t compute_unit, uint8_t *tags_out,
                                      size_t read_size) {
   MEASURE_TIME();
 
-  static constexpr auto single_tag_size = sizeof(pnm::uint128_t);
+  static constexpr auto single_tag_size = sizeof(pnm::types::uint128_t);
   const auto aligned_tags_buffer_size =
       read_size / single_tag_size * topo().AlignedTagSize;
 
@@ -228,7 +171,7 @@ void BaseDevice::read_and_reset_tags(uint8_t compute_unit, uint8_t *tags_out,
   mem_block_handler_->read_block(SLS_BLOCK_TAGS, compute_unit, 0,
                                  tags_tmp.data(), aligned_tags_buffer_size);
 
-  const auto tags_buffer_view = pnm::make_rowwise_view(
+  const auto tags_buffer_view = pnm::views::make_rowwise_view(
       tags_tmp.data(), tags_tmp.data() + aligned_tags_buffer_size,
       topo().AlignedTagSize, 0, topo().AlignedTagSize - single_tag_size);
   std::for_each(tags_buffer_view.begin(), tags_buffer_view.end(),
@@ -248,36 +191,5 @@ void BaseDevice::reset_impl(Device::ResetOptions options) {
 
   throw pnm::error::make_not_sup("Reset option.");
 }
-void BaseDevice::setup_sim() {
-  auto setup_sim_functions = [this](auto *memblockhandler) {
-    clear_buffer_ = [memblockhandler](uint8_t compute_unit) {
-      memblockhandler->simulator().clear_buffers(compute_unit);
-    };
 
-    exec_trace_ = [memblockhandler](uint8_t compute_unit) {
-      memblockhandler->simulator().exec_trace(compute_unit);
-    };
-  };
-
-  switch (dev_type_) {
-  case Type::SLS_AXDIMM: {
-    auto *memblockhandler =
-        static_cast<AxdimmSimulatorMemBlockHandler *>(mem_block_handler_.get());
-    setup_sim_functions(memblockhandler);
-    return;
-  }
-  case Type::SLS_CXL: {
-    auto *memblockhandler =
-        static_cast<CXLSimulatorMemBlockHandler *>(mem_block_handler_.get());
-    setup_sim_functions(memblockhandler);
-    return;
-  }
-  case Type::IMDB_CXL:
-    break;
-  }
-
-  throw pnm::error::make_not_sup(
-      "Device type {} for SLS.",
-      std::underlying_type_t<Device::Type>(dev_type_));
-}
 } // namespace pnm::sls::device

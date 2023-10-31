@@ -1,7 +1,7 @@
 From 44b7f30452dc9191ada3d53200782de0f282bd03 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 20 Sep 2022 19:02:12 +0300
-Subject: [PATCH 072/128] [application] Better logging in starter/closer
+Subject: [PATCH 072/135] [application] Better logging in starter/closer
 
 Related to: AXDIMM-319
 ---

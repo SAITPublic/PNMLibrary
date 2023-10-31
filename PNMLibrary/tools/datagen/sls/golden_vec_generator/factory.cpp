@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 
+namespace tools::gen::sls {
+
 template <typename T>
 struct TrivialGoldenVecGenerator : public IGoldenVecGenerator {
 private:
@@ -50,8 +52,9 @@ private:
     const auto &rows = tables_meta.rows();
     const auto *lengths = indices_meta.lengths().data();
 
-    SLS<T>::compute(data, rows, indices, lengths, sparse_feature_size,
-                    mini_batch_size, psum);
+    pnm::sls::internal::cpu::Reduction<T>::compute(data, rows, indices, lengths,
+                                                   sparse_feature_size,
+                                                   mini_batch_size, psum);
 
     return {reinterpret_cast<uint8_t *>(golden.data()),
             reinterpret_cast<uint8_t *>(golden.data() + golden.size())};
@@ -60,7 +63,7 @@ private:
 
 void IGoldenVecGenerator::compute_and_store_golden_sls(
     const std::filesystem::path &root, const std::string &prefix,
-    sls::tests::TablesMmap &tables, sls::tests::Indices &indices) const {
+    TablesMmap &tables, Indices &indices) const {
 
   auto file_size = [](std::istream &s) {
     s.seekg(0, std::ios_base::end);
@@ -106,3 +109,5 @@ GoldenVecGeneratorFactory &GoldenVecGeneratorFactory::default_factory() {
 
   return factory;
 }
+
+} // namespace tools::gen::sls

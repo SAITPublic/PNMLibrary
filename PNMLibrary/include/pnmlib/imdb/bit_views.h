@@ -39,28 +39,25 @@ namespace pnm::views {
  *
  * @tparam T value type, should be unsigned integral type
  * @tparam C type of mapped memory region. Should be contiguous range with RA.
- * sls::common_view<T> is used by default.
+ * pnm::views::common<T> is used by default.
  */
-template <typename T, typename C = pnm::common_view<T>>
-class bit_compressed_view {
+template <typename T, typename C = common<T>> class bit_compressed {
   static_assert(std::is_unsigned_v<T>, "value type must be unsigned!");
   static_assert(std::is_same_v<T, typename C::value_type>,
                 "value type and the type of container elements should match!");
 
 public:
-  constexpr bit_compressed_view() = default;
-  constexpr explicit bit_compressed_view(uint64_t value_bits, uint64_t n,
-                                         C other)
+  constexpr bit_compressed() = default;
+  constexpr explicit bit_compressed(uint64_t value_bits, uint64_t n, C other)
       : value_bits_{value_bits}, value_counts_{n},
         value_mask_((T{1} << value_bits_) - 1), data_{std::move(other)} {}
   template <typename It, typename End>
-  constexpr bit_compressed_view(uint64_t value_bits, uint64_t n, It first,
-                                End last)
-      : bit_compressed_view(value_bits, n, C{first, last}) {}
+  constexpr bit_compressed(uint64_t value_bits, uint64_t n, It first, End last)
+      : bit_compressed(value_bits, n, C{first, last}) {}
 
   template <typename R>
-  constexpr bit_compressed_view(uint64_t value_bits, uint64_t n, R &&range)
-      : bit_compressed_view(value_bits, n, range.begin(), range.end()) {}
+  constexpr bit_compressed(uint64_t value_bits, uint64_t n, R &&range)
+      : bit_compressed(value_bits, n, range.begin(), range.end()) {}
 
   constexpr auto size() const { return value_counts_; }
   constexpr auto capacity() const {
@@ -130,10 +127,10 @@ public:
     constexpr operator T() && { return storage_.get_value(index_); }
 
   private:
-    constexpr proxy_accessor(bit_compressed_view &st, uint64_t index)
+    constexpr proxy_accessor(bit_compressed &st, uint64_t index)
         : storage_{st}, index_{index} {}
-    friend bit_compressed_view;
-    bit_compressed_view &storage_;
+    friend bit_compressed;
+    bit_compressed &storage_;
     uint64_t index_{};
   };
 
@@ -145,7 +142,7 @@ protected:
   constexpr T it_helper_value(uint64_t index) const { return get_value(index); }
   constexpr uint64_t it_helper_next(uint64_t index) const { return ++index; }
 
-  using iterator = bitview_iterator<T, bit_compressed_view<T, C>>;
+  using iterator = bit_iterator<T, bit_compressed<T, C>>;
   friend iterator;
 
   static constexpr auto storage_bits = sizeof(T) * 8;
@@ -157,15 +154,14 @@ protected:
 };
 
 template <typename It, typename End>
-bit_compressed_view(uint64_t, uint64_t, It, End)
-    -> bit_compressed_view<typename std::iterator_traits<It>::value_type>;
+bit_compressed(uint64_t, uint64_t, It, End)
+    -> bit_compressed<typename std::iterator_traits<It>::value_type>;
 
 template <typename T>
-bit_compressed_view(uint64_t, uint64_t, pnm::common_view<T>)
-    -> bit_compressed_view<T>;
+bit_compressed(uint64_t, uint64_t, common<T>) -> bit_compressed<T>;
 
 template <typename R>
-bit_compressed_view(uint64_t, uint64_t, R &&) -> bit_compressed_view<
+bit_compressed(uint64_t, uint64_t, R &&) -> bit_compressed<
     typename std::iterator_traits<decltype(R::begin())>::value_type>;
 
 /** @brief View to provide access for data in region stored as a BitVector
@@ -178,9 +174,9 @@ bit_compressed_view(uint64_t, uint64_t, R &&) -> bit_compressed_view<
  * memory leads to UB due to possible out-of-range access.
  *
  * @tparam C type of underlying memory region. Should be contiguous range. The
- * `sls::common_view` is used by default.
+ * `pnm::views::common` is used by default.
  */
-template <typename C = pnm::common_view<uint64_t>> class bit_vector_view {
+template <typename C = common<uint64_t>> class bit_vector_view {
   static_assert(std::is_unsigned_v<typename C::value_type>,
                 "value type must be unsigned!");
 
@@ -268,7 +264,7 @@ protected:
     return index;
   }
 
-  using iterator = bitview_iterator<uint64_t, bit_vector_view<C>>;
+  using iterator = bit_iterator<uint64_t, bit_vector_view<C>>;
   friend iterator;
 
   using T = typename C::value_type;

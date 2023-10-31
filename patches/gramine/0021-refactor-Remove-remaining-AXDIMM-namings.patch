@@ -1,7 +1,7 @@
 From 2e9a0c9c80a95228cc69f414bbf9976ba06bc9b1 Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Fri, 19 May 2023 17:49:24 +0300
-Subject: [PATCH 21/27] [refactor] Remove remaining AXDIMM namings
+Subject: [PATCH 21/29] [refactor] Remove remaining AXDIMM namings
 
 Resolves: MCS23-925
 

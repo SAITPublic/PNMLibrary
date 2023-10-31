@@ -1,0 +1,29 @@
+From ecbe97a7541af36ba0aecfa0b18eaf2956f6fbaf Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 26 Sep 2023 09:08:32 +0000
+Subject: [PATCH 214/225] [sls] Add device type export path
+
+Resolves: MCS23-1641
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ include/uapi/linux/sls_resources.h | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 18df0e47f..33865fded 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -62,6 +62,9 @@
+ #define DEVICE_TOPOLOGY_CONSTANT_PATH(constant) \
+ 	DEVICE_TOPOLOGY_PATH "/" #constant
+ 
++/* Device type */
++#define ATTR_DEV_TYPE_PATH DEVICE_TOPOLOGY_CONSTANT_PATH(dev_type)
++
+ /* Number of cunits */
+ #define ATTR_NUM_OF_CUNITS_PATH DEVICE_TOPOLOGY_CONSTANT_PATH(nr_cunits)
+ 
+-- 
+2.34.1
+

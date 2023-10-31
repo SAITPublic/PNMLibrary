@@ -26,23 +26,19 @@ namespace test::mock {
 
 std::unique_ptr<pnm::Context> make_context_mock(ContextType type) {
   switch (type) {
-  case ContextType::CXL:
-    return pnm::make_context(pnm::Device::Type::SLS_CXL);
-  case ContextType::AXDIMM:
-    return pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  case ContextType::SLS:
+    return pnm::make_context(pnm::Device::Type::SLS);
   case ContextType::RANDOM_OFFSETS_ALLOCATOR:
-    return std::make_unique<CustomAllocatorContext>();
+    return create_mock_context();
   }
   throw pnm::error::make_inval("Unknown context mock type: {}.",
                                static_cast<int>(type));
 }
 
-std::string context_type_to_str(ContextType type) {
+std::string format_as(ContextType type) {
   switch (type) {
-  case ContextType::CXL:
-    return "CXL";
-  case ContextType::AXDIMM:
-    return "AXDIMM";
+  case ContextType::SLS:
+    return "SLS";
   case ContextType::RANDOM_OFFSETS_ALLOCATOR:
     return "RANDOM_OFFSETS_ALLOCATOR";
   }

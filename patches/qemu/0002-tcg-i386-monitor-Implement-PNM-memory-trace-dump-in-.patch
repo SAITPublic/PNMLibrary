@@ -1,7 +1,7 @@
 From 257dbf3679a87a05f1020c8be7fe69054859bf8d Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 31 Jul 2023 02:20:36 +0000
-Subject: [PATCH 2/3] [tcg/i386][monitor] Implement PNM memory trace dump in
+Subject: [PATCH 2/4] [tcg/i386][monitor] Implement PNM memory trace dump in
  tcg
 
 tcg/

@@ -1,7 +1,7 @@
 From 88f846930114da99e36f8b66837c1f29267c74cb Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 9 Nov 2021 11:41:25 +0900
-Subject: [PATCH 023/128] [caffe2/operators] Remove unneeded undef from
+Subject: [PATCH 023/135] [caffe2/operators] Remove unneeded undef from
  lengths_reducer_ops_axdimm.cc
 
 The '#undef USE_FBGEMM' is not requires since now compiler passes correct

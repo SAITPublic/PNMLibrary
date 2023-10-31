@@ -1,7 +1,7 @@
 From 3b22933b6fb4d27b297dd643dfaee71f3723ecf6 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 1 Nov 2021 16:52:44 +0900
-Subject: [PATCH 005/128] [c0/core] Add AXDIMM dispatch key
+Subject: [PATCH 005/135] [c0/core] Add AXDIMM dispatch key
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

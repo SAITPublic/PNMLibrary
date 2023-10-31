@@ -1,0 +1,128 @@
+From 8789484426f6b3173559f49bd36b160f1b17724e Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Wed, 30 Aug 2023 17:35:51 +0300
+Subject: [PATCH 170/225] Move installation scripts from root into `scripts`
+
+This is a generic practice in kernel development (at least seems to be,
+as I see no scripts in kernel root except for ours), and also our ZSwap
+scripts already use the same practice.
+
+Related to MCS23-1545.
+
+Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md                                  | 12 ++++++------
+ .../pnm/clean_linux_debs.py                          |  0
+ .../pnm/install_dax_drivers.sh                       |  0
+ install_debs.sh => scripts/pnm/install_debs.sh       |  4 +---
+ .../pnm/install_imdb_resource.sh                     |  0
+ .../pnm/install_pnm_resource.sh                      |  0
+ .../pnm/install_sls_headers.sh                       |  0
+ .../pnm/install_sls_resource.sh                      |  0
+ 8 files changed, 7 insertions(+), 9 deletions(-)
+ rename clean_linux_debs.py => scripts/pnm/clean_linux_debs.py (100%)
+ rename install_dax_drivers.sh => scripts/pnm/install_dax_drivers.sh (100%)
+ rename install_debs.sh => scripts/pnm/install_debs.sh (64%)
+ rename install_imdb_resource.sh => scripts/pnm/install_imdb_resource.sh (100%)
+ rename install_pnm_resource.sh => scripts/pnm/install_pnm_resource.sh (100%)
+ mode change 100644 => 100755
+ rename install_sls_headers.sh => scripts/pnm/install_sls_headers.sh (100%)
+ rename install_sls_resource.sh => scripts/pnm/install_sls_resource.sh (100%)
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+index 19d356be4..348c03397 100644
+--- a/PNM_HOW_TO_BUILD.md
++++ b/PNM_HOW_TO_BUILD.md
+@@ -39,7 +39,7 @@ IMDB Resource Manager (IMDB_RESOURCE) [M/n/y/?] m
+ ## Install
+ 
+ ```bash
+-$ ./install_debs.sh
++$ ./scripts/pnm/install_debs.sh
+ ```
+ 
+ # DAX driver only
+@@ -50,7 +50,7 @@ $ make M=drivers/dax/ -j32
+ 
+ Built drivers can then be installed with `install_dax_drivers` script:
+ ```bash
+-$ ./install_dax_drivers.sh
++$ ./scripts/pnm/install_dax_drivers.sh
+ ```
+ 
+ # Class resource driver only (required to install SLS/IMDB resource)
+@@ -61,7 +61,7 @@ $ make M=drivers/pnm/ -j32
+ 
+ Built drivers can then be installed with `install_pnm_resource` script:
+ ```bash
+-$ ./install_pnm_resource.sh
++$ ./scripts/pnm/install_pnm_resource.sh
+ ```
+ 
+ # SLS resource driver only
+@@ -72,7 +72,7 @@ $ make M=drivers/pnm/sls_resource/ -j32
+ 
+ Built drivers can then be installed with `install_sls_resource` script:
+ ```bash
+-$ ./install_sls_resource.sh
++$ ./scripts/pnm/install_sls_resource.sh
+ ```
+ 
+ # IMDB resource driver only
+@@ -83,10 +83,10 @@ $ make M=drivers/pnm/imdb_resource/ -j32
+ 
+ Built drivers can then be installed with `install_imdb_resource` script:
+ ```bash
+-$ ./install_imdb_resource.sh
++$ ./scripts/pnm/install_imdb_resource.sh
+ ```
+ 
+ # Install SLS headers only
+ ```bash
+-$ ./install_sls_headers.sh
++$ ./scripts/pnm/install_sls_headers.sh
+ ```
+diff --git a/clean_linux_debs.py b/scripts/pnm/clean_linux_debs.py
+similarity index 100%
+rename from clean_linux_debs.py
+rename to scripts/pnm/clean_linux_debs.py
+diff --git a/install_dax_drivers.sh b/scripts/pnm/install_dax_drivers.sh
+similarity index 100%
+rename from install_dax_drivers.sh
+rename to scripts/pnm/install_dax_drivers.sh
+diff --git a/install_debs.sh b/scripts/pnm/install_debs.sh
+similarity index 64%
+rename from install_debs.sh
+rename to scripts/pnm/install_debs.sh
+index e8fd4c8b1..1be3c7700 100755
+--- a/install_debs.sh
++++ b/scripts/pnm/install_debs.sh
+@@ -1,6 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+-cd $(dirname $0)
+-
+-./clean_linux_debs.py . -y
++$(dirname $0)/clean_linux_debs.py . -y
+ sudo dpkg -i ../*$(make kernelrelease)*.deb
+diff --git a/install_imdb_resource.sh b/scripts/pnm/install_imdb_resource.sh
+similarity index 100%
+rename from install_imdb_resource.sh
+rename to scripts/pnm/install_imdb_resource.sh
+diff --git a/install_pnm_resource.sh b/scripts/pnm/install_pnm_resource.sh
+old mode 100644
+new mode 100755
+similarity index 100%
+rename from install_pnm_resource.sh
+rename to scripts/pnm/install_pnm_resource.sh
+diff --git a/install_sls_headers.sh b/scripts/pnm/install_sls_headers.sh
+similarity index 100%
+rename from install_sls_headers.sh
+rename to scripts/pnm/install_sls_headers.sh
+diff --git a/install_sls_resource.sh b/scripts/pnm/install_sls_resource.sh
+similarity index 100%
+rename from install_sls_resource.sh
+rename to scripts/pnm/install_sls_resource.sh
+-- 
+2.34.1
+

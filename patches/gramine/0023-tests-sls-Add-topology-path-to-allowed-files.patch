@@ -1,7 +1,7 @@
 From f5544c08200d8bbe627d78857da4902f91be20d3 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Tue, 20 Jun 2023 11:38:19 +0300
-Subject: [PATCH 23/27] [tests][sls] Add topology path to allowed files
+Subject: [PATCH 23/29] [tests][sls] Add topology path to allowed files
 
 Add topology path into manifests to allow the access to sysfs
 topology constants.

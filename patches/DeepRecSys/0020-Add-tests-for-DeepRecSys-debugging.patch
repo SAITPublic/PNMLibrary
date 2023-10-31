@@ -1,7 +1,7 @@
 From 72ddbd80980c4dd0a8813facd4636ada24ccca08 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Mon, 26 Sep 2022 14:29:32 +0300
-Subject: [PATCH 20/33] Add tests for DeepRecSys debugging.
+Subject: [PATCH 20/34] Add tests for DeepRecSys debugging.
 
 Add tests (using Python, `unittest` and `pexpect`) for the debugger
 script. Currently, there are two tests that should cover the most

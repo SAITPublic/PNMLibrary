@@ -1,7 +1,7 @@
 From 8d44e00dd04a3c2ce705bf26cb69c0bd27e5120f Mon Sep 17 00:00:00 2001
 From: Valentin Iliushin <v.iliushin@partner.samsung.com>
 Date: Wed, 30 Nov 2022 16:46:37 +0300
-Subject: [PATCH 071/161] [drivers/dax/axdimm] Remove cyclic dependency
+Subject: [PATCH 071/225] [drivers/dax/axdimm] Remove cyclic dependency
 
 Remove cyclic dependency between axdimm_process_manager.h and
 axdimm_allocator.h/axdimm_rank_scheduler.h

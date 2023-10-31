@@ -15,11 +15,12 @@
 
 #include "common/topology_constants.h"
 
+#include "test/utils/pnm_fmt.h"
+
 #include "pnmlib/core/allocator.h"
 #include "pnmlib/core/buffer.h"
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/device.h"
-#include "pnmlib/core/sls_device.h"
 
 #include "pnmlib/common/error.h"
 
@@ -43,6 +44,8 @@
 #include <tuple>
 #include <vector>
 
+using pnm::sls::device::topo;
+
 inline constexpr size_t allocations_count = 100'000;
 inline constexpr size_t threads_count = 20;
 /*
@@ -53,7 +56,7 @@ inline constexpr std::array alloc_pref{SLS_ALLOC_SINGLE,
                                        SLS_ALLOC_REPLICATE_ALL};
 
 //! @brief modes test how driver react to memory overflow
-enum class StressMode {
+enum class StressMode : uint8_t {
   //! @brief fill SLS memory and test return error
   capacity = 0,
 
@@ -71,7 +74,7 @@ enum class StressMode {
   multithreadedCapacity
 };
 
-constexpr auto stress_mode_to_str(StressMode mode) {
+constexpr auto format_as(StressMode mode) {
   switch (mode) {
   case StressMode::capacity:
     return "CAPACITY";
@@ -86,28 +89,13 @@ constexpr auto stress_mode_to_str(StressMode mode) {
       fmt::format("Unknown test mode {}", static_cast<int>(mode)));
 }
 
-constexpr auto preference_to_str(sls_user_preferences pref) {
-  switch (pref) {
-  case SLS_ALLOC_AUTO:
-    return "AUTO";
-  case SLS_ALLOC_REPLICATE_ALL:
-    return "REPLICATE_ALL";
-  case SLS_ALLOC_DISTRIBUTE_ALL:
-    return "DISTRIBUTE_ALL";
-  case SLS_ALLOC_SINGLE:
-    return "SINGLE";
-  }
-
-  throw std::runtime_error(fmt::format("Unknown policy {}", pref));
-}
-
 struct RunArgs {
   StressMode stress_mode;
   sls_user_preferences preference;
 
   void print() const {
-    fmt::print("STRESS MODE: {}\n", stress_mode_to_str(stress_mode));
-    fmt::print("DISTRIBUTE PREFERENCE: {}\n", preference_to_str(preference));
+    fmt::print("STRESS MODE: {}\n", stress_mode);
+    fmt::print("DISTRIBUTE PREFERENCE: {}\n", preference);
   }
 };
 
@@ -149,12 +137,12 @@ public:
 
   //! @brief get sls size to alloc
   [[nodiscard]] uint64_t expected_size() const {
-    const uint64_t total_memory_size = device_.base_memory_size();
+    const uint64_t total_memory_size = context->device()->memory_size();
 
     switch (pref_) {
     case SLS_ALLOC_AUTO:
     case SLS_ALLOC_REPLICATE_ALL:
-      return total_memory_size / pnm::device::topo().NumOfRanks;
+      return total_memory_size / topo().NumOfCUnits;
     case SLS_ALLOC_DISTRIBUTE_ALL:
       return total_memory_size;
     case SLS_ALLOC_SINGLE:
@@ -187,10 +175,7 @@ public:
   }
 
 private:
-  const SlsDevice device_ = SlsDevice::make(pnm::Device::Type::SLS_AXDIMM);
-
-  const pnm::ContextHandler context =
-      pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  const pnm::ContextHandler context = pnm::make_context(pnm::Device::Type::SLS);
 
   const sls_user_preferences pref_;
   std::vector<pnm::memory::Buffer<uint8_t>> allocations_;
@@ -318,8 +303,7 @@ inline auto
 print_test_name(const testing::TestParamInfo<Allocator::ParamType> &info) {
   const auto [mode, preference] = info.param;
 
-  return fmt::format("STRESS_MODE_{}__PREFERENCE_{}", stress_mode_to_str(mode),
-                     preference_to_str(preference));
+  return fmt::format("STRESS_MODE_{}__PREFERENCE_{}", mode, preference);
 };
 
 #endif // ALLOCATOR_H

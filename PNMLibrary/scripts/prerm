@@ -1,0 +1,3 @@
+#!/bin/sh
+
+rm /etc/bash_completion.d/pnm_ctl

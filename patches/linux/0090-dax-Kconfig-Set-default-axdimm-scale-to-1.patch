@@ -1,7 +1,7 @@
 From 7c66a207d5b6c65ddb42721ffab94dbd86706c77 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 4 Apr 2023 18:54:57 +0300
-Subject: [PATCH 090/161] [dax/Kconfig] Set default axdimm scale to 1
+Subject: [PATCH 090/225] [dax/Kconfig] Set default axdimm scale to 1
 
 There's no reason for it to be equal to 2 - that just confuses everyone
 and adds an annoying step to when you're reinstalling the kernel on the

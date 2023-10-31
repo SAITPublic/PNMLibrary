@@ -1,7 +1,7 @@
 From b470d8cae0cd97defea1bee0c665dc9f298a5a1a Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Mon, 17 Apr 2023 17:32:44 +0300
-Subject: [PATCH 102/161] [hotfix][axdimm] Fix install_axdimm_resource.sh
+Subject: [PATCH 102/225] [hotfix][axdimm] Fix install_axdimm_resource.sh
 
 The installation script contained an outdated path to the driver directory,
 `drivers/axdimm_resource`. The correct directory is `drivers/pnm/axdimm_resource`.

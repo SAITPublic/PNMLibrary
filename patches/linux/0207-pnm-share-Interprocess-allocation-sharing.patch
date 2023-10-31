@@ -1,0 +1,743 @@
+From 7058ca8e3dd19b491df721e7eee3fd226e46e87e Mon Sep 17 00:00:00 2001
+From: Bogdan Palkin <b.palkin@samsung.com>
+Date: Fri, 8 Sep 2023 13:45:22 +0000
+Subject: [PATCH 207/225] [pnm][share] Interprocess allocation sharing
+
+SUMMARY
+
+Basic implementation of a mechanism, which allows share allocations
+between independent processes using pipes, sockets and other IPC methods.
+
+USAGE
+
+The basic steps to share some region are next:
+
+1. Create a buffer
+2. Call method `make_shared` of this buffer. This method returns object of
+   `SharedRegion` class
+3. Call method `get_serialized` of this object. This method returns
+   vector of serialized regions
+4. Send this vector via some IPC mechanism to another process
+5. In the process-receiver receive vector of serialized regions and create
+   new object of `SharedRegion`
+6. Construct new buffer with this object as an argument
+7. Now you are able to use buffer with values, which was originally created
+   by another process
+
+DETAILS
+
+Basically, mechanism is based on a reference counting. When we call method
+`make_shared` in the library, on the kernel side new `entry` is created and
+added to a tree of entries inside `shared_pool` structure, which has
+independent instances for `sls` and `imdb`. During creation of new
+shared entry its reference counter `ref_cnt` initializes with `1`.
+
+When we create buffer out of a new shared region, on the kernel side we
+search for `entry` in `shared_pool` and, if entry was found, increment its
+`ref_cnt`, add region(allocation) to resource manager and then return some
+additional information(fields `size` and `is_global` from `pnm_allocation`
+structure, which copy is stored in `entry`) about region to the library.
+If everything was OK we will get a new buffer. It can be used to access
+values, which was originally created by another process.
+
+When buffer, which holds shared region, is deleted, on the kernel side
+we remove it from resource manager like it was before this PR, but
+we don't delete region(allocation) immediately after that, instead,
+we decrement `ref_cnt` of entry, which refers to this region.
+When `ref_cnt` becomes equal to `0` allocation is deleted.
+
+Resolves: MCS23-1474
+
+Signed-off-by: Bogdan Palkin <b.palkin@samsung.com>
+---
+ drivers/pnm/imdb_resource/allocator.c       |  40 +++-
+ drivers/pnm/imdb_resource/resource_device.c |   2 +
+ drivers/pnm/sls_resource/allocator.c        | 125 ++++++----
+ drivers/pnm/sls_resource/sls.c              |   2 +
+ include/linux/pnm_shared_pool.h             |  34 +++
+ include/uapi/linux/imdb_resources.h         |   4 +
+ include/uapi/linux/pnm_resources.h          |   3 +
+ include/uapi/linux/sls_resources.h          |   6 +-
+ lib/pnm/Makefile                            |   1 +
+ lib/pnm/pnm_shared_pool.c                   | 242 ++++++++++++++++++++
+ 10 files changed, 408 insertions(+), 51 deletions(-)
+ create mode 100644 include/linux/pnm_shared_pool.h
+ create mode 100644 lib/pnm/pnm_shared_pool.c
+
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index 10a3197fa..c89907c51 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -15,9 +15,11 @@
+ #include <linux/numa.h>
+ #include <linux/pnm_alloc.h>
+ #include <linux/pnm_log.h>
++#include <linux/pnm_shared_pool.h>
+ #include <linux/uaccess.h>
+ 
+ static struct pnm_alloc alloc;
++static struct pnm_shared_pool imdb_shared_pool;
+ 
+ void imdb_alloc_lock(void)
+ {
+@@ -40,11 +42,19 @@ static int allocate_memory(struct pnm_allocation *req)
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+-static void deallocate_memory(const struct pnm_allocation *req)
++static int deallocate_memory(const struct pnm_allocation *req)
+ {
++	if (req->is_global == 1) {
++		int rc = 0;
++
++		rc = pnm_shared_pool_remove_alloc(&imdb_shared_pool, req);
++		if (rc)
++			return rc;
++	}
++
+ 	uint64_t addr = req->addr;
+ 
+-	pnm_alloc_pool_free(&alloc, req->memory_pool, req->size, &addr);
++	return pnm_alloc_pool_free(&alloc, req->memory_pool, req->size, &addr);
+ }
+ 
+ /* Use this function under allocator_lock mutex */
+@@ -86,8 +96,21 @@ int allocator_ioctl(struct file *filp, unsigned int cmd,
+ 	case IMDB_IOCTL_DEALLOCATE:
+ 		imdb_alloc_lock();
+ 		{
+-			deallocate_memory(&req);
+ 			rc = imdb_unregister_allocation(filp, &req);
++			if (!rc)
++				rc = deallocate_memory(&req);
++		}
++		imdb_alloc_unlock();
++		break;
++	case IMDB_IOCTL_MAKE_SHARED_ALLOC:
++		rc = pnm_shared_pool_create_entry(&imdb_shared_pool, &req);
++		break;
++	case IMDB_IOCTL_GET_SHARED_ALLOC:
++		imdb_alloc_lock();
++		{
++			rc = pnm_shared_pool_get_alloc(&imdb_shared_pool, &req);
++			if (!rc)
++				rc = imdb_register_allocation(filp, &req);
+ 		}
+ 		imdb_alloc_unlock();
+ 		break;
+@@ -145,8 +168,12 @@ int initialize_memory_allocator(void)
+ 		};
+ 
+ 	err_code = pnm_alloc_init(&alloc, gran, nr_pools, ranges);
+-	if (!err_code)
++	if (!err_code) {
+ 		pnm_alloc_set_force_aligned(&alloc, true);
++		err_code = pnm_shared_pool_init(&imdb_shared_pool);
++		if (err_code)
++			pnm_alloc_cleanup(&alloc);
++	}
+ 
+ 	kfree(ranges);
+ 
+@@ -156,11 +183,16 @@ int initialize_memory_allocator(void)
+ void destroy_memory_allocator(void)
+ {
+ 	PNM_DBG("Destroy IMDB allocator\n");
++	pnm_shared_pool_cleanup(&imdb_shared_pool);
+ 	pnm_alloc_cleanup(&alloc);
+ }
+ 
+ int reset_memory_allocator(void)
+ {
++	int rc = 0;
+ 	PNM_INF("Reset allocator");
++	rc = pnm_shared_pool_reset(&imdb_shared_pool);
++	if (unlikely(rc))
++		return rc;
+ 	return pnm_alloc_reset(&alloc);
+ }
+diff --git a/drivers/pnm/imdb_resource/resource_device.c b/drivers/pnm/imdb_resource/resource_device.c
+index 34a787459..de40480a0 100644
+--- a/drivers/pnm/imdb_resource/resource_device.c
++++ b/drivers/pnm/imdb_resource/resource_device.c
+@@ -31,6 +31,8 @@ static long imdb_ioctl(struct file *file, unsigned int cmd,
+ 	switch (cmd) {
+ 	case IMDB_IOCTL_ALLOCATE:
+ 	case IMDB_IOCTL_DEALLOCATE:
++	case IMDB_IOCTL_MAKE_SHARED_ALLOC:
++	case IMDB_IOCTL_GET_SHARED_ALLOC:
+ 		result = allocator_ioctl(file, cmd, arg);
+ 		break;
+ 	case IMDB_IOCTL_GET_THREAD:
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index c45f2d1cd..cc4375834 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -12,11 +12,13 @@
+ #include <linux/numa.h>
+ #include <linux/pnm_alloc.h>
+ #include <linux/pnm_log.h>
++#include <linux/pnm_shared_pool.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+ static const struct sls_mem_cunit_info *mem_cunit_info;
+ static struct pnm_alloc alloc;
++static struct pnm_shared_pool sls_shared_pool;
+ 
+ void lock_sls_allocator(void)
+ {
+@@ -68,60 +70,53 @@ int init_sls_allocator(const struct sls_mem_cunit_info *cunit_info)
+ 	err_code = pnm_alloc_init(&alloc, gran, nr_cunits, ranges);
+ 	kfree(ranges);
+ 
++	err_code = pnm_shared_pool_init(&sls_shared_pool);
++	if (err_code)
++		pnm_alloc_cleanup(&alloc);
++
+ 	return err_code;
+ }
+ 
+ int reset_sls_allocator(void)
+ {
++	int err = 0;
+ 	PNM_DBG("Resetting SLS allocator\n");
++	err = pnm_shared_pool_reset(&sls_shared_pool);
++	if (unlikely(err))
++		return err;
+ 	return pnm_alloc_reset(&alloc);
+ }
+ 
+ void cleanup_sls_allocator(void)
+ {
+ 	PNM_DBG("Cleaning up SLS allocator\n");
++	pnm_shared_pool_cleanup(&sls_shared_pool);
+ 	pnm_alloc_cleanup(&alloc);
+ }
+ 
+-static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
++static int allocate_memory_ioctl(struct file *filp, struct pnm_allocation *kreq)
+ {
+-	int err;
+-	struct pnm_allocation kreq;
+-	struct pnm_allocation __user *ureq =
+-		(struct pnm_allocation __user *)arg;
+-
+-	SLS_COPY_FROM_USER(err, &kreq, ureq, sizeof(struct pnm_allocation));
+-	if (unlikely(err)) {
+-		PNM_ERR("Failed to read user alloc request. Ptr = %p.\n", ureq);
+-		return err;
+-	}
++	int err = 0;
+ 
+ 	lock_sls_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc.props);
+ 
+-		if (kreq.memory_pool == SLS_ALLOC_ANY_CUNIT)
+-			kreq.memory_pool = pnm_alloc_most_free_pool(&alloc);
++		if (kreq->memory_pool == SLS_ALLOC_ANY_CUNIT)
++			kreq->memory_pool = pnm_alloc_most_free_pool(&alloc);
+ 
+-		err = pnm_alloc_pool_malloc(&alloc, kreq.memory_pool, kreq.size,
+-					    &kreq.addr);
+-		if (unlikely(err)) {
+-			goto unlock_and_exit;
+-		}
++		err = pnm_alloc_pool_malloc(&alloc, kreq->memory_pool,
++					    kreq->size, &kreq->addr);
+ 
+-		SLS_COPY_TO_USER(err, ureq, &kreq,
+-				 sizeof(struct pnm_allocation));
+ 		if (unlikely(err)) {
+-			PNM_ERR("Failed to write user alloc request. Ptr = %p.\n",
+-				ureq);
+ 			goto unlock_and_exit;
+ 		}
+ 
+-		err = sls_proc_register_alloc(filp, kreq);
++		err = sls_proc_register_alloc(filp, *kreq);
+ 
+ 		if (!err) {
+ 			PNM_DBG("Allocated obj: pool[%u], cunit_offset = [0x%llx], size = [%llu]\n",
+-				kreq.memory_pool, kreq.addr, kreq.size);
++				kreq->memory_pool, kreq->addr, kreq->size);
+ 		}
+ 	}
+ 
+@@ -133,37 +128,49 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 
+ int deallocate_memory_unsafe(struct pnm_allocation req)
+ {
++	if (req.is_global == 1) {
++		int rc = 0;
++
++		rc = pnm_shared_pool_remove_alloc(&sls_shared_pool, &req);
++		if (rc)
++			return rc;
++	}
++
+ 	return pnm_alloc_pool_free(&alloc, req.memory_pool, req.size,
+ 				   &req.addr);
+ }
+ 
+-static int deallocate_memory_ioctl(struct file *filp, unsigned long __user arg)
++static int deallocate_memory_ioctl(struct file *filp,
++				   struct pnm_allocation *kreq)
+ {
+-	int err;
+-	struct pnm_allocation kreq;
+-	struct pnm_allocation __user *ureq =
+-		(struct pnm_allocation __user *)arg;
+-
+-	SLS_COPY_FROM_USER(err, &kreq, ureq, sizeof(struct pnm_allocation));
+-	if (unlikely(err)) {
+-		PNM_ERR("Failed to read user dealloc request. Ptr = %p.\n",
+-			ureq);
+-		return err;
+-	}
++	int err = 0;
+ 
+ 	lock_sls_allocator();
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc.props);
+ 
+-		err = deallocate_memory_unsafe(kreq);
+-		if (unlikely(err)) {
+-			goto unlock_and_exit;
+-		}
++		err = sls_proc_remove_alloc(filp, *kreq);
+ 
+-		err = sls_proc_remove_alloc(filp, kreq);
++		if (!err)
++			err = deallocate_memory_unsafe(*kreq);
+ 	}
++	unlock_sls_allocator();
+ 
+-unlock_and_exit:
++	return err;
++}
++
++static int get_shared_alloc_ioctl(struct file *filp,
++				  struct pnm_allocation *kreq)
++{
++	int err = 0;
++
++	lock_sls_allocator();
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(alloc.props);
++		err = pnm_shared_pool_get_alloc(&sls_shared_pool, kreq);
++		if (likely(!err))
++			err = sls_proc_register_alloc(filp, *kreq);
++	}
+ 	unlock_sls_allocator();
+ 
+ 	return err;
+@@ -182,15 +189,43 @@ uint64_t get_free_size(uint8_t cunit)
+ int mem_process_ioctl(struct file *filp, unsigned int cmd,
+ 		      unsigned long __user arg)
+ {
++	int err = 0;
++	struct pnm_allocation kreq;
++	struct pnm_allocation __user *ureq =
++		(struct pnm_allocation __user *)arg;
++
++	SLS_COPY_FROM_USER(err, &kreq, ureq, sizeof(struct pnm_allocation));
++	if (unlikely(err)) {
++		PNM_ERR("Failed to read user request. Ptr = %p.\n", ureq);
++		return err;
++	}
++
+ 	switch (cmd) {
+ 	case ALLOCATE_MEMORY:
+-		return allocate_memory_ioctl(filp, arg);
++		err = allocate_memory_ioctl(filp, &kreq);
++		break;
+ 	case DEALLOCATE_MEMORY:
+-		return deallocate_memory_ioctl(filp, arg);
++		err = deallocate_memory_ioctl(filp, &kreq);
++		break;
++	case MAKE_SHARED_ALLOC:
++		err = pnm_shared_pool_create_entry(&sls_shared_pool, &kreq);
++		break;
++	case GET_SHARED_ALLOC:
++		err = get_shared_alloc_ioctl(filp, &kreq);
++		break;
+ 	default:
++		err = -EINVAL;
+ 		PNM_ERR("Unknown memory operation [%u], with argument [%lu]\n",
+ 			cmd, arg);
++		return err;
+ 	}
+ 
+-	return -EINVAL;
++	if (unlikely(err))
++		return err;
++
++	SLS_COPY_TO_USER(err, ureq, &kreq, sizeof(struct pnm_allocation));
++	if (unlikely(err))
++		PNM_ERR("Failed to write user request. Ptr = %p.\n", ureq);
++
++	return err;
+ }
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 83c1b1626..be3dd0716 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -77,6 +77,8 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		break;
+ 	case ALLOCATE_MEMORY:
+ 	case DEALLOCATE_MEMORY:
++	case MAKE_SHARED_ALLOC:
++	case GET_SHARED_ALLOC:
+ 		retval = mem_process_ioctl(filp, cmd, arg);
+ 		break;
+ 	case GET_CUNIT_FOR_WRITE:
+diff --git a/include/linux/pnm_shared_pool.h b/include/linux/pnm_shared_pool.h
+new file mode 100644
+index 000000000..bf698b600
+--- /dev/null
++++ b/include/linux/pnm_shared_pool.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __PNM_SHARED_POOL_H__
++#define __PNM_SHARED_POOL_H__
++
++#include <linux/fs.h>
++#include <linux/rbtree.h>
++#include <linux/pnm_resources.h>
++#include <linux/mutex.h>
++
++struct pnm_shared_pool_entry {
++	struct rb_node node;
++	struct pnm_allocation alloc;
++	atomic64_t ref_cnt;
++};
++
++struct pnm_shared_pool {
++	struct rb_root entry_tree;
++	struct mutex lock;
++};
++
++int pnm_shared_pool_init(struct pnm_shared_pool *pool);
++void pnm_shared_pool_cleanup(struct pnm_shared_pool *pool);
++int pnm_shared_pool_reset(struct pnm_shared_pool *pool);
++
++int pnm_shared_pool_create_entry(struct pnm_shared_pool *pool,
++				 struct pnm_allocation *alloc);
++int pnm_shared_pool_get_alloc(struct pnm_shared_pool *pool,
++			      struct pnm_allocation *alloc);
++int pnm_shared_pool_remove_alloc(struct pnm_shared_pool *pool,
++				 const struct pnm_allocation *alloc);
++
++#endif /* __PNM_SHARED_POOL_H__ */
+diff --git a/include/uapi/linux/imdb_resources.h b/include/uapi/linux/imdb_resources.h
+index 302100cd7..ecdb397f2 100644
+--- a/include/uapi/linux/imdb_resources.h
++++ b/include/uapi/linux/imdb_resources.h
+@@ -42,5 +42,9 @@
+ 	_IOW(IMDB_RESOURCE_IOC_MAGIC, 2, struct pnm_allocation)
+ #define IMDB_IOCTL_GET_THREAD _IO(IMDB_RESOURCE_IOC_MAGIC, 3)
+ #define IMDB_IOCTL_RELEASE_THREAD _IOW(IMDB_RESOURCE_IOC_MAGIC, 4, uint8_t)
++#define IMDB_IOCTL_MAKE_SHARED_ALLOC \
++	_IOWR(IMDB_RESOURCE_IOC_MAGIC, 5, struct pnm_allocation)
++#define IMDB_IOCTL_GET_SHARED_ALLOC \
++	_IOWR(IMDB_RESOURCE_IOC_MAGIC, 6, struct pnm_allocation)
+ 
+ #endif /* __IMDB_RESOURCES_H__ */
+diff --git a/include/uapi/linux/pnm_resources.h b/include/uapi/linux/pnm_resources.h
+index 546cc57cf..ccd9d908e 100644
+--- a/include/uapi/linux/pnm_resources.h
++++ b/include/uapi/linux/pnm_resources.h
+@@ -25,6 +25,9 @@ struct pnm_allocation {
+ 	uint64_t addr;
+ 	uint64_t size;
+ 	uint8_t memory_pool;
++	// [TODO: MCS23-1724]
++	// Remove is_global after changes in process manager
++	uint8_t is_global;
+ };
+ #pragma pack(pop)
+ 
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index c6fdda3e9..18df0e47f 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -181,11 +181,13 @@ enum sls_user_preferences {
+ #define RELEASE_READ_CUNIT _IOW(SLS_IOC_MAGIC, 7, unsigned int)
+ #define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 8, struct pnm_allocation)
+ #define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 9, struct pnm_allocation)
++#define MAKE_SHARED_ALLOC _IOWR(SLS_IOC_MAGIC, 10, struct pnm_allocation)
++#define GET_SHARED_ALLOC _IOWR(SLS_IOC_MAGIC, 11, struct pnm_allocation)
+ 
+ // Required to switch CPU context to avoid hangs in SLS-CXL hardware
+ // [TODO: @y-lavrinenko] Get rid when firmware be more stable
+-#define NOP _IO(SLS_IOC_MAGIC, 10)
++#define NOP _IO(SLS_IOC_MAGIC, 12)
+ 
+-#define SLS_IOC_MAXNR (10)
++#define SLS_IOC_MAXNR (12)
+ 
+ #endif /* __SLS_RESOURCES_H__ */
+diff --git a/lib/pnm/Makefile b/lib/pnm/Makefile
+index 4b35e397b..bdcec0ad9 100644
+--- a/lib/pnm/Makefile
++++ b/lib/pnm/Makefile
+@@ -6,3 +6,4 @@ ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[LIB]\"
+ 
+ pnm_lib-y := pnm_alloc.o
+ pnm_lib-y += pnm_sched.o
++pnm_lib-y += pnm_shared_pool.o
+diff --git a/lib/pnm/pnm_shared_pool.c b/lib/pnm/pnm_shared_pool.c
+new file mode 100644
+index 000000000..67e2be486
+--- /dev/null
++++ b/lib/pnm/pnm_shared_pool.c
+@@ -0,0 +1,242 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include <linux/pnm_log.h>
++#include <linux/pnm_shared_pool.h>
++#include <linux/uaccess.h>
++
++static inline bool alloc_less(const struct pnm_allocation *a,
++			      const struct pnm_allocation *b)
++{
++	return a->memory_pool < b->memory_pool ||
++	       (a->memory_pool == b->memory_pool && a->addr < b->addr);
++}
++
++static struct pnm_shared_pool_entry *
++lookup_for_shared_entry(struct rb_root *root,
++			const struct pnm_allocation *alloc)
++{
++	struct rb_node *current_node = root->rb_node;
++
++	while (current_node) {
++		struct pnm_shared_pool_entry *entry = container_of(
++			current_node, struct pnm_shared_pool_entry, node);
++
++		if (alloc_less(alloc, &entry->alloc))
++			current_node = current_node->rb_left;
++		else if (alloc_less(&entry->alloc, alloc))
++			current_node = current_node->rb_right;
++		else
++			return entry;
++	}
++	return NULL;
++}
++
++static bool insert_shared_entry(struct rb_root *root,
++				struct pnm_shared_pool_entry *new_entry)
++{
++	struct rb_node **new_node = &(root->rb_node);
++	struct rb_node *parent = NULL;
++
++	while (*new_node) {
++		struct pnm_shared_pool_entry *current_entry = container_of(
++			*new_node, struct pnm_shared_pool_entry, node);
++
++		parent = *new_node;
++		if (alloc_less(&new_entry->alloc, &current_entry->alloc))
++			new_node = &((*new_node)->rb_left);
++		else if (alloc_less(&current_entry->alloc, &new_entry->alloc))
++			new_node = &((*new_node)->rb_right);
++		else
++			return false;
++	}
++
++	rb_link_node(&new_entry->node, parent, new_node);
++	rb_insert_color(&new_entry->node, root);
++
++	return true;
++}
++
++static bool delete_shared_entry(struct rb_root *root,
++				struct pnm_shared_pool_entry *entry)
++{
++	if (entry == NULL)
++		return false;
++
++	PNM_DBG("Deleting entry (%p) from shared pool", entry);
++	rb_erase(&entry->node, root);
++	kfree(entry);
++	return true;
++}
++
++static int get_alloc_from_shared_entry(struct pnm_shared_pool *pool,
++				       struct pnm_allocation *alloc)
++{
++	struct pnm_shared_pool_entry *entry = NULL;
++
++	mutex_lock(&pool->lock);
++	{
++		entry = lookup_for_shared_entry(&pool->entry_tree, alloc);
++	}
++	mutex_unlock(&pool->lock);
++
++	if (entry == NULL)
++		return -ENOENT;
++
++	alloc->memory_pool = entry->alloc.memory_pool;
++	alloc->addr = entry->alloc.addr;
++	alloc->size = entry->alloc.size;
++	alloc->is_global = entry->alloc.is_global;
++	atomic64_inc(&entry->ref_cnt);
++
++	PNM_DBG("Incrementing counter of entry %p (ref_cnt: %lld)", entry,
++		atomic64_read(&entry->ref_cnt));
++
++	return 0;
++}
++
++// This function returns:
++// - Error, if it was something wrong during execution
++// - Value of ref_cnt, if everything was OK. This value serves as
++//   a marker, which tells us should we deallocate allocation(ref_cnt == 0)
++//   or not (ref_cnt != 0)
++static int remove_alloc_from_shared_entry(struct pnm_shared_pool *pool,
++					  const struct pnm_allocation *alloc)
++{
++	struct pnm_shared_pool_entry *entry = NULL;
++
++	mutex_lock(&pool->lock);
++	{
++		entry = lookup_for_shared_entry(&pool->entry_tree, alloc);
++	}
++	mutex_unlock(&pool->lock);
++
++	if (entry == NULL)
++		return -ENOENT;
++
++	if (atomic64_dec_and_test(&entry->ref_cnt)) {
++		mutex_lock(&pool->lock);
++		{
++			if (!delete_shared_entry(&pool->entry_tree, entry)) {
++				mutex_unlock(&pool->lock);
++				return -ENOENT;
++			}
++		}
++		mutex_unlock(&pool->lock);
++	}
++
++	return atomic64_read(&entry->ref_cnt);
++}
++
++static int pnm_shared_pool_create_entry_impl(struct pnm_shared_pool *pool,
++					     struct pnm_allocation *alloc)
++{
++	struct pnm_shared_pool_entry *entry = NULL;
++
++	entry = kzalloc(sizeof(struct pnm_shared_pool_entry), GFP_KERNEL);
++
++	if (entry == NULL)
++		return -ENOMEM;
++
++	alloc->is_global = 1;
++	entry->alloc = *alloc;
++	atomic64_set(&entry->ref_cnt, 1);
++
++	mutex_lock(&pool->lock);
++	{
++		if (!insert_shared_entry(&pool->entry_tree, entry)) {
++			kfree(entry);
++			mutex_unlock(&pool->lock);
++			return -EINVAL;
++		}
++	}
++	mutex_unlock(&pool->lock);
++
++	PNM_DBG("Create shared entry: %p, ref_cnt: %lld, alloc: %p, addr: %llu, sz: %llu",
++		entry, atomic64_read(&entry->ref_cnt), alloc, alloc->addr,
++		alloc->size);
++	return 0;
++}
++
++int pnm_shared_pool_init(struct pnm_shared_pool *pool)
++{
++	if (pool == NULL)
++		return -EINVAL;
++
++	pool->entry_tree = RB_ROOT;
++	mutex_init(&pool->lock);
++	return 0;
++}
++EXPORT_SYMBOL(pnm_shared_pool_init);
++
++int pnm_shared_pool_create_entry(struct pnm_shared_pool *pool,
++				 struct pnm_allocation *alloc)
++{
++	if (pool == NULL || alloc == NULL)
++		return -EINVAL;
++
++	return pnm_shared_pool_create_entry_impl(pool, alloc);
++}
++EXPORT_SYMBOL(pnm_shared_pool_create_entry);
++
++int pnm_shared_pool_get_alloc(struct pnm_shared_pool *pool,
++			      struct pnm_allocation *alloc)
++{
++	if (pool == NULL || alloc == NULL)
++		return -EINVAL;
++
++	return get_alloc_from_shared_entry(pool, alloc);
++}
++EXPORT_SYMBOL(pnm_shared_pool_get_alloc);
++
++// This function returns:
++// - Error, if it was something wrong during execution
++// - Value of ref_cnt, if everything was OK. This value serves as
++//   a marker, which tells us should we deallocate allocation(ref_cnt == 0)
++//   or not (ref_cnt != 0)
++int pnm_shared_pool_remove_alloc(struct pnm_shared_pool *pool,
++				 const struct pnm_allocation *alloc)
++{
++	if (pool == NULL || alloc == NULL)
++		return -EINVAL;
++
++	return remove_alloc_from_shared_entry(pool, alloc);
++}
++EXPORT_SYMBOL(pnm_shared_pool_remove_alloc);
++
++void pnm_shared_pool_cleanup(struct pnm_shared_pool *pool)
++{
++	struct rb_node *next_node;
++
++	if (pool == NULL) {
++		PNM_DBG("Variable 'pool' is not valid");
++		return;
++	}
++
++	PNM_DBG("Cleanup shared pool");
++	mutex_lock(&pool->lock);
++	{
++		while ((next_node = rb_first(&pool->entry_tree))) {
++			struct pnm_shared_pool_entry *entry = rb_entry_safe(
++				next_node, struct pnm_shared_pool_entry, node);
++			delete_shared_entry(&pool->entry_tree, entry);
++		}
++	}
++	mutex_unlock(&pool->lock);
++	mutex_destroy(&pool->lock);
++}
++EXPORT_SYMBOL(pnm_shared_pool_cleanup);
++
++int pnm_shared_pool_reset(struct pnm_shared_pool *pool)
++{
++	if (pool == NULL) {
++		PNM_DBG("Variable 'pool' is not valid");
++		return -EINVAL;
++	}
++
++	PNM_DBG("Reset shared pool");
++	pnm_shared_pool_cleanup(pool);
++	pnm_shared_pool_init(pool);
++	return 0;
++}
++EXPORT_SYMBOL(pnm_shared_pool_reset);
+-- 
+2.34.1
+

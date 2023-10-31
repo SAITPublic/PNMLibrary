@@ -25,6 +25,8 @@
 #include <stdexcept>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Generate indices for each batch as sequence of number from 0 to
  * table_size * max_index_fraction_ */
 class SequentialIndicesGen : public IIndicesGenerator {
@@ -48,5 +50,7 @@ private:
     return indices;
   }
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_SEQUENTIAL_GENERATOR_H

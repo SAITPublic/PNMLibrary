@@ -20,9 +20,9 @@
 #include "pnmlib/core/memory.h"
 
 namespace pnm::memory {
-class IMDBAccessorCore : public SequentialAccessorCore {
+class ImdbAccessorCore : public SequentialAccessorCore {
 public:
-  IMDBAccessorCore(const pnm::memory::DeviceRegion &region,
+  ImdbAccessorCore(const pnm::memory::DeviceRegion &region,
                    DevicePointer &device)
       : SequentialAccessorCore(
             region, device,

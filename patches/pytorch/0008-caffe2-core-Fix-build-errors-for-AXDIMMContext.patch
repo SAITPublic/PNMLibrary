@@ -1,7 +1,7 @@
 From 71ba4d4cd11e8cc1328ce3c9f72d5ca15aa4b461 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 1 Nov 2021 16:56:55 +0900
-Subject: [PATCH 008/128] [caffe2/core] Fix build errors for AXDIMMContext
+Subject: [PATCH 008/135] [caffe2/core] Fix build errors for AXDIMMContext
 
 * add missed constructors
 * add missed methods

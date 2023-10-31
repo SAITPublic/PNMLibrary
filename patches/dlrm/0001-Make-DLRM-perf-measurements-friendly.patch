@@ -1,7 +1,7 @@
 From 5370e5faad1c26609402f7e1cc2548c4d69656fa Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 31 Aug 2022 13:43:37 +0900
-Subject: [PATCH 01/23] Make DLRM perf measurements friendly
+Subject: [PATCH 01/24] Make DLRM perf measurements friendly
 
 Separate test data generation from inference loop for performance measurements.
 Add time/QPS prints after inference is done.

@@ -36,11 +36,11 @@ void check_ranges(const R1 &test_range,
 }
 
 TEST(FixedVector, BaseOperation) {
-  sls::FixedVector<int, 5> a{1, 2, 3, 4, 5};
+  pnm::types::FixedVector<int, 5> a{1, 2, 3, 4, 5};
   check_ranges(a, {1, 2, 3, 4, 5});
   ASSERT_EQ(a.size(), 5);
 
-  sls::FixedVector<int, 5> b{5, 4, 3, 4, 5};
+  pnm::types::FixedVector<int, 5> b{5, 4, 3, 4, 5};
   auto c = a + b;
   check_ranges(c, {6, 6, 6, 8, 10});
 
@@ -55,9 +55,9 @@ TEST(FixedVector, BaseOperation) {
 }
 
 TEST(FixedVector, VectorCompare) {
-  const sls::FixedVector<int, 4> lhs{1, 2, 3, 4};
-  const sls::FixedVector<int, 4> rhs_equal{1, 2, 3, 4};
-  const sls::FixedVector<int, 4> rhs_nequal{4, 3, 2, 1};
+  const pnm::types::FixedVector<int, 4> lhs{1, 2, 3, 4};
+  const pnm::types::FixedVector<int, 4> rhs_equal{1, 2, 3, 4};
+  const pnm::types::FixedVector<int, 4> rhs_nequal{4, 3, 2, 1};
 
   ASSERT_TRUE(lhs == rhs_equal);
   ASSERT_TRUE(lhs != rhs_nequal);

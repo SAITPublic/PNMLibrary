@@ -1,7 +1,7 @@
 From dcfacbe9d7a1ea95b81f4aa7655f60b112ed58bd Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 20 Apr 2022 12:57:37 +0900
-Subject: [PATCH 020/161] NFC: add DAX_HOW_TO_BUILD.md guide for convenience
+Subject: [PATCH 020/225] NFC: add DAX_HOW_TO_BUILD.md guide for convenience
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

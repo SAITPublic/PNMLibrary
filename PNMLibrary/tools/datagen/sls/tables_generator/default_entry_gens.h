@@ -20,6 +20,8 @@
 #include <limits>
 #include <random>
 
+namespace tools::gen::sls {
+
 /*! \brief Generate random table entry */
 class RandomEntry {
 public:
@@ -80,5 +82,7 @@ struct FixedEntry {
     return value;
   }
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_DEFAULT_ENTRY_GENS_H

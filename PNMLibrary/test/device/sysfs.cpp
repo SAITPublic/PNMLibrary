@@ -14,8 +14,11 @@
 #include "wrapper.h"
 
 #include "core/device/sls/base.h"
+#include "core/device/sls/utils/constants.h"
 
 #include "common/topology_constants.h"
+
+#include "test/utils/pnm_fmt.h"
 
 #include "pnmlib/core/device.h"
 #include "pnmlib/core/sls_cunit_info.h"
@@ -23,7 +26,7 @@
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 
-#include <sched.h>
+#include <sys/types.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -31,10 +34,12 @@
 #include <random>
 #include <vector>
 
-const auto PNMDeviceTypes = ::testing::Values(pnm::Device::Type::SLS_AXDIMM,
-                                              pnm::Device::Type::IMDB_CXL);
+using pnm::sls::device::topo;
 
-class PNMTypesF : public ::testing::TestWithParam<pnm::Device::Type> {
+const auto PnmDeviceTypes =
+    ::testing::Values(pnm::Device::Type::SLS, pnm::Device::Type::IMDB);
+
+class PnmTypesF : public ::testing::TestWithParam<pnm::Device::Type> {
 public:
   void run(pnm::Device::Type DevType) {
     DeviceWrapper dev(DevType);
@@ -103,35 +108,34 @@ class AcquisitionCountF : public ::testing::TestWithParam<pnm::Device::Type> {
 public:
   void run(pnm::Device::Type DevType) {
     // [TODO: s.motov] add/remove acquisition count imdb/sls
-    if (DevType == pnm::Device::Type::IMDB_CXL) {
+    if (DevType == pnm::Device::Type::IMDB) {
       GTEST_SKIP() << "IMDB doesn't have acquisition count\n";
     }
 
-    auto dev = pnm::sls::device::BaseDevice::make_device(DevType);
+    auto dev = pnm::sls::device::BaseDevice::make_device();
 
     std::default_random_engine gen{std::random_device{}()};
     // acquire and free ranks by [a, b] times
     std::uniform_int_distribution<size_t> distrib(5, 10);
 
-    for (uint8_t rank = 0; rank < pnm::device::topo().NumOfRanks; ++rank) {
+    for (uint8_t rank = 0; rank < topo().NumOfCUnits; ++rank) {
 
       size_t old_aqc_count{};
       EXPECT_NO_THROW(old_aqc_count = dev->get_compute_unit_info(
-                          rank, SlsComputeUnitInfo::AcquisitionCount));
+                          rank, pnm::sls::ComputeUnitInfo::AcquisitionCount));
 
-      const pnm::sls::device::BaseDevice::bit_mask rank_mask = 1 << rank;
+      const pnm::sls::device::cunit cunit_mask = 1 << rank;
 
       auto count = distrib(gen);
       for (size_t j = 0; j < count; ++j) {
-        EXPECT_NO_THROW(
-            dev->acquire_cunit_for_write_from_range(&rank, rank_mask));
+        EXPECT_NO_THROW(dev->acquire_cunit_from_range(&rank, cunit_mask));
 
-        EXPECT_NO_THROW(dev->release_cunit_for_write(rank));
+        EXPECT_NO_THROW(dev->release_cunit(rank));
       }
 
       size_t new_aqc_count = 0;
       EXPECT_NO_THROW(new_aqc_count = dev->get_compute_unit_info(
-                          rank, SlsComputeUnitInfo::AcquisitionCount));
+                          rank, pnm::sls::ComputeUnitInfo::AcquisitionCount));
 
       EXPECT_EQ(new_aqc_count - old_aqc_count, count);
     }
@@ -179,16 +183,19 @@ public:
   }
 };
 
-TEST_P(PNMTypesF, CheckTypes) { this->run(GetParam()); }
+TEST_P(PnmTypesF, CheckTypes) { this->run(GetParam()); }
 TEST_P(EnableCleanupF, EnableCleanup) { this->run(GetParam()); }
 TEST_P(StateF, State) { this->run(GetParam()); }
 TEST_P(AcquisitionCountF, AcquisitionCount) { this->run(GetParam()); }
 TEST_P(LeakedF, Leaked) { this->run(GetParam()); }
 
-INSTANTIATE_TEST_SUITE_P(PNMDeviceTypeCheck, PNMTypesF, PNMDeviceTypes);
-INSTANTIATE_TEST_SUITE_P(PNMSysfsAPI, EnableCleanupF, PNMDeviceTypes,
-                         generate_param_name<EnableCleanupF>);
-INSTANTIATE_TEST_SUITE_P(PNMSysfsAPI, StateF, PNMDeviceTypes);
-INSTANTIATE_TEST_SUITE_P(PNMSysfsAPI, AcquisitionCountF, PNMDeviceTypes);
-INSTANTIATE_TEST_SUITE_P(PNMSysfsAPI, LeakedF, PNMDeviceTypes,
-                         generate_param_name<LeakedF>);
+INSTANTIATE_TEST_SUITE_P(PnmDeviceTypeCheck, PnmTypesF, PnmDeviceTypes,
+                         print_fmt_test_params);
+INSTANTIATE_TEST_SUITE_P(PnmSysfsAPI, EnableCleanupF, PnmDeviceTypes,
+                         print_fmt_test_params);
+INSTANTIATE_TEST_SUITE_P(PnmSysfsAPI, StateF, PnmDeviceTypes,
+                         print_fmt_test_params);
+INSTANTIATE_TEST_SUITE_P(PnmSysfsAPI, AcquisitionCountF, PnmDeviceTypes,
+                         print_fmt_test_params);
+INSTANTIATE_TEST_SUITE_P(PnmSysfsAPI, LeakedF, PnmDeviceTypes,
+                         print_fmt_test_params);

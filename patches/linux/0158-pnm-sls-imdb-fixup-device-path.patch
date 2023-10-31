@@ -1,7 +1,7 @@
 From bb143d789f4e5f9fb3504f85268c1b9ac2b8aedc Mon Sep 17 00:00:00 2001
 From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
 Date: Thu, 20 Jul 2023 17:00:12 +0300
-Subject: [PATCH 158/161] [pnm][sls/imdb] fixup device path
+Subject: [PATCH 158/225] [pnm][sls/imdb] fixup device path
 
 -add common class `pnm` module for (sls/imdb)_resource
 -add devnode (in func) with `pnm/` prefix in `pnm` class

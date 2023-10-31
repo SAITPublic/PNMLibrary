@@ -1,7 +1,7 @@
 From bf0ee2a2da2ca218403cc70402b887b7cb2ca31e Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 25 Nov 2021 13:43:45 +0900
-Subject: [PATCH 007/161] [drivers/dax] Support devdax <-> kmem for AXDIMM
+Subject: [PATCH 007/225] [drivers/dax] Support devdax <-> kmem for AXDIMM
 
 * make AXDIMM dax_dev multi-range: base, cfg, inst, psum.
 * export only base and psum ranges as system memory; writing to

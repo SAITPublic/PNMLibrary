@@ -1,0 +1,561 @@
+From 5df3e9d46aac2ca05edc97587841f16554bb561d Mon Sep 17 00:00:00 2001
+From: Bogdan Palkin <b.palkin@samsung.com>
+Date: Fri, 13 Oct 2023 09:22:08 +0000
+Subject: [PATCH 212/225] [pnm] Move library headers to include/linux/pnm
+
+Commit moves our library headers(pnm_alloc.h, pnm_log.h, etc.) to
+include/linux/pnm. So they will be placed nicely in our directory.
+
+Signed-off-by: Bogdan Palkin <b.palkin@samsung.com>
+---
+ drivers/pnm/class_resource.c                           | 2 +-
+ drivers/pnm/imdb_resource/allocator.c                  | 6 +++---
+ drivers/pnm/imdb_resource/imdb_cxl.c                   | 2 +-
+ drivers/pnm/imdb_resource/imdb_dax.c                   | 2 +-
+ drivers/pnm/imdb_resource/proc_mgr.c                   | 2 +-
+ drivers/pnm/imdb_resource/resource_device.c            | 2 +-
+ drivers/pnm/imdb_resource/sysfs.c                      | 2 +-
+ drivers/pnm/imdb_resource/thread_sched.c               | 4 ++--
+ drivers/pnm/imdb_resource/topo/export.c                | 2 +-
+ drivers/pnm/pnm_dax.c                                  | 2 +-
+ drivers/pnm/sls_resource/allocator.c                   | 6 +++---
+ drivers/pnm/sls_resource/cunit_scheduler.c             | 4 ++--
+ drivers/pnm/sls_resource/mem_info.c                    | 2 +-
+ drivers/pnm/sls_resource/private.h                     | 2 +-
+ drivers/pnm/sls_resource/process_manager.c             | 2 +-
+ drivers/pnm/sls_resource/resource.c                    | 2 +-
+ drivers/pnm/sls_resource/sls.c                         | 2 +-
+ drivers/pnm/sls_resource/sls_cxl.c                     | 2 +-
+ drivers/pnm/sls_resource/sls_dax.c                     | 2 +-
+ drivers/pnm/sls_resource/sysfs/cunits.c                | 2 +-
+ drivers/pnm/sls_resource/sysfs/mappings.c              | 2 +-
+ drivers/pnm/sls_resource/sysfs/sysfs.c                 | 2 +-
+ drivers/pnm/sls_resource/sysfs/topology.c              | 2 +-
+ drivers/pnm/sls_resource/topo/params.c                 | 2 +-
+ drivers/pnm/zswap/device.c                             | 2 +-
+ drivers/pnm/zswap/fs_compression.c                     | 2 +-
+ drivers/pnm/zswap/ps_compression.c                     | 2 +-
+ drivers/pnm/zswap/sim.c                                | 2 +-
+ include/linux/{pnm_alloc.h => pnm/alloc.h}             | 0
+ include/linux/{pnm_log.h => pnm/log.h}                 | 0
+ include/linux/{pnm_sched.h => pnm/sched.h}             | 0
+ include/linux/{pnm_shared_pool.h => pnm/shared_pool.h} | 4 ++--
+ lib/pnm/Makefile                                       | 6 +++---
+ lib/pnm/{pnm_alloc.c => alloc.c}                       | 4 ++--
+ lib/pnm/{pnm_sched.c => sched.c}                       | 4 ++--
+ lib/pnm/{pnm_shared_pool.c => shared_pool.c}           | 4 ++--
+ lib/pnm/zswap/pnm_zswap_lib.c                          | 2 +-
+ mm/pnm/pnm_zswap.c                                     | 2 +-
+ 38 files changed, 47 insertions(+), 47 deletions(-)
+ rename include/linux/{pnm_alloc.h => pnm/alloc.h} (100%)
+ rename include/linux/{pnm_log.h => pnm/log.h} (100%)
+ rename include/linux/{pnm_sched.h => pnm/sched.h} (100%)
+ rename include/linux/{pnm_shared_pool.h => pnm/shared_pool.h} (100%)
+ rename lib/pnm/{pnm_alloc.c => alloc.c} (99%)
+ rename lib/pnm/{pnm_sched.c => sched.c} (99%)
+ rename lib/pnm/{pnm_shared_pool.c => shared_pool.c} (98%)
+
+diff --git a/drivers/pnm/class_resource.c b/drivers/pnm/class_resource.c
+index 1aec7d870..71a6350f7 100644
+--- a/drivers/pnm/class_resource.c
++++ b/drivers/pnm/class_resource.c
+@@ -8,7 +8,7 @@
+ #include <linux/device/class.h>
+ #include <linux/fs.h>
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/pnm_resources.h>
+ 
+ #define RESOURCE_ACCESS_MODE 0666
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index decdc7fda..62f4e8d4a 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -14,9 +14,9 @@
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/numa.h>
+-#include <linux/pnm_alloc.h>
+-#include <linux/pnm_log.h>
+-#include <linux/pnm_shared_pool.h>
++#include <linux/pnm/alloc.h>
++#include <linux/pnm/log.h>
++#include <linux/pnm/shared_pool.h>
+ #include <linux/uaccess.h>
+ 
+ static struct pnm_alloc alloc;
+diff --git a/drivers/pnm/imdb_resource/imdb_cxl.c b/drivers/pnm/imdb_resource/imdb_cxl.c
+index e3a8acbc1..fbe8df998 100644
+--- a/drivers/pnm/imdb_resource/imdb_cxl.c
++++ b/drivers/pnm/imdb_resource/imdb_cxl.c
+@@ -2,7 +2,7 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ 
+ #include "cxl/cxl.h"
+ #include "device_resource.h"
+diff --git a/drivers/pnm/imdb_resource/imdb_dax.c b/drivers/pnm/imdb_resource/imdb_dax.c
+index 9947e1ab4..d73788cfa 100644
+--- a/drivers/pnm/imdb_resource/imdb_dax.c
++++ b/drivers/pnm/imdb_resource/imdb_dax.c
+@@ -6,7 +6,7 @@
+ #include "device_resource.h"
+ #include "private.h"
+ 
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ 
+ int init_imdb_dax_dev(struct device *dev, int region_id)
+ {
+diff --git a/drivers/pnm/imdb_resource/proc_mgr.c b/drivers/pnm/imdb_resource/proc_mgr.c
+index acdb9903a..8571f095c 100644
+--- a/drivers/pnm/imdb_resource/proc_mgr.c
++++ b/drivers/pnm/imdb_resource/proc_mgr.c
+@@ -12,7 +12,7 @@
+ #include "linux/stddef.h"
+ #include <linux/list.h>
+ #include <linux/mutex.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+ #include <linux/types.h>
+diff --git a/drivers/pnm/imdb_resource/resource_device.c b/drivers/pnm/imdb_resource/resource_device.c
+index b044e1967..4c828e7ff 100644
+--- a/drivers/pnm/imdb_resource/resource_device.c
++++ b/drivers/pnm/imdb_resource/resource_device.c
+@@ -17,7 +17,7 @@
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ 
+ static bool use_dax;
+ module_param(use_dax, bool, 0644);
+diff --git a/drivers/pnm/imdb_resource/sysfs.c b/drivers/pnm/imdb_resource/sysfs.c
+index ea99f917f..e3a8d4f63 100644
+--- a/drivers/pnm/imdb_resource/sysfs.c
++++ b/drivers/pnm/imdb_resource/sysfs.c
+@@ -14,7 +14,7 @@
+ #include <linux/device.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/kobject.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/slab.h>
+ #include <linux/stringify.h>
+ #include <linux/sysfs.h>
+diff --git a/drivers/pnm/imdb_resource/thread_sched.c b/drivers/pnm/imdb_resource/thread_sched.c
+index 72db10199..0e1d884f1 100644
+--- a/drivers/pnm/imdb_resource/thread_sched.c
++++ b/drivers/pnm/imdb_resource/thread_sched.c
+@@ -8,8 +8,8 @@
+ #include <linux/fs.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/kernel.h>
+-#include <linux/pnm_log.h>
+-#include <linux/pnm_sched.h>
++#include <linux/pnm/log.h>
++#include <linux/pnm/sched.h>
+ 
+ static struct pnm_sched thread_sched;
+ 
+diff --git a/drivers/pnm/imdb_resource/topo/export.c b/drivers/pnm/imdb_resource/topo/export.c
+index 8951a71f7..20a63f824 100644
+--- a/drivers/pnm/imdb_resource/topo/export.c
++++ b/drivers/pnm/imdb_resource/topo/export.c
+@@ -8,7 +8,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ 
+ #define SINGLE_VALUE_ATTR(param, value)                                       \
+ 	static ssize_t param##_show(struct device *device,                    \
+diff --git a/drivers/pnm/pnm_dax.c b/drivers/pnm/pnm_dax.c
+index 8df25f487..48cac6196 100644
+--- a/drivers/pnm/pnm_dax.c
++++ b/drivers/pnm/pnm_dax.c
+@@ -9,7 +9,7 @@
+ #include <linux/dax.h>
+ #include <linux/device.h>
+ #include <linux/memremap.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/range.h>
+ 
+ int init_pnm_dax_dev(struct device *dev, struct pnm_region *region)
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index cc4375834..cffb8e6ae 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -10,9 +10,9 @@
+ #include <linux/log2.h>
+ #include <linux/math.h>
+ #include <linux/numa.h>
+-#include <linux/pnm_alloc.h>
+-#include <linux/pnm_log.h>
+-#include <linux/pnm_shared_pool.h>
++#include <linux/pnm/alloc.h>
++#include <linux/pnm/log.h>
++#include <linux/pnm/shared_pool.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+diff --git a/drivers/pnm/sls_resource/cunit_scheduler.c b/drivers/pnm/sls_resource/cunit_scheduler.c
+index 54112b9bc..f33404514 100644
+--- a/drivers/pnm/sls_resource/cunit_scheduler.c
++++ b/drivers/pnm/sls_resource/cunit_scheduler.c
+@@ -6,8 +6,8 @@
+ #include "topo/params.h"
+ 
+ #include <linux/bitops.h>
+-#include <linux/pnm_log.h>
+-#include <linux/pnm_sched.h>
++#include <linux/pnm/log.h>
++#include <linux/pnm/sched.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ #include <linux/wait.h>
+diff --git a/drivers/pnm/sls_resource/mem_info.c b/drivers/pnm/sls_resource/mem_info.c
+index a3c2b59b1..e1b09f936 100644
+--- a/drivers/pnm/sls_resource/mem_info.c
++++ b/drivers/pnm/sls_resource/mem_info.c
+@@ -6,7 +6,7 @@
+ 
+ #include <linux/memremap.h>
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/slab.h>
+ 
+ static const struct sls_mem_info *mem_info;
+diff --git a/drivers/pnm/sls_resource/private.h b/drivers/pnm/sls_resource/private.h
+index 47b10b5e1..22ffe7663 100644
+--- a/drivers/pnm/sls_resource/private.h
++++ b/drivers/pnm/sls_resource/private.h
+@@ -9,7 +9,7 @@
+ #include <linux/device.h>
+ #include <linux/fs.h>
+ #include <linux/kobject.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/semaphore.h>
+ #include <linux/sls_common.h>
+ #include <linux/types.h>
+diff --git a/drivers/pnm/sls_resource/process_manager.c b/drivers/pnm/sls_resource/process_manager.c
+index 94ce1fa58..9cfc4f283 100644
+--- a/drivers/pnm/sls_resource/process_manager.c
++++ b/drivers/pnm/sls_resource/process_manager.c
+@@ -5,7 +5,7 @@
+ #include "allocator.h"
+ #include "cunit_scheduler.h"
+ 
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sched.h>
+ #include <linux/sched/signal.h>
+ #include <linux/slab.h>
+diff --git a/drivers/pnm/sls_resource/resource.c b/drivers/pnm/sls_resource/resource.c
+index 59e815763..37096a53a 100644
+--- a/drivers/pnm/sls_resource/resource.c
++++ b/drivers/pnm/sls_resource/resource.c
+@@ -4,7 +4,7 @@
+ #include "device_resource.h"
+ #include "sls.h"
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ 
+ static bool use_dax;
+ module_param(use_dax, bool, 0644);
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index be3dd0716..d1134ff81 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -15,7 +15,7 @@
+ #include <linux/mm.h>
+ #include <linux/mman.h>
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/slab.h>
+ #include <linux/sls_resources.h>
+ 
+diff --git a/drivers/pnm/sls_resource/sls_cxl.c b/drivers/pnm/sls_resource/sls_cxl.c
+index af6224ecd..5c0f72c66 100644
+--- a/drivers/pnm/sls_resource/sls_cxl.c
++++ b/drivers/pnm/sls_resource/sls_cxl.c
+@@ -3,7 +3,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ 
+ #include "cxl/cxl.h"
+ #include "device_resource.h"
+diff --git a/drivers/pnm/sls_resource/sls_dax.c b/drivers/pnm/sls_resource/sls_dax.c
+index 3802b616a..61fe782c0 100644
+--- a/drivers/pnm/sls_resource/sls_dax.c
++++ b/drivers/pnm/sls_resource/sls_dax.c
+@@ -7,7 +7,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/memremap.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sls_common.h>
+ #include <linux/sls_resources.h>
+ 
+diff --git a/drivers/pnm/sls_resource/sysfs/cunits.c b/drivers/pnm/sls_resource/sysfs/cunits.c
+index 75b1feb10..db3d5bdd6 100644
+--- a/drivers/pnm/sls_resource/sysfs/cunits.c
++++ b/drivers/pnm/sls_resource/sysfs/cunits.c
+@@ -9,7 +9,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sls_resources.h>
+ #include <linux/string.h>
+ #include <linux/types.h>
+diff --git a/drivers/pnm/sls_resource/sysfs/mappings.c b/drivers/pnm/sls_resource/sysfs/mappings.c
+index e6e153551..6ceb1b2a5 100644
+--- a/drivers/pnm/sls_resource/sysfs/mappings.c
++++ b/drivers/pnm/sls_resource/sysfs/mappings.c
+@@ -7,7 +7,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sls_resources.h>
+ #include <linux/string.h>
+ #include <linux/types.h>
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs.c b/drivers/pnm/sls_resource/sysfs/sysfs.c
+index 4fc5885ba..ca7cf2fd1 100644
+--- a/drivers/pnm/sls_resource/sysfs/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.c
+@@ -11,7 +11,7 @@
+ #include "topo/params.h"
+ 
+ #include <linux/kernel.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sls_resources.h>
+ #include <linux/string.h>
+ #include <linux/types.h>
+diff --git a/drivers/pnm/sls_resource/sysfs/topology.c b/drivers/pnm/sls_resource/sysfs/topology.c
+index 0edb36e6c..7444ac684 100644
+--- a/drivers/pnm/sls_resource/sysfs/topology.c
++++ b/drivers/pnm/sls_resource/sysfs/topology.c
+@@ -6,7 +6,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/kernel.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sls_resources.h>
+ 
+ #define SINGLE_VALUE_ATTR(param, value)                                       \
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index 4363917aa..fae00866a 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -9,7 +9,7 @@
+ #include <linux/bitfield.h>
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sls_common.h>
+ 
+ // [TODO:] Get rid of kconfig dev_type parameter
+diff --git a/drivers/pnm/zswap/device.c b/drivers/pnm/zswap/device.c
+index ea03290be..fe2ece3ae 100644
+--- a/drivers/pnm/zswap/device.c
++++ b/drivers/pnm/zswap/device.c
+@@ -13,7 +13,7 @@
+ #include <linux/mm_types.h>
+ #include <linux/module.h>
+ #include <linux/pnm/cxl_zswap_driver.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/slab.h>
+ #include <linux/spinlock.h>
+ #include <linux/types.h>
+diff --git a/drivers/pnm/zswap/fs_compression.c b/drivers/pnm/zswap/fs_compression.c
+index fe283791e..3c124ef24 100644
+--- a/drivers/pnm/zswap/fs_compression.c
++++ b/drivers/pnm/zswap/fs_compression.c
+@@ -6,7 +6,7 @@
+ #include "sim.h"
+ 
+ #include <linux/crypto.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/printk.h>
+ #include <linux/slab.h>
+ #include <linux/types.h>
+diff --git a/drivers/pnm/zswap/ps_compression.c b/drivers/pnm/zswap/ps_compression.c
+index f98ef1422..3dbd38d9f 100644
+--- a/drivers/pnm/zswap/ps_compression.c
++++ b/drivers/pnm/zswap/ps_compression.c
+@@ -9,7 +9,7 @@
+ #include <linux/log2.h>
+ #include <linux/math64.h>
+ #include <linux/module.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/slab.h>
+ #include <linux/smp.h>
+ 
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index a19e475d6..002026d66 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -17,7 +17,7 @@
+ #include <linux/module.h>
+ #include <linux/pnm/cxl_zswap.h>
+ #include <linux/pnm/cxl_zswap_driver.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/sched.h>
+ #include <linux/semaphore.h>
+ #include <linux/slab.h>
+diff --git a/include/linux/pnm_alloc.h b/include/linux/pnm/alloc.h
+similarity index 100%
+rename from include/linux/pnm_alloc.h
+rename to include/linux/pnm/alloc.h
+diff --git a/include/linux/pnm_log.h b/include/linux/pnm/log.h
+similarity index 100%
+rename from include/linux/pnm_log.h
+rename to include/linux/pnm/log.h
+diff --git a/include/linux/pnm_sched.h b/include/linux/pnm/sched.h
+similarity index 100%
+rename from include/linux/pnm_sched.h
+rename to include/linux/pnm/sched.h
+diff --git a/include/linux/pnm_shared_pool.h b/include/linux/pnm/shared_pool.h
+similarity index 100%
+rename from include/linux/pnm_shared_pool.h
+rename to include/linux/pnm/shared_pool.h
+index bf698b600..0ef6be48c 100644
+--- a/include/linux/pnm_shared_pool.h
++++ b/include/linux/pnm/shared_pool.h
+@@ -5,9 +5,9 @@
+ #define __PNM_SHARED_POOL_H__
+ 
+ #include <linux/fs.h>
+-#include <linux/rbtree.h>
+-#include <linux/pnm_resources.h>
+ #include <linux/mutex.h>
++#include <linux/pnm_resources.h>
++#include <linux/rbtree.h>
+ 
+ struct pnm_shared_pool_entry {
+ 	struct rb_node node;
+diff --git a/lib/pnm/Makefile b/lib/pnm/Makefile
+index bdcec0ad9..b08d4681b 100644
+--- a/lib/pnm/Makefile
++++ b/lib/pnm/Makefile
+@@ -4,6 +4,6 @@ obj-$(CONFIG_PNM_LIB) += pnm_lib.o
+ 
+ ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[LIB]\"
+ 
+-pnm_lib-y := pnm_alloc.o
+-pnm_lib-y += pnm_sched.o
+-pnm_lib-y += pnm_shared_pool.o
++pnm_lib-y := alloc.o
++pnm_lib-y += sched.o
++pnm_lib-y += shared_pool.o
+diff --git a/lib/pnm/pnm_alloc.c b/lib/pnm/alloc.c
+similarity index 99%
+rename from lib/pnm/pnm_alloc.c
+rename to lib/pnm/alloc.c
+index 73e2e1475..75fc434eb 100644
+--- a/lib/pnm/pnm_alloc.c
++++ b/lib/pnm/alloc.c
+@@ -1,8 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+-#include <linux/pnm_alloc.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/alloc.h>
++#include <linux/pnm/log.h>
+ #include <linux/range.h>
+ #include <linux/slab.h>
+ 
+diff --git a/lib/pnm/pnm_sched.c b/lib/pnm/sched.c
+similarity index 99%
+rename from lib/pnm/pnm_sched.c
+rename to lib/pnm/sched.c
+index b020204b3..d31ab5656 100644
+--- a/lib/pnm/pnm_sched.c
++++ b/lib/pnm/sched.c
+@@ -2,8 +2,8 @@
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+ #include <linux/mutex.h>
+-#include <linux/pnm_log.h>
+-#include <linux/pnm_sched.h>
++#include <linux/pnm/log.h>
++#include <linux/pnm/sched.h>
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+ #include <linux/wait.h>
+diff --git a/lib/pnm/pnm_shared_pool.c b/lib/pnm/shared_pool.c
+similarity index 98%
+rename from lib/pnm/pnm_shared_pool.c
+rename to lib/pnm/shared_pool.c
+index 67e2be486..815b6df57 100644
+--- a/lib/pnm/pnm_shared_pool.c
++++ b/lib/pnm/shared_pool.c
+@@ -1,8 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+-#include <linux/pnm_log.h>
+-#include <linux/pnm_shared_pool.h>
++#include <linux/pnm/log.h>
++#include <linux/pnm/shared_pool.h>
+ #include <linux/uaccess.h>
+ 
+ static inline bool alloc_less(const struct pnm_allocation *a,
+diff --git a/lib/pnm/zswap/pnm_zswap_lib.c b/lib/pnm/zswap/pnm_zswap_lib.c
+index 4ee2646a5..3d77275c5 100644
+--- a/lib/pnm/zswap/pnm_zswap_lib.c
++++ b/lib/pnm/zswap/pnm_zswap_lib.c
+@@ -17,7 +17,7 @@
+ #include <linux/module.h> /* needed for EXPORT_SYMBOL */
+ #include <linux/moduleparam.h> /* needed for module_param */
+ #include <linux/pnm/cxl_zswap.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/slab.h> /* kmalloc(), kfree() */
+ #include <linux/spinlock.h>
+ #include <linux/types.h> /* needed for size_t, gfp_t type */
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index c850dfd8f..ecdbcbc5c 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -21,7 +21,7 @@
+ #include <linux/page-flags.h>
+ #include <linux/pagemap.h>
+ #include <linux/pnm/cxl_zswap.h>
+-#include <linux/pnm_log.h>
++#include <linux/pnm/log.h>
+ #include <linux/preempt.h>
+ #include <linux/processor.h>
+ #include <linux/rbtree.h>
+-- 
+2.34.1
+

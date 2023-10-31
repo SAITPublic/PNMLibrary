@@ -1,7 +1,7 @@
 From ed25758747e2c000b349f9ed16e48fcfddd46935 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 14 Mar 2022 16:53:50 +0900
-Subject: [PATCH 019/161] [libaxdimm] Change AXDIMM_BASE_ADDR to 66Gb
+Subject: [PATCH 019/225] [libaxdimm] Change AXDIMM_BASE_ADDR to 66Gb
 
 Setup new AXDIMM_BASE_ADDR to reflect recent BIOS changes for homogeneity.
 

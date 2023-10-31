@@ -1,7 +1,7 @@
 From 255b93e4222ca9f50d028dc9b940e80b8b2b0b1a Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Wed, 12 Jul 2023 13:27:06 +0300
-Subject: [PATCH 127/128] [sls] Adapt to new SLS API header paths.
+Subject: [PATCH 127/135] [sls] Adapt to new SLS API header paths.
 
 SAIT/PNMLibrary#566 renamed PNM API header directory from `pnmlib/ai`
 to `pnmlib/sls`. This commit makes Pytorch use the new names.

@@ -28,16 +28,16 @@
 #include <string_view>
 #include <system_error>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
-/*! Partial specialization of SLSRunStrategyFactory<SLSDeviceRunStrategy> for
- * SLSProducerConsumer<ThreadCreationStrategy> strategy
+/*! Partial specialization of SlsRunStrategyFactory<SlsDeviceRunStrategy> for
+ * SlsProducerConsumer<ThreadCreationStrategy> strategy
  * */
 template <typename ThreadCreationStrategy>
-struct SLSOffloadingStrategyFactory<
-    SLSProducerConsumer<ThreadCreationStrategy>> {
-  static SLSProducerConsumer<ThreadCreationStrategy> create_strategy() {
-    return SLSProducerConsumer<ThreadCreationStrategy>(get_thread_count(), {},
+struct SlsOffloadingStrategyFactory<
+    SlsProducerConsumer<ThreadCreationStrategy>> {
+  static SlsProducerConsumer<ThreadCreationStrategy> create_strategy() {
+    return SlsProducerConsumer<ThreadCreationStrategy>(get_thread_count(), {},
                                                        "SecNDPThread-");
   }
 
@@ -75,23 +75,24 @@ struct SLSOffloadingStrategyFactory<
 };
 
 template <typename T>
-using SyncCPURunner = Runner<
-    OperationExecutor<T, sls::secure::TrivialCPU<T>, sls::secure::SLSSync>>;
+using SyncCpuRunner =
+    Runner<OperationExecutor<T, pnm::sls::secure::TrivialCPU<T>,
+                             pnm::sls::secure::SlsSync>>;
 
 template <typename T>
-using SyncSLSRunner =
-    Runner<OperationExecutor<T, sls::secure::UntrustedDevice<T>,
-                             sls::secure::SLSSync>>;
+using SyncSlsRunner =
+    Runner<OperationExecutor<T, pnm::sls::secure::UntrustedDevice<T>,
+                             pnm::sls::secure::SlsSync>>;
 
 template <typename T>
-using ProdConsSLSRunner = Runner<
-    OperationExecutor<T, sls::secure::UntrustedDevice<T>,
-                      sls::secure::SLSProducerConsumer<pnm::threads::Manager>>>;
+using ProdConsSlsRunner = Runner<OperationExecutor<
+    T, pnm::sls::secure::UntrustedDevice<T>,
+    pnm::sls::secure::SlsProducerConsumer<pnm::threads::Manager>>>;
 
 template <typename T>
-using ProdConsCPURunner = Runner<
-    OperationExecutor<T, sls::secure::TrivialCPU<T>,
-                      sls::secure::SLSProducerConsumer<pnm::threads::Manager>>>;
-} // namespace sls::secure
+using ProdConsCpuRunner = Runner<OperationExecutor<
+    T, pnm::sls::secure::TrivialCPU<T>,
+    pnm::sls::secure::SlsProducerConsumer<pnm::threads::Manager>>>;
+} // namespace pnm::sls::secure
 
 #endif // SLS_SECURE_H

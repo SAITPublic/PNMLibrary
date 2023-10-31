@@ -1,7 +1,7 @@
 From 0eeaf48d0aa844306276f216f1dc3fc7e3feae51 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 23 Dec 2021 15:14:32 +0900
-Subject: [PATCH 017/161] [drivers/dax/axdimm] Cleanup axdimm_meminfo_cdev in
+Subject: [PATCH 017/225] [drivers/dax/axdimm] Cleanup axdimm_meminfo_cdev in
  case of probe failure
 
 Add axdimm_meminfo_cdev cleanup in case of dax driver probe failure,

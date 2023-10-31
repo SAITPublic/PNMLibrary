@@ -1,7 +1,7 @@
 From f84bb44cc50e351ed1add6ab53789137da655022 Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Tue, 10 Jan 2023 19:41:04 +0300
-Subject: [PATCH 13/27] [ci] Temporary fix for musl download failure
+Subject: [PATCH 13/29] [ci] Temporary fix for musl download failure
 
 Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 ---

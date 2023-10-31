@@ -18,7 +18,7 @@
 #include <cstddef>
 #include <iterator>
 
-namespace pnm {
+namespace pnm::views {
 /*! \brief Rowwise view with variable row size
  *
  * This class represents rowwise view with variable row size specified by
@@ -29,21 +29,20 @@ namespace pnm {
  * @tparam T -- type of elements in view
  * @tparam I -- type of elements in row_size view with row's lengths
  * */
-template <typename T, typename I = const unsigned> class variable_row_view {
+template <typename T, typename I = const unsigned> class variable_row {
 public:
-  variable_row_view() = default;
-  variable_row_view(T *begin, T *end, common_view<I> row_size)
+  variable_row() = default;
+  variable_row(T *begin, T *end, common<I> row_size)
       : begin_{begin}, end_{end}, row_size_{row_size} {}
 
   template <typename R> struct views_iterator {
     using iterator_category = std::bidirectional_iterator_tag;
-    using value_type = common_view<R>;
+    using value_type = common<R>;
     using difference_type = std::ptrdiff_t;
     using pointer = value_type *;
     using reference = value_type &;
 
-    views_iterator(R *base, const I *row_size,
-                   const variable_row_view<T, I> *view)
+    views_iterator(R *base, const I *row_size, const variable_row<T, I> *view)
         : base_{base}, row_size_{row_size}, view_{view} {
       update();
     }
@@ -96,7 +95,7 @@ public:
     R *base_;
     const I *row_size_;
     value_type current_;
-    const variable_row_view<T, I> *view_;
+    const variable_row<T, I> *view_;
   };
 
   auto begin() { return views_iterator<T>(begin_, row_size_.begin(), this); }
@@ -115,13 +114,13 @@ public:
 
 private:
   T *begin_ = nullptr, *end_ = nullptr;
-  common_view<I> row_size_ = {};
+  common<I> row_size_ = {};
 };
 
 template <typename T, typename I = const unsigned>
-auto make_variable_row_view(T *begin, T *end, common_view<I> row_size) {
-  return variable_row_view(begin, end, row_size);
+auto make_variable_row_view(T *begin, T *end, common<I> row_size) {
+  return variable_row(begin, end, row_size);
 }
-} // namespace pnm
+} // namespace pnm::views
 
 #endif // PNM_VARIABLE_ROW_VIEW_H

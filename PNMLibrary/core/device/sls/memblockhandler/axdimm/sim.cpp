@@ -13,8 +13,8 @@
 
 #include "sim.h"
 
-#include "core/device/sls/memory_map.h"
-#include "core/device/sls/rank_address.h"
+#include "core/device/sls/utils/memory_map.h"
+#include "core/device/sls/utils/rank_address.h"
 
 #include <linux/sls_resources.h>
 

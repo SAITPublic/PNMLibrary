@@ -1,7 +1,7 @@
 From cd5a612d836a1220ed67f4a1b37664b4ab0242e7 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Wed, 17 May 2023 14:24:29 +0300
-Subject: [PATCH 109/161] [imdb] Add scale for dba_resource allocator
+Subject: [PATCH 109/225] [imdb] Add scale for dba_resource allocator
 
 Add CONFIG_IMDB_MEMORY_SCALE for scaling IMDB's allocator size
 Update PNM_HOW_TO_BUILD.md descriptions

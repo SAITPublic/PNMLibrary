@@ -21,7 +21,9 @@
 #include <functional>
 #include <vector>
 
-class PNMSLSOperation;
+namespace pnm::operations {
+class SlsOperation;
+} // namespace pnm::operations
 
 namespace pnm::sls {
 
@@ -33,7 +35,7 @@ class ExecutionGenerator;
 */
 class ExecutionPacksData {
 public:
-  explicit ExecutionPacksData(const PNMSLSOperation &sls_op);
+  explicit ExecutionPacksData(const pnm::operations::SlsOperation &sls_op);
 
   void init(const ExecutionGenerator &exec_gen);
 
@@ -103,7 +105,7 @@ private:
   LengthsPacksData length_exec_;
   IndicesPacksData index_exec_;
 
-  const PNMSLSOperation &sls_op_;
+  const operations::SlsOperation &sls_op_;
 
   std::vector<DataInitializer> data_initializers_;
 

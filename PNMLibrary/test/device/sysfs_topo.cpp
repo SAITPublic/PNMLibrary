@@ -18,24 +18,16 @@
 #include <linux/sls_resources.h>
 
 #include <filesystem>
-#include <utility>
 
 #define ABS_PATH(rel_path) SLS_SYSFS_ROOT "/" rel_path
 
 //[TODO: @y-lavrinenko] Add fix to reinitialize module with predefined topology
 
 TEST(TopologySysfs, PathExist) {
-  ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_NUM_OF_RANKS_PATH)));
-  ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_NUM_OF_CS_PATH)));
-  ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_NUM_OF_CHANNEL_PATH)));
+  ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_NUM_OF_CUNITS_PATH)));
   ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_INSTRUCTION_SIZE_PATH)));
   ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_DATA_SIZE_PATH)));
   ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_ALIGNED_TAG_SIZE_PATH)));
-  ASSERT_TRUE(
-      std::filesystem::exists(ABS_PATH(ATTR_RANK_INTERLEAVING_SIZE_PATH)));
-  ASSERT_TRUE(
-      std::filesystem::exists(ABS_PATH(ATTR_CHANNEL_INTERLEAVING_SIZE_PATH)));
-  ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_INTERLEAVING_STRIDE_PATH)));
   ASSERT_TRUE(
       std::filesystem::exists(ABS_PATH(ATTR_POLLING_REGISTER_OFFSET_PATH)));
   ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_SLS_EXEC_VALUE_PATH)));
@@ -43,22 +35,21 @@ TEST(TopologySysfs, PathExist) {
   ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_PSUM_BUFFER_PATH)));
   ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_TAGS_BUFFER_PATH)));
   ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_INST_BUFFER_PATH)));
+  ASSERT_TRUE(std::filesystem::exists(ABS_PATH(ATTR_BUFFER_SIZE_PATH)));
 }
 
-using pnm::device::topo;
+using pnm::sls::device::topo;
 
 template <typename T>
 void check_value(const std::filesystem::path &path, T golden) {
   T value{};
-  EXPECT_NO_THROW(pnm::control::utils::read_file(path, value))
+  EXPECT_NO_THROW(pnm::control::read_file(path, value))
       << "Exception threw at read " << path;
   EXPECT_EQ(value, golden) << "Value mismatch for " << path;
 }
 
 TEST(TopologySysfs, MemoryTopology) {
-  check_value(ABS_PATH(ATTR_NUM_OF_RANKS_PATH), topo().NumOfRanks);
-  check_value(ABS_PATH(ATTR_NUM_OF_CS_PATH), topo().NumOfCS);
-  check_value(ABS_PATH(ATTR_NUM_OF_CHANNEL_PATH), topo().NumOfChannels);
+  check_value(ABS_PATH(ATTR_NUM_OF_CUNITS_PATH), topo().NumOfCUnits);
 }
 
 TEST(TopologySysfs, InstructionSizes) {
@@ -67,35 +58,17 @@ TEST(TopologySysfs, InstructionSizes) {
   check_value(ABS_PATH(ATTR_ALIGNED_TAG_SIZE_PATH), topo().AlignedTagSize);
 }
 
-TEST(TopologySysfs, Interleaving) {
-  check_value(ABS_PATH(ATTR_RANK_INTERLEAVING_SIZE_PATH),
-              topo().RankInterleavingSize);
-  check_value(ABS_PATH(ATTR_CHANNEL_INTERLEAVING_SIZE_PATH),
-              topo().ChannelInterleavingSize);
-  check_value(ABS_PATH(ATTR_INTERLEAVING_STRIDE_PATH),
-              topo().InterleavingStrideLength);
-}
-
 TEST(TopologySysfs, Registers) {
   check_value(ABS_PATH(ATTR_POLLING_REGISTER_OFFSET_PATH), topo().RegPolling);
-  check_value(ABS_PATH(ATTR_SLS_EXEC_VALUE_PATH), topo().RegSLSExec);
-  check_value(ABS_PATH(ATTR_REG_SLS_EN_PATH), topo().RegSLSEn);
-}
-
-template <typename T>
-void check_value(const std::filesystem::path &path, std::pair<T, T> golden) {
-  std::pair<T, T> value{};
-  EXPECT_NO_THROW(
-      pnm::control::utils::read_file(path, value.first, value.second))
-      << "Exception threw at read " << path;
-  EXPECT_EQ(value, golden) << "Value mismatch for " << path;
+  check_value(ABS_PATH(ATTR_SLS_EXEC_VALUE_PATH), topo().RegSlsExec);
+  check_value(ABS_PATH(ATTR_REG_SLS_EN_PATH), topo().RegSlsEn);
 }
 
 TEST(TopologySysfs, Buffers) {
-  check_value(ABS_PATH(ATTR_PSUM_BUFFER_PATH),
-              std::pair{topo().NumOfPSumBuf, topo().PSumBufSize});
-  check_value(ABS_PATH(ATTR_TAGS_BUFFER_PATH),
-              std::pair{topo().NumOfTagsBuf, topo().TagsBufSize});
-  check_value(ABS_PATH(ATTR_INST_BUFFER_PATH),
-              std::pair{topo().NumOfInstBuf, topo().InstBufSize});
+  check_value(ABS_PATH(ATTR_PSUM_BUFFER_PATH), topo().NumOfPSumBuf);
+  check_value(ABS_PATH(ATTR_TAGS_BUFFER_PATH), topo().NumOfTagsBuf);
+  check_value(ABS_PATH(ATTR_INST_BUFFER_PATH), topo().NumOfInstBuf);
+  check_value(ABS_PATH(ATTR_BUFFER_SIZE_PATH), topo().PSumBufSize);
+  check_value(ABS_PATH(ATTR_BUFFER_SIZE_PATH), topo().TagsBufSize);
+  check_value(ABS_PATH(ATTR_BUFFER_SIZE_PATH), topo().InstBufSize);
 }

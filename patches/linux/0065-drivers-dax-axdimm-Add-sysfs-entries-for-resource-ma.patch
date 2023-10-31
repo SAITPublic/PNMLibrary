@@ -1,7 +1,7 @@
 From a496b1848bd4bf33722ef18b41252feb73b98458 Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Mon, 24 Oct 2022 17:08:39 +0300
-Subject: [PATCH 065/161] [drivers/dax/axdimm] Add sysfs entries for resource
+Subject: [PATCH 065/225] [drivers/dax/axdimm] Add sysfs entries for resource
  manager
 
 Resolves: AXDIMM-450

@@ -20,14 +20,12 @@
 #include "tools/datagen/sls/lengths_generator/factory.h"
 #include "tools/datagen/sls/tables_generator/factory.h"
 
-#include "pnmlib/sls/embedded_tables.h"
+#include "pnmlib/sls/embedding_tables.h"
 #include "pnmlib/sls/operation.h"
-#include "pnmlib/sls/type.h"
 
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/device.h"
 #include "pnmlib/core/runner.h"
-#include "pnmlib/core/sls_device.h"
 
 #include "pnmlib/common/views.h"
 
@@ -50,6 +48,8 @@
 #include <string_view>
 #include <tuple>
 #include <vector>
+
+using namespace tools::gen::sls;
 
 // Common test parameters:
 inline constexpr size_t num_tables = 2;
@@ -137,14 +137,10 @@ public:
     tables_ = table_generator->create(tinfo_);
   }
 
-  void create_device() {
-    device_ = SlsDevice::make(pnm::Device::Type::SLS_AXDIMM);
-  }
-
   void write_tables_to_device() {
     const auto sparse_feature_size_bytes = sparse_feature_size * sizeof(float);
-    emb_tables_ = pnm::memory::EmbeddedTables::create(
-        pnm::make_const_view(tables_), rows_, sparse_feature_size_bytes,
+    emb_tables_ = pnm::memory::EmbeddingTables::create(
+        pnm::views::make_const_view(tables_), rows_, sparse_feature_size_bytes,
         context_);
   }
 
@@ -155,7 +151,6 @@ public:
 
   void prepare_tables() {
     create_tables();
-    create_device();
     write_tables_to_device();
     create_indices_generator();
   }
@@ -187,8 +182,9 @@ public:
   }
 
   void create_operation() {
-    sls_op_ = PNMSLSOperation{sparse_feature_size, pnm::make_const_view(rows_),
-                              emb_tables_.get(), SLSType::Float};
+    sls_op_ = pnm::operations::SlsOperation{
+        sparse_feature_size, pnm::views::make_const_view(rows_),
+        emb_tables_.get(), pnm::operations::SlsOperation::Type::Float};
   }
 
   int count_inst() {
@@ -198,16 +194,15 @@ public:
   void run_sls(int i) {
     std::vector<float> psum = std::vector<float>(
         info_.minibatch_size() * num_tables * sparse_feature_size);
-    sls_op_.set_run_params(info_.minibatch_size(),
-                           pnm::make_view(info_.lengths()),
-                           pnm::make_const_view(indices_[i]),
-                           pnm::view_cast<uint8_t>(pnm::make_view(psum)));
+    sls_op_.set_run_params(
+        info_.minibatch_size(), pnm::views::make_view(info_.lengths()),
+        pnm::views::make_const_view(indices_[i]),
+        pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)));
     runner_.run(sls_op_);
   }
 
 private:
-  pnm::ContextHandler context_ =
-      pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  pnm::ContextHandler context_ = pnm::make_context(pnm::Device::Type::SLS);
   pnm::Runner runner_{context_};
 
   uint32_t sparse_feature_size;
@@ -215,15 +210,13 @@ private:
   TablesInfo tinfo_;
   std::vector<uint8_t> tables_;
 
-  SlsDevice device_;
-
-  pnm::memory::EmbeddedTablesHandler emb_tables_;
+  pnm::memory::EmbeddingTablesHandler emb_tables_;
 
   std::unique_ptr<IIndicesGenerator> indices_generator_;
   IndicesInfo info_;
   std::vector<std::vector<uint32_t>> indices_;
 
-  PNMSLSOperation sls_op_;
+  pnm::operations::SlsOperation sls_op_;
 };
 
 class CSVFormat {

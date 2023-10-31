@@ -154,6 +154,17 @@ bool one_of(It begin, Sentinel end, Predicate p) {
   return std::count_if(begin, end, p) == 1;
 }
 
+namespace visitor {
+// [TODO: @b.palkin] Unify with the same pattern in accessor_builder.cpp
+/** @brief Overload pattern for making visitors for std::visit out of
+ * сallable objects.
+ */
+template <class... Ts> struct overload : Ts... {
+  using Ts::operator()...;
+};
+template <class... Ts> overload(Ts...) -> overload<Ts...>;
+} // namespace visitor
+
 } // namespace pnm::utils
 
 #endif // PNM_MISC_UTILS_H

@@ -1,7 +1,7 @@
 From 5aec09a4cf79ae00c3e4b877b88b43831cbce7e5 Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Thu, 1 Jun 2023 15:27:43 +0300
-Subject: [PATCH 121/161] Change process's allocations descriptor container
+Subject: [PATCH 121/225] Change process's allocations descriptor container
 
 Resolves: MCS23-908
 

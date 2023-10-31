@@ -22,6 +22,8 @@
 #include <random>
 #include <vector>
 
+namespace tools::gen::sls {
+
 class DuplicateRandomLengthsGen : public ILengthsGenerator {
 private:
   std::vector<uint32_t>
@@ -54,5 +56,7 @@ private:
     return lengths;
   }
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_DUPLICATE_RANDOM_LEN_GENERATOR_H

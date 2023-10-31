@@ -1,0 +1,63 @@
+From 3ac3371abeb4262f3a025888aaf9f93566948eef Mon Sep 17 00:00:00 2001
+From: "zhao.xu" <zhao01.xu@samsung.com>
+Date: Mon, 11 Sep 2023 21:30:16 +0800
+Subject: [PATCH 176/225] [PNM][ZSWAP] Fix unit core ID and store count update
+
+1.Fix decompression unit core ID
+It should be allocated based on the
+number of compression units.
+2.Modify the location where store count updated
+cxl_zswap do not need to update store count
+if store return an error number.
+We only update store stats when store success.
+
+Resolve: MCS23-1552
+
+Signed-off-by: zhao.xu <zhao01.xu@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 2 +-
+ mm/pnm/pnm_zswap.c      | 8 ++++----
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index b8beab2f7..46bbefae0 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -700,7 +700,7 @@ static void pnm_thread_create(void)
+ 	/* initialization for decompress unit */
+ 	for (i = 0; i < pnm_ctrl->num_decompress; i++) {
+ 		pnm_ctrl->decompress[i].core_id =
+-			pnm_core + pnm_ctrl->num_decompress + i;
++			pnm_core + pnm_ctrl->num_compress + i;
+ 		pnm_ctrl->decompress[i].unit_id = i;
+ 		pnm_ctrl->decompress[i].num_used = 0;
+ 		pnm_ctrl->decompress[i].num_succ = 0;
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index c20e62672..29b86e2cd 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -614,6 +614,10 @@ static int cxl_zswap_offload_store_page(unsigned int type, pgoff_t offset,
+ 	} while (ret == -EEXIST);
+ 	spin_unlock(&tree->lock);
+ 
++	/* update stats */
++	atomic_inc(&cxl_zpool_stored_pages);
++	cxl_zswap_update_total_size();
++
+ 	return 0;
+ }
+ 
+@@ -1494,10 +1498,6 @@ static int cxl_zswap_frontswap_store(unsigned int type, pgoff_t offset,
+ 	ret = cxl_zswap_offload_store_page(type, offset, tree, entry, page);
+ #endif
+ 
+-	/* update stats */
+-	atomic_inc(&cxl_zpool_stored_pages);
+-	cxl_zswap_update_total_size();
+-
+ 	return ret;
+ }
+ 
+-- 
+2.34.1
+

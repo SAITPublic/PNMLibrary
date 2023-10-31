@@ -1,7 +1,7 @@
 From b24ba18965ac3e9e1ece0c655cb28807586358d2 Mon Sep 17 00:00:00 2001
 From: "s.koval" <s.koval@samsung.com>
 Date: Thu, 22 Dec 2022 18:34:22 +0300
-Subject: [PATCH 082/161] [axdimm_sysfs] fix double region size
+Subject: [PATCH 082/225] [axdimm_sysfs] fix double region size
 
 Region sizes returned per chip select, but we need per rank
 size.

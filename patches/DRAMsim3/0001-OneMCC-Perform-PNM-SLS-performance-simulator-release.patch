@@ -1,7 +1,7 @@
 From bfb2df581e7cff8430e119d6622588d6cf40ea75 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 31 Aug 2023 00:27:40 +0000
-Subject: [PATCH 1/4] [OneMCC] Perform PNM SLS performance simulator release
+Subject: [PATCH 1/6] [OneMCC] Perform PNM SLS performance simulator release
  for v2.0
 
 This is a patch bomb for all changes made in DRAMsim3 for PNM SLS

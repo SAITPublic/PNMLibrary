@@ -6,6 +6,7 @@
 
 #include "common/log.h"
 #include "common/mapped_file.h"
+#include "common/topology_constants.h"
 
 #include "tools/datagen/imdb/column_generator/factory.h"
 #include "tools/datagen/imdb/general/columns_info.h"
@@ -33,12 +34,10 @@
 
 #include <fmt/format.h>
 
-#include <linux/imdb_resources.h>
-
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <random>
 #include <string>
@@ -57,6 +56,7 @@ using pnm::operations::Scan;
 using pnm::utils::as_vatomic;
 using tools::gen::imdb::GeneratedData;
 using ImdbBaseDev = pnm::imdb::device::BaseDevice;
+using pnm::imdb::device::topo;
 
 // Simulated register storage in ordinary memory.
 // Since we use this storage for IMDB simulator core tests, we don't need to
@@ -64,15 +64,17 @@ using ImdbBaseDev = pnm::imdb::device::BaseDevice;
 struct DummyRegisterStorage {
   volatile CommonCSR common{};
   volatile StatusCSR status{};
-  std::array<volatile ThreadCSR, IMDB_THREAD_NUM> thread{};
+  std::unique_ptr<volatile ThreadCSR[]> thread{};
+  RegisterPointers reg_ptrs_{};
 
-  DummyRegisterStorage() = default;
-
-  RegisterPointers make_pointers() {
-    return RegisterPointers{.common = &common,
-                            .status = &status,
-                            .thread = to_volatile_ptrs(thread)};
+  DummyRegisterStorage() {
+    thread = std::unique_ptr<ThreadCSR[]>(new ThreadCSR[topo().NumOfThreads]());
+    reg_ptrs_ = {.common = &common,
+                 .status = &status,
+                 .thread = to_volatile_ptrs(thread, topo().NumOfThreads)};
   }
+
+  RegisterPointers &get_pointers() { return reg_ptrs_; }
 };
 
 // Base test fixture.
@@ -88,9 +90,9 @@ public:
   public:
     template <typename R> static auto make_result_view(R &result) {
       if constexpr (std::is_same_v<R, pnm::imdb::index_vector>) {
-        return pnm::make_view(result);
+        return pnm::views::make_view(result);
       } else {
-        return pnm::make_view(result.container());
+        return pnm::views::make_view(result.container());
       }
     }
 
@@ -98,7 +100,7 @@ public:
     ScanOperationProxy(const pnm::imdb::compressed_vector &db,
                        pnm::imdb::RangeOperation predicate, R &result,
                        OutputType output_type)
-        : db_{pnm::make_view(db.container()), ctx_},
+        : db_{pnm::views::make_view(db.container()), ctx_},
           result_{make_result_view(result), ctx_}, predicate_{predicate},
           compression_{db.value_bits()}, size_{db.size()},
           output_type_{output_type} {}
@@ -107,10 +109,10 @@ public:
     ScanOperationProxy(const pnm::imdb::compressed_vector &db,
                        const pnm::imdb::bit_vector &predicate, R &result,
                        OutputType output_type)
-        : db_{pnm::make_view(db.container()), ctx_},
+        : db_{pnm::views::make_view(db.container()), ctx_},
           result_{make_result_view(result), ctx_},
           predicate_{pnm::memory::Buffer<uint32_t>{
-              pnm::make_view(predicate.container()), ctx_}},
+              pnm::views::make_view(predicate.container()), ctx_}},
           in_list_max_value_{predicate.size()}, compression_{db.value_bits()},
           size_{db.size()}, output_type_{output_type} {}
 
@@ -133,7 +135,7 @@ public:
     void sync_result() { result_.copy_from_device(); }
 
   private:
-    pnm::ContextHandler ctx_ = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+    pnm::ContextHandler ctx_ = pnm::make_context(pnm::Device::Type::IMDB);
     pnm::memory::Buffer<uint32_t> db_;
     pnm::memory::Buffer<uint32_t> result_;
 
@@ -149,7 +151,7 @@ protected:
   // Return pointers to IMDB registers used for testing.
   // `SimulatorDeviceTests` returns registers from system register file mapping.
   // `SimCoreTests` returns registers from dummy storage.
-  virtual RegisterPointers imdb_regs() = 0;
+  virtual RegisterPointers &imdb_regs() = 0;
 
   // Setup IMDB registers.
   void setup_regs(size_t thread_id, const pnm::imdb::ScanOperation &scan_op) {
@@ -201,11 +203,11 @@ protected:
   // Read the IMDB_COM_STATUS register to check the status of all threads
   // at once atomically. For each thread, returns true if the respective thread
   // is idle, false if it is busy.
-  std::array<bool, IMDB_THREAD_NUM> poll_all() {
+  std::vector<bool> poll_all() {
     const uint32_t status =
         as_vatomic<uint32_t>(&imdb_regs().status->IMDB_COM_STATUS)->load();
-    std::array<bool, IMDB_THREAD_NUM> result;
-    for (uint32_t i = 0; i < IMDB_THREAD_NUM; ++i) {
+    std::vector<bool> result(topo().NumOfThreads);
+    for (uint32_t i = 0; i < topo().NumOfThreads; ++i) {
       result[i] = (status & (1U << i)) != 0;
     }
     return result;
@@ -271,7 +273,7 @@ protected:
     return *ctx_->device()->as<pnm::imdb::device::BaseDevice>();
   }
 
-  pnm::ContextHandler ctx_ = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  pnm::ContextHandler ctx_ = pnm::make_context(pnm::Device::Type::IMDB);
   pnm::utils::MappedFile memory_;
 };
 
@@ -279,7 +281,7 @@ protected:
 class SimCoreTests : public SimulatorTests {
 public:
   SimCoreTests()
-      : sim_(imdb_regs_.make_pointers(),
+      : sim_(imdb_regs_.get_pointers(),
              static_cast<uint8_t *>(memory_.data())) {}
 
   template <OperationType operation_type, OutputType output_type>
@@ -294,28 +296,28 @@ protected:
   DummyRegisterStorage imdb_regs_;
   SimulatorCore sim_;
 
-  RegisterPointers imdb_regs() final { return imdb_regs_.make_pointers(); }
+  RegisterPointers &imdb_regs() override { return imdb_regs_.get_pointers(); }
 };
 
 TEST_F(SimCoreTests, EnableDisableThreadWorks) {
-  for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+  for (size_t thread_id = 0; thread_id < topo().NumOfThreads; ++thread_id) {
     EXPECT_FALSE(sim_.is_thread_enabled(thread_id));
   }
 
   sim_.enable_thread(0);
   EXPECT_TRUE(sim_.is_thread_enabled(0));
-  for (size_t thread_id = 1; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+  for (size_t thread_id = 1; thread_id < topo().NumOfThreads; ++thread_id) {
     EXPECT_FALSE(sim_.is_thread_enabled(thread_id));
   }
 
   sim_.disable_thread(0);
-  for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+  for (size_t thread_id = 0; thread_id < topo().NumOfThreads; ++thread_id) {
     EXPECT_FALSE(sim_.is_thread_enabled(thread_id));
   }
 }
 
 TEST_F(SimCoreTests, DestructorDisablesThreads) {
-  for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+  for (size_t thread_id = 0; thread_id < topo().NumOfThreads; ++thread_id) {
     sim_.enable_thread(thread_id);
   }
   // If the destructor does not work correctly, this test will either hang or
@@ -329,7 +331,7 @@ TEST_F(SimCoreTests, EnableDisableValidation) {
   EXPECT_THROW(sim_.enable_thread(0), pnm::error::InvalidArguments);
 
   // Invalid thread id.
-  static constexpr size_t invalid_thread_id = IMDB_THREAD_NUM;
+  const size_t invalid_thread_id = topo().NumOfThreads;
   EXPECT_THROW(sim_.is_thread_enabled(invalid_thread_id),
                pnm::error::InvalidArguments);
   EXPECT_THROW(sim_.enable_thread(invalid_thread_id),
@@ -346,26 +348,26 @@ TEST_F(SimCoreTests, EnableDisableValidation) {
 // - Track the golden enabled/disabled mask and compare the actual
 //   enabled/disabled values to it after each iteration.
 TEST_F(SimCoreTests, EnableDisableStress) {
-  std::array<bool, IMDB_THREAD_NUM> golden;
+  std::vector<bool> golden(topo().NumOfThreads);
   std::fill(golden.begin(), golden.end(), false);
 
   auto rng = std::mt19937_64(std::random_device{}());
-  auto dist = std::uniform_int_distribution<size_t>(0, IMDB_THREAD_NUM - 1);
+  auto dist = std::uniform_int_distribution<size_t>(0, topo().NumOfThreads - 1);
 
   static constexpr size_t num_runs = 1000;
 
   for (size_t i = 0; i < num_runs; ++i) {
     const size_t chosen_thread_id = dist(rng);
-    bool &should_be_enabled = golden[chosen_thread_id];
+    const bool should_be_enabled = golden[chosen_thread_id];
     if (should_be_enabled) {
       sim_.disable_thread(chosen_thread_id);
-      should_be_enabled = false;
+      golden[chosen_thread_id] = false;
     } else {
       sim_.enable_thread(chosen_thread_id);
-      should_be_enabled = true;
+      golden[chosen_thread_id] = true;
     }
 
-    for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+    for (size_t thread_id = 0; thread_id < topo().NumOfThreads; ++thread_id) {
       EXPECT_EQ(golden[thread_id], sim_.is_thread_enabled(thread_id));
     }
   }
@@ -509,32 +511,32 @@ TEST_F(ScheduledSimCoreTests, StressMultiEngine) {
   // Start execution.
   // golden_results: golden vectors for running operations, if any.
   // actual_results: output buffers for running operations.
-  std::array<std::optional<pnm::imdb::index_vector>, IMDB_THREAD_NUM>
-      golden_results;
-  std::array<pnm::imdb::index_vector, IMDB_THREAD_NUM> actual_results;
+  std::vector<std::optional<pnm::imdb::index_vector>> golden_results(
+      topo().NumOfThreads);
+  std::vector<pnm::imdb::index_vector> actual_results(topo().NumOfThreads);
 
   // A small hack to make `wait_for_engine` work. Normally, we don't care about
   // the state of the `THREAD_STATUS` register if `IMDB_COM_STATUS` reports it
   // is idle.
-  for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+  for (size_t thread_id = 0; thread_id < topo().NumOfThreads; ++thread_id) {
     imdb_regs_.thread[thread_id].THREAD_STATUS = 0;
   }
 
   // Number of operations executed on each engine.
-  std::array<uint32_t, IMDB_THREAD_NUM> engine_stats = {};
+  std::vector<uint32_t> engine_stats(topo().NumOfThreads);
 
-  auto context = pnm::make_context(pnm::Device::Type::IMDB_CXL);
-  const pnm::memory::Buffer column_buf(pnm::make_view(column.container()),
-                                       context);
+  auto context = pnm::make_context(pnm::Device::Type::IMDB);
+  const pnm::memory::Buffer column_buf(
+      pnm::views::make_view(column.container()), context);
 
   std::vector<pnm::memory::Buffer<pnm::imdb::index_type>> result_buf(
-      IMDB_THREAD_NUM);
+      topo().NumOfThreads);
   for (auto &buf : result_buf) {
     buf = pnm::memory::Buffer<pnm::imdb::index_type>(table_size + 16, context);
   }
 
   // Enable all threads.
-  for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+  for (size_t thread_id = 0; thread_id < topo().NumOfThreads; ++thread_id) {
     SimCoreTests::sim_.enable_thread(thread_id);
   }
 
@@ -549,16 +551,17 @@ TEST_F(ScheduledSimCoreTests, StressMultiEngine) {
       const auto &golden_value = golden.value();
       auto result_size = imdb_regs_.thread[thread_id].THREAD_RES_SIZE_SB;
 
-      result_buf[thread_id].bind_user_region(pnm::make_view(actual));
+      result_buf[thread_id].bind_user_region(pnm::views::make_view(actual));
       result_buf[thread_id].copy_from_device();
 
       actual.resize(result_size);
 
       ASSERT_EQ(result_size, golden_value.size());
       ASSERT_EQ(actual.size(), golden_value.size());
-      const auto actual_view = pnm::make_view<const pnm::imdb::index_type>(
-          actual.data(), actual.data() + golden_value.size());
-      const auto golden_view = pnm::make_view(golden_value);
+      const auto actual_view =
+          pnm::views::make_view<const pnm::imdb::index_type>(
+              actual.data(), actual.data() + golden_value.size());
+      const auto golden_view = pnm::views::make_view(golden_value);
       EXPECT_EQ(actual_view, golden_view);
     }
 
@@ -584,7 +587,7 @@ TEST_F(ScheduledSimCoreTests, StressMultiEngine) {
     if (std::all_of(status.begin(), status.end(), [](bool x) { return x; })) {
       // Simulator workaround. On hardware, break unconditionally.
       bool all_finished = true;
-      for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
+      for (size_t thread_id = 0; thread_id < topo().NumOfThreads; ++thread_id) {
         if (!poll_status(thread_id)) {
           all_finished = false;
           break;
@@ -604,16 +607,17 @@ TEST_F(ScheduledSimCoreTests, StressMultiEngine) {
   for (size_t thread_id = 0; thread_id < golden_results.size(); ++thread_id) {
     auto &actual = actual_results[thread_id];
     actual.resize(result_buf[thread_id].size());
-    result_buf[thread_id].bind_user_region(pnm::make_view(actual));
+    result_buf[thread_id].bind_user_region(pnm::views::make_view(actual));
     result_buf[thread_id].copy_from_device();
     if (const auto &golden = golden_results[thread_id]; golden.has_value()) {
       const auto &golden_value = golden.value();
       auto result_size = imdb_regs_.thread[thread_id].THREAD_RES_SIZE_SB;
       ASSERT_EQ(result_size, golden_value.size());
       ASSERT_GE(actual.size(), golden_value.size());
-      const auto actual_view = pnm::make_view<const pnm::imdb::index_type>(
-          actual.data(), actual.data() + golden_value.size());
-      const auto golden_view = pnm::make_view(golden_value);
+      const auto actual_view =
+          pnm::views::make_view<const pnm::imdb::index_type>(
+              actual.data(), actual.data() + golden_value.size());
+      const auto golden_view = pnm::views::make_view(golden_value);
       EXPECT_EQ(actual_view, golden_view);
     }
   }
@@ -636,7 +640,9 @@ public:
   }
 
 protected:
-  RegisterPointers imdb_regs() final { return device().register_pointers(); }
+  RegisterPointers &imdb_regs() override {
+    return device().register_pointers();
+  }
 
   template <OperationType operation_type, OutputType output_type>
   void test_on_data(const GeneratedData<operation_type, output_type> &data) {

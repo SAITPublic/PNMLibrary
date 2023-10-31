@@ -18,6 +18,8 @@
 #ifndef _SLS_H_
 #define _SLS_H_
 
+namespace pnm::profile {
+
 /***** SLS APIs for customer *****/
 
 void sls_report_profile();
@@ -25,5 +27,7 @@ void sls_report_profile();
 void sls_start_profiling();
 
 void sls_end_profiling();
+
+} // namespace pnm::profile
 
 #endif

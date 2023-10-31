@@ -1,7 +1,7 @@
 From 36457bcbd8c65a0f83f4d1d7fd6b0265644cf651 Mon Sep 17 00:00:00 2001
 From: gandarf <v.iliushin@partner.samsung.com>
 Date: Thu, 10 Nov 2022 17:04:18 +0300
-Subject: [PATCH 070/161] [axdimm] Remove excess checks in axdimm_ioctl
+Subject: [PATCH 070/225] [axdimm] Remove excess checks in axdimm_ioctl
 
 Remove access_ok check, because arg may not be ptr
 and ptrs have already being checked in AXDIMM_COPY_FROM_USER

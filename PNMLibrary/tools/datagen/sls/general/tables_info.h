@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Class with basic information about tables structure */
 class TablesInfo {
 public:
@@ -50,5 +52,7 @@ private:
   size_t cols_{};
   std::vector<uint32_t> table_rows_{};
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_TABLES_INFO_H

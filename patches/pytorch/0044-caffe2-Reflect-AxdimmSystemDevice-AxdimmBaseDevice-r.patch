@@ -1,7 +1,7 @@
 From 29c14e63ea934a94f8e3eee9d85d6c677f93a737 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 8 Jun 2022 13:55:39 +0900
-Subject: [PATCH 044/128] [caffe2] Reflect AxdimmSystemDevice ->
+Subject: [PATCH 044/135] [caffe2] Reflect AxdimmSystemDevice ->
  AxdimmBaseDevice renaming in control library
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>

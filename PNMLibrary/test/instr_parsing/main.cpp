@@ -1,9 +1,9 @@
-#include "sls/operation/inst_generator.h"
-
-#include "core/device/sls/rank_address.h"
+#include "core/device/sls/utils/inst_generator.h"
+#include "core/device/sls/utils/rank_address.h"
 
 #include "common/topology_constants.h"
-#include "hw/axdimm_hw_config.h"
+#include "hw/pnm_addr_constants.h"
+#include "hw/pnm_hw_instr_constants.h"
 
 #include <gtest/gtest.h>
 
@@ -81,7 +81,7 @@ TEST(Instruction, EncodeDecodeInstr) {
 const uint64_t ZERO_OFFSET_ON_RANK = 0;
 const uint64_t RANDOM_OFFSET = 30;
 
-using pnm::device::topo;
+using pnm::sls::device::topo;
 
 TEST(RankInterleaving, FirstRankInPair) {
   auto *first_rank_address = reinterpret_cast<uint8_t *>(0x100ULL);
@@ -131,10 +131,12 @@ TEST(RankInterleaving, FirstRankInPair) {
   gen5 += C5;
   EXPECT_EQ(gen5.as<uint8_t>(), first_rank_address + R5);
 
+  static constexpr auto ChannelInterleavingSize = 1ULL
+                                                  << (pnm::hw::HA_XOR_BIT + 1);
+
   pnm::sls::device::InterleavedPointer gen6(first_rank_address, 0);
-  const uint64_t C6 = topo().ChannelInterleavingSize / 2 - 1;
-  const uint64_t R6 =
-      topo().ChannelInterleavingSize - topo().RankInterleavingSize - 1;
+  const uint64_t C6 = ChannelInterleavingSize / 2 - 1;
+  const uint64_t R6 = ChannelInterleavingSize - topo().RankInterleavingSize - 1;
   gen6 += C6;
   EXPECT_EQ(gen6.as<uint8_t>(), first_rank_address + R6);
   // clang-format off
@@ -154,38 +156,35 @@ TEST(RankInterleaving, FirstRankInPair) {
   */
   // clang-format on
   pnm::sls::device::InterleavedPointer gen7(first_rank_address, 0);
-  const uint64_t C7 = topo().ChannelInterleavingSize / 2;
-  const uint64_t R7 =
-      topo().ChannelInterleavingSize + topo().RankInterleavingSize;
+  const uint64_t C7 = ChannelInterleavingSize / 2;
+  const uint64_t R7 = ChannelInterleavingSize + topo().RankInterleavingSize;
   gen7 += C7;
   EXPECT_EQ(gen7.as<uint8_t>(), first_rank_address + R7);
 
   pnm::sls::device::InterleavedPointer gen8(first_rank_address, 0);
-  const uint64_t C8 = topo().ChannelInterleavingSize / 2 + RANDOM_OFFSET;
-  const uint64_t R8 = topo().ChannelInterleavingSize +
-                      topo().RankInterleavingSize + RANDOM_OFFSET;
+  const uint64_t C8 = ChannelInterleavingSize / 2 + RANDOM_OFFSET;
+  const uint64_t R8 =
+      ChannelInterleavingSize + topo().RankInterleavingSize + RANDOM_OFFSET;
   gen8 += C8;
   EXPECT_EQ(gen8.as<uint8_t>(), first_rank_address + R8);
 
   pnm::sls::device::InterleavedPointer gen9(first_rank_address, 0);
-  const uint64_t C9 =
-      topo().ChannelInterleavingSize - topo().RankInterleavingSize;
-  const uint64_t R9 =
-      2 * topo().ChannelInterleavingSize - topo().RankInterleavingSize;
+  const uint64_t C9 = ChannelInterleavingSize - topo().RankInterleavingSize;
+  const uint64_t R9 = 2 * ChannelInterleavingSize - topo().RankInterleavingSize;
   gen9 += C9;
   EXPECT_EQ(gen9.as<uint8_t>(), first_rank_address + R9);
 
   pnm::sls::device::InterleavedPointer gen10(first_rank_address, 0);
-  const uint64_t C10 = topo().ChannelInterleavingSize -
-                       topo().RankInterleavingSize + RANDOM_OFFSET;
-  const uint64_t R10 = 2 * topo().ChannelInterleavingSize -
-                       topo().RankInterleavingSize + RANDOM_OFFSET;
+  const uint64_t C10 =
+      ChannelInterleavingSize - topo().RankInterleavingSize + RANDOM_OFFSET;
+  const uint64_t R10 =
+      2 * ChannelInterleavingSize - topo().RankInterleavingSize + RANDOM_OFFSET;
   gen10 += C10;
   EXPECT_EQ(gen10.as<uint8_t>(), first_rank_address + R10);
 
   pnm::sls::device::InterleavedPointer gen11(first_rank_address, 0);
-  const uint64_t C11 = topo().ChannelInterleavingSize - 1;
-  const uint64_t R11 = 2 * topo().ChannelInterleavingSize - 1;
+  const uint64_t C11 = ChannelInterleavingSize - 1;
+  const uint64_t R11 = 2 * ChannelInterleavingSize - 1;
   gen11 += C11;
   EXPECT_EQ(gen11.as<uint8_t>(), first_rank_address + R11);
   // clang-format off
@@ -202,30 +201,29 @@ TEST(RankInterleaving, FirstRankInPair) {
   */
   // clang-format on
   pnm::sls::device::InterleavedPointer gen12(first_rank_address, 0);
-  const uint64_t C12 = topo().ChannelInterleavingSize;
-  const uint64_t R12 = 2 * topo().ChannelInterleavingSize;
+  const uint64_t C12 = ChannelInterleavingSize;
+  const uint64_t R12 = 2 * ChannelInterleavingSize;
   gen12 += C12;
   EXPECT_EQ(gen12.as<uint8_t>(), first_rank_address + R12);
 
   pnm::sls::device::InterleavedPointer gen13(first_rank_address, 0);
-  const uint64_t C13 = topo().ChannelInterleavingSize + RANDOM_OFFSET;
-  const uint64_t R13 = 2 * topo().ChannelInterleavingSize + RANDOM_OFFSET;
+  const uint64_t C13 = ChannelInterleavingSize + RANDOM_OFFSET;
+  const uint64_t R13 = 2 * ChannelInterleavingSize + RANDOM_OFFSET;
   gen13 += C13;
   EXPECT_EQ(gen13.as<uint8_t>(), first_rank_address + R13);
 
   pnm::sls::device::InterleavedPointer gen14(first_rank_address, 0);
-  const uint64_t C14 =
-      topo().ChannelInterleavingSize + topo().RankInterleavingSize;
+  const uint64_t C14 = ChannelInterleavingSize + topo().RankInterleavingSize;
   const uint64_t R14 =
-      2 * (topo().ChannelInterleavingSize + topo().RankInterleavingSize);
+      2 * (ChannelInterleavingSize + topo().RankInterleavingSize);
   gen14 += C14;
   EXPECT_EQ(gen14.as<uint8_t>(), first_rank_address + R14);
 
   pnm::sls::device::InterleavedPointer gen15(first_rank_address, 0);
-  const uint64_t C15 = topo().ChannelInterleavingSize +
-                       topo().RankInterleavingSize + RANDOM_OFFSET;
+  const uint64_t C15 =
+      ChannelInterleavingSize + topo().RankInterleavingSize + RANDOM_OFFSET;
   const uint64_t R15 =
-      2 * (topo().ChannelInterleavingSize + topo().RankInterleavingSize) +
+      2 * (ChannelInterleavingSize + topo().RankInterleavingSize) +
       RANDOM_OFFSET;
   gen15 += C15;
   EXPECT_EQ(gen15.as<uint8_t>(), first_rank_address + R15);
@@ -247,7 +245,8 @@ TEST(RankInterleaving, SecondRankInPair) {
     2. C4, C5, C6, C7 placed in non-first subchunk of first chunk (chunk0), they're interleaved by subchunk.
   */
   // clang-format on
-  auto *init_second_rank_address = second_rank_address - 0x80;
+  auto *init_second_rank_address =
+      second_rank_address - topo().RankInterleavingSize;
   pnm::sls::device::InterleavedPointer gen1(init_second_rank_address, 1);
   const uint64_t C1 = ZERO_OFFSET_ON_RANK;
   const uint64_t R1 = C1;
@@ -278,18 +277,20 @@ TEST(RankInterleaving, SecondRankInPair) {
   gen5 += C5;
   EXPECT_EQ(gen5.as<uint8_t>(), second_rank_address + R5);
 
+  static constexpr auto ChannelInterleavingSize = 1ULL
+                                                  << (pnm::hw::HA_XOR_BIT + 1);
+
   pnm::sls::device::InterleavedPointer gen6(init_second_rank_address, 1);
-  const uint64_t C6 = topo().ChannelInterleavingSize / 2 -
-                      topo().RankInterleavingSize + RANDOM_OFFSET;
-  const uint64_t R6 = topo().ChannelInterleavingSize -
-                      2 * topo().RankInterleavingSize + RANDOM_OFFSET;
+  const uint64_t C6 =
+      ChannelInterleavingSize / 2 - topo().RankInterleavingSize + RANDOM_OFFSET;
+  const uint64_t R6 =
+      ChannelInterleavingSize - 2 * topo().RankInterleavingSize + RANDOM_OFFSET;
   gen6 += C6;
   EXPECT_EQ(gen6.as<uint8_t>(), second_rank_address + R6);
 
   pnm::sls::device::InterleavedPointer gen7(init_second_rank_address, 1);
-  const uint64_t C7 = topo().ChannelInterleavingSize / 2 - 1;
-  const uint64_t R7 =
-      topo().ChannelInterleavingSize - topo().RankInterleavingSize - 1;
+  const uint64_t C7 = ChannelInterleavingSize / 2 - 1;
+  const uint64_t R7 = ChannelInterleavingSize - topo().RankInterleavingSize - 1;
   gen7 += C7;
   EXPECT_EQ(gen7.as<uint8_t>(), second_rank_address + R7);
   // clang-format off
@@ -306,31 +307,29 @@ TEST(RankInterleaving, SecondRankInPair) {
   */
   // clang-format on
   pnm::sls::device::InterleavedPointer gen8(init_second_rank_address, 1);
-  const uint64_t C8 = topo().ChannelInterleavingSize / 2;
-  const uint64_t R8 =
-      topo().ChannelInterleavingSize - topo().RankInterleavingSize;
+  const uint64_t C8 = ChannelInterleavingSize / 2;
+  const uint64_t R8 = ChannelInterleavingSize - topo().RankInterleavingSize;
   gen8 += C8;
   EXPECT_EQ(gen8.as<uint8_t>(), second_rank_address + R8);
 
   pnm::sls::device::InterleavedPointer gen9(init_second_rank_address, 1);
   const uint64_t C9 =
-      topo().ChannelInterleavingSize / 2 + topo().RankInterleavingSize - 1;
-  const uint64_t R9 = topo().ChannelInterleavingSize - 1;
+      ChannelInterleavingSize / 2 + topo().RankInterleavingSize - 1;
+  const uint64_t R9 = ChannelInterleavingSize - 1;
   gen9 += C9;
   EXPECT_EQ(gen9.as<uint8_t>(), second_rank_address + R9);
 
   pnm::sls::device::InterleavedPointer gen10(init_second_rank_address, 1);
   const uint64_t C10 =
-      topo().ChannelInterleavingSize / 2 + topo().RankInterleavingSize;
-  const uint64_t R10 =
-      topo().ChannelInterleavingSize + topo().RankInterleavingSize;
+      ChannelInterleavingSize / 2 + topo().RankInterleavingSize;
+  const uint64_t R10 = ChannelInterleavingSize + topo().RankInterleavingSize;
   gen10 += C10;
   EXPECT_EQ(gen10.as<uint8_t>(), second_rank_address + R10);
 
   pnm::sls::device::InterleavedPointer gen11(init_second_rank_address, 1);
-  const uint64_t C11 = topo().ChannelInterleavingSize -
-                       topo().RankInterleavingSize + RANDOM_OFFSET;
-  const uint64_t R11 = 2 * topo().ChannelInterleavingSize -
+  const uint64_t C11 =
+      ChannelInterleavingSize - topo().RankInterleavingSize + RANDOM_OFFSET;
+  const uint64_t R11 = 2 * ChannelInterleavingSize -
                        3 * topo().RankInterleavingSize + RANDOM_OFFSET;
   gen11 += C11;
   EXPECT_EQ(gen11.as<uint8_t>(), second_rank_address + R11);
@@ -348,14 +347,14 @@ TEST(RankInterleaving, SecondRankInPair) {
   */
   // clang-format on
   pnm::sls::device::InterleavedPointer gen12(init_second_rank_address, 1);
-  const uint64_t C12 = topo().ChannelInterleavingSize;
-  const uint64_t R12 = 2 * topo().ChannelInterleavingSize;
+  const uint64_t C12 = ChannelInterleavingSize;
+  const uint64_t R12 = 2 * ChannelInterleavingSize;
   gen12 += C12;
   EXPECT_EQ(gen12.as<uint8_t>(), second_rank_address + R12);
 
   pnm::sls::device::InterleavedPointer gen13(init_second_rank_address, 1);
-  const uint64_t C13 = topo().ChannelInterleavingSize + RANDOM_OFFSET;
-  const uint64_t R13 = 2 * topo().ChannelInterleavingSize + RANDOM_OFFSET;
+  const uint64_t C13 = ChannelInterleavingSize + RANDOM_OFFSET;
+  const uint64_t R13 = 2 * ChannelInterleavingSize + RANDOM_OFFSET;
   gen13 += C13;
   EXPECT_EQ(gen13.as<uint8_t>(), second_rank_address + R13);
 }

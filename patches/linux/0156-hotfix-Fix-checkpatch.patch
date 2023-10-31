@@ -1,7 +1,7 @@
 From 98872f5b384df6ab7bde36546bf8dccdb5f9916b Mon Sep 17 00:00:00 2001
 From: Valentin Iliushin <v.iliushin@partner.samsung.com>
 Date: Thu, 3 Aug 2023 13:20:14 +0000
-Subject: [PATCH 156/161] [hotfix] Fix checkpatch
+Subject: [PATCH 156/225] [hotfix] Fix checkpatch
 
 Fix checkpatch problems from PR#133
 

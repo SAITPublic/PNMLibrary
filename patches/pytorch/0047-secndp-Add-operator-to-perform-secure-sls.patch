@@ -1,7 +1,7 @@
 From 0697f89f21ac57bb025e8d2186e641151bdd6834 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Mon, 20 Jun 2022 14:53:53 +0300
-Subject: [PATCH 047/128] [secndp] Add operator to perform secure sls
+Subject: [PATCH 047/135] [secndp] Add operator to perform secure sls
 
 Add operator for sls op with secure axdimm library.
 At this moment the float and int32 version of operator are presented.

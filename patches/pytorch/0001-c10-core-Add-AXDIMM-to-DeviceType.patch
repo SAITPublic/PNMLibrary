@@ -1,7 +1,7 @@
 From a8a042d4efee0ada9d3f8d53017e7777a1918eec Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 29 Oct 2021 17:01:52 +0900
-Subject: [PATCH 001/128] [c10/core] Add AXDIMM to DeviceType
+Subject: [PATCH 001/135] [c10/core] Add AXDIMM to DeviceType
 
 Add new 'AXDIMM' device type.
 

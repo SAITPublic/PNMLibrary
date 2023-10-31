@@ -26,11 +26,11 @@ using namespace pnm::memory::property;
 TEST(Property, RankLocation) {
   static constexpr auto rank_num = 10;
   const CURegion loc{rank_num};
-  ASSERT_EQ(loc.rank(), rank_num);
+  ASSERT_EQ(loc.cunit(), rank_num);
 
   const PropertiesList props(loc);
   ASSERT_TRUE(props.has_property<CURegion>());
-  ASSERT_EQ(props.get_property<CURegion>().rank(), rank_num);
+  ASSERT_EQ(props.get_property<CURegion>().cunit(), rank_num);
 }
 
 TEST(Property, AllocPolicy) {
@@ -52,7 +52,7 @@ TEST(Property, PropertyChain) {
     ASSERT_TRUE(props.has_property<CURegion>());
     ASSERT_TRUE(props.has_property<AllocPolicy>());
 
-    ASSERT_EQ(props.get_property<CURegion>().rank(), rank_id);
+    ASSERT_EQ(props.get_property<CURegion>().cunit(), rank_id);
     ASSERT_EQ(props.get_property<AllocPolicy>().policy(),
               SLS_ALLOC_DISTRIBUTE_ALL);
   };
@@ -63,7 +63,7 @@ TEST(Property, PropertyChain) {
     ASSERT_TRUE(props.has_property<CURegion>());
     ASSERT_FALSE(props.has_property<AllocPolicy>());
 
-    ASSERT_EQ(props.get_property<CURegion>().rank(), rank_id);
+    ASSERT_EQ(props.get_property<CURegion>().cunit(), rank_id);
 
     EXPECT_THROW(props.get_property<AllocPolicy>().policy(), std::out_of_range);
   };

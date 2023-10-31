@@ -26,9 +26,9 @@
 
 //[TODO:] common interface for process manager functionality
 class DeviceWrapper {
-  using IMDBDevice = pnm::imdb::device::BaseDevice;
-  using SLSDevice = pnm::sls::device::BaseDevice;
-  using VariantType = std::variant<IMDBDevice *, SLSDevice *>;
+  using ImdbDevice = pnm::imdb::device::BaseDevice;
+  using SlsDevice = pnm::sls::device::BaseDevice;
+  using VariantType = std::variant<ImdbDevice *, SlsDevice *>;
 
 public:
   DeviceWrapper(pnm::Device::Type type)
@@ -66,7 +66,7 @@ private:
   static VariantType get_device(pnm::ContextHandler &ctx);
 
   pnm::ContextHandler ctx_;
-  std::variant<IMDBDevice *, SLSDevice *> device_;
+  std::variant<ImdbDevice *, SlsDevice *> device_;
 };
 
 inline bool exchange_cleanup(bool new_value, pnm::Device::Type type) {

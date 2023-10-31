@@ -1,7 +1,7 @@
 From f96a4ae347fe5827bbf9feba7057e1221257e4a8 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 10 Nov 2021 15:32:53 +0900
-Subject: [PATCH 026/128] [caffe2/operators] Rework SparseLengthsSumVec
+Subject: [PATCH 026/135] [caffe2/operators] Rework SparseLengthsSumVec
  operator
 
 Rework SparseLengthsSumVec operator to use more intuitive interface

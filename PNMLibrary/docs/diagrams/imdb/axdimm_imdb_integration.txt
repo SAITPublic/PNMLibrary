@@ -48,11 +48,11 @@ namespace Operators{
  interface PNMOperator #lightblue{
  }
 
- class SLSOperator #lightgreen implements PNMOperator{
+ class SLSOp #lightgreen implements PNMOperator{
  }
 
- SLSOperator o-- MemorySubsystem::AxdimmTablesLayout: input
- SLSOperator o-- MemorySubsystem::MemoryBuffer: output
+ SLSOp o-- MemorySubsystem::AxdimmTablesLayout: input
+ SLSOp o-- MemorySubsystem::MemoryBuffer: output
 
  class ScanBaseOperator implements PNMOperator{
  }

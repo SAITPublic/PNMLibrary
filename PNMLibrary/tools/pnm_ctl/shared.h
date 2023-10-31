@@ -11,8 +11,8 @@
  * Electronics.
  */
 
-#ifndef SHARED_H
-#define SHARED_H
+#ifndef TOOLS_CTL_SHARED_H
+#define TOOLS_CTL_SHARED_H
 
 #include "command_interface.h"
 
@@ -26,7 +26,7 @@ namespace tools::ctl {
 // [TODO: @e-kutovoi] Put this in pnm_sls_mem_topology.h
 constexpr auto SLS_SHMEM = "/sls";
 
-class DestroySharedMemory final : public ICommand {
+class DestroySharedMemory : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 
@@ -38,7 +38,7 @@ private:
   bool is_imdb_{};
 };
 
-class SetupSharedMemory final : public ICommand {
+class SetupSharedMemory : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 
@@ -54,4 +54,4 @@ private:
 
 } // namespace tools::ctl
 
-#endif // SHARED_H
+#endif // TOOLS_CTL_SHARED_H

@@ -13,6 +13,8 @@
 #include "common.h"
 #include "wrapper.h"
 
+#include "test/utils/pnm_fmt.h"
+
 #include "pnmlib/core/buffer.h"
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/device.h"
@@ -20,8 +22,8 @@
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 
-#include <sched.h>
 #include <signal.h> // NOLINT(modernize-deprecated-headers)
+#include <sys/types.h>
 
 #include <chrono>
 #include <cstdint>
@@ -31,8 +33,8 @@
 #include <utility>
 #include <vector>
 
-const auto PNMDeviceTypes = ::testing::Values(pnm::Device::Type::SLS_AXDIMM,
-                                              pnm::Device::Type::IMDB_CXL);
+const auto PnmDeviceTypes =
+    ::testing::Values(pnm::Device::Type::SLS, pnm::Device::Type::IMDB);
 
 // - parent forks 2 children
 // - child[0] allocates almost all memory (9/10 size) and communicates to parent
@@ -614,27 +616,22 @@ TEST_P(MTWorkerNotReleasedResourceKilledF, MTWorkerNotReleasedResourceKilled) {
   this->run(GetParam());
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    PNMProcessManager, MPChildNotReleasedResourceItselfF, PNMDeviceTypes,
-    generate_param_name<MPChildNotReleasedResourceItselfF>);
+INSTANTIATE_TEST_SUITE_P(PnmProcessManager, MPChildNotReleasedResourceItselfF,
+                         PnmDeviceTypes, print_fmt_test_params);
 
-INSTANTIATE_TEST_SUITE_P(
-    PNMProcessManager, MPChildKilledAllocReusedOtherChildF, PNMDeviceTypes,
-    generate_param_name<MPChildKilledAllocReusedOtherChildF>);
+INSTANTIATE_TEST_SUITE_P(PnmProcessManager, MPChildKilledAllocReusedOtherChildF,
+                         PnmDeviceTypes, print_fmt_test_params);
 
-INSTANTIATE_TEST_SUITE_P(
-    PNMProcessManager, MPChildKilledComputeUnitsReusedOtherChildF,
-    PNMDeviceTypes,
-    generate_param_name<MPChildKilledComputeUnitsReusedOtherChildF>);
+INSTANTIATE_TEST_SUITE_P(PnmProcessManager,
+                         MPChildKilledComputeUnitsReusedOtherChildF,
+                         PnmDeviceTypes, print_fmt_test_params);
 
-INSTANTIATE_TEST_SUITE_P(
-    PNMProcessManager, MPChildKilledComputeUnitsReusedNextRunF, PNMDeviceTypes,
-    generate_param_name<MPChildKilledComputeUnitsReusedNextRunF>);
+INSTANTIATE_TEST_SUITE_P(PnmProcessManager,
+                         MPChildKilledComputeUnitsReusedNextRunF,
+                         PnmDeviceTypes, print_fmt_test_params);
 
-INSTANTIATE_TEST_SUITE_P(
-    PNMProcessManager, MTWorkerNotReleasedResourceItselfF, PNMDeviceTypes,
-    generate_param_name<MTWorkerNotReleasedResourceItselfF>);
+INSTANTIATE_TEST_SUITE_P(PnmProcessManager, MTWorkerNotReleasedResourceItselfF,
+                         PnmDeviceTypes, print_fmt_test_params);
 
-INSTANTIATE_TEST_SUITE_P(
-    PNMProcessManager, MTWorkerNotReleasedResourceKilledF, PNMDeviceTypes,
-    generate_param_name<MTWorkerNotReleasedResourceKilledF>);
+INSTANTIATE_TEST_SUITE_P(PnmProcessManager, MTWorkerNotReleasedResourceKilledF,
+                         PnmDeviceTypes, print_fmt_test_params);

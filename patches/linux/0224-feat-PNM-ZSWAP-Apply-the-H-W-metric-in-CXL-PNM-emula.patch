@@ -1,0 +1,261 @@
+From 37dc9b49d04923138e1c45df0fb322956a6bd09c Mon Sep 17 00:00:00 2001
+From: "mao.chen" <mao.chen@samsung.com>
+Date: Thu, 26 Oct 2023 00:24:57 +0800
+Subject: [PATCH 224/225] feat:[PNM][ZSWAP] Apply the H/W metric in CXL-PNM
+ emulator
+
+Update the delay_latency which simulates the cycle of scheduling,
+instruction fetching and (de)compression. The delay_latency is
+from frequency scaling the H/W metric - Q2Q counters, this counters
+value is profiled on the FPGA.
+
+BREAKING CHANGE: no
+
+Resolve: MCS23-1552
+
+Signed-off-by: mao.chen <mao.chen@samsung.com>
+---
+ drivers/pnm/zswap/ps_compression.c | 33 ++++++++++------
+ drivers/pnm/zswap/sim.c            | 62 ++++++++++++++++++++++++++++--
+ drivers/pnm/zswap/sim.h            |  7 ++++
+ 3 files changed, 86 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/pnm/zswap/ps_compression.c b/drivers/pnm/zswap/ps_compression.c
+index 3dbd38d9f..edb0019ae 100644
+--- a/drivers/pnm/zswap/ps_compression.c
++++ b/drivers/pnm/zswap/ps_compression.c
+@@ -18,6 +18,20 @@
+ 
+ /* Parameters of PNM Simulator */
+ 
++/* Set H/W metrics-compress latency in CXL-PNM emulator
++ * The latency varies for different pages
++ */
++static unsigned long delay_latency_fpga_comp = 5000; /* Cycle */
++module_param_named(delay_latency_fpga_comp, delay_latency_fpga_comp, ulong,
++		   0644);
++
++/* Set H/W metrics-decompress latency in CXL-PNM emulator
++ * The latency varies for different pages
++ */
++static unsigned long delay_latency_fpga_decomp = 5000; /* Cycle */
++module_param_named(delay_latency_fpga_decomp, delay_latency_fpga_decomp, ulong,
++		   0644);
++
+ /* Set clock frequency for HOST CPU */
+ static unsigned int host_cpu_clk_freq = 2400; /* MHz */
+ module_param_named(host_cpu_clock_frequency, host_cpu_clk_freq, uint, 0644);
+@@ -289,12 +303,13 @@ static void transmit_zpage_to_dstpage(struct unit_info *unit)
+ }
+ 
+ /* Cycle delay function for simulator */
+-static void delay_cycles(int cycles)
++static u64 delay_cycles(u64 start, u64 finish, unsigned long cycles)
+ {
+-	int i;
+-
+-	for (i = 0; i < cycles; i++)
++	while ((finish - start) < cycles) {
+ 		asm volatile("nop" ::: "memory");
++		finish = rdtsc_ordered();
++	}
++	return finish;
+ }
+ 
+ /* functions to predict the performance improvement of pnm offloading */
+@@ -335,10 +350,7 @@ static int pnm_compress_sim(struct compression_core *self,
+ 
+ 	finished = rdtsc_ordered();
+ 
+-	while ((finished - started) < unit->delay_cycles) {
+-		delay_cycles(1);
+-		finished = rdtsc_ordered();
+-	}
++	finished = delay_cycles(started, finished, delay_latency_fpga_comp);
+ 
+ 	if (unlikely(log_enabled))
+ 		PNM_INF("[PNM] COMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
+@@ -384,10 +396,7 @@ static int pnm_decompress_sim(struct compression_core *self,
+ 
+ 	finished = rdtsc_ordered();
+ 
+-	while ((finished - started) < unit->delay_cycles) {
+-		delay_cycles(1);
+-		finished = rdtsc_ordered();
+-	}
++	finished = delay_cycles(started, finished, delay_latency_fpga_decomp);
+ 
+ 	if (unlikely(log_enabled))
+ 		PNM_INF("[PNM] DECOMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 4bfb6e439..816c453d7 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -40,10 +40,17 @@ static bool sim_is_active;
+ 
+ static struct benchmark_data bench_data;
+ 
++#define BENCHMARK_TIME(param) (param = rdtsc_ordered())
++#define BENCHMARK_LATENCY(start, end) (end - start)
++
+ /*********************************
+  * PNM Simulator Parameters
+  **********************************/
+ 
++/* Enable/disable the log for applying H/W metric */
++static bool log_latency_enable = true;
++module_param_named(log_latency_enable, log_latency_enable, bool, 0644);
++
+ /* Set the maximum number of compress logic */
+ static unsigned int num_comp_unit = 4;
+ module_param_named(num_comp_unit, num_comp_unit, uint, 0644);
+@@ -101,8 +108,9 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 	int status = CXL_PNM_FAILURE;
+ 	ktime_t kstarted, kdeadline;
+ 	u64 started;
++	struct benchmark_latency bench_latency;
+ 
+-	started = rdtsc();
++	started = rdtsc_ordered();
+ 
+ 	// unit scheduling with round robin policy
+ 	//  1.  find an unit which is idle
+@@ -130,6 +138,9 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 		return status;
+ 	}
+ 
++	if (unlikely(log_latency_enable))
++		BENCHMARK_TIME(bench_latency.sched_finished);
++
+ 	if (unlikely(log_enabled))
+ 		PNM_INF("[HOST-C][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
+ 			tid, pnm_id, pnm_ctrl->compress[pnm_id].state,
+@@ -144,6 +155,9 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 	/* update the state of pnm unit */
+ 	smp_store_release(&pnm_ctrl->compress[pnm_id].state, RUNNING);
+ 
++	if (unlikely(log_latency_enable))
++		BENCHMARK_TIME(bench_latency.inst_finished);
++
+ 	/* wait for result of pnm with polling */
+ 	kstarted = ktime_get();
+ 	kdeadline = ktime_add_ns(kstarted, read_poll_ns);
+@@ -153,6 +167,9 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 	if (!READ_ONCE(sim_is_active))
+ 		return CXL_PNM_FAILURE;
+ 
++	if (unlikely(log_latency_enable))
++		BENCHMARK_TIME(bench_latency.com_dcom_finished);
++
+ 	*out_len = READ_ONCE(pnm_ctrl->compress[pnm_id].dst_size);
+ 	status = READ_ONCE(pnm_ctrl->compress[pnm_id].commit.status);
+ 
+@@ -161,9 +178,23 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 			*out_len);
+ 
+ 	if (unlikely(pnm_bench_enabled))
+-		bench_data.comp_cycle[pnm_id] += rdtsc() - started;
++		bench_data.comp_cycle[pnm_id] += rdtsc_ordered() - started;
+ 
+ 	smp_store_release(&pnm_ctrl->compress[pnm_id].done, false);
++
++	if (unlikely(log_latency_enable)) {
++		BENCHMARK_TIME(bench_latency.get_res_finished);
++		PNM_INF("[HOST-C][%d] SCHED: %lld  INST: %lld  COMPR: %lld  GET: %lld",
++			tid,
++			BENCHMARK_LATENCY(started,
++					  bench_latency.sched_finished),
++			BENCHMARK_LATENCY(bench_latency.sched_finished,
++					  bench_latency.inst_finished),
++			BENCHMARK_LATENCY(bench_latency.inst_finished,
++					  bench_latency.com_dcom_finished),
++			BENCHMARK_LATENCY(bench_latency.com_dcom_finished,
++					  bench_latency.get_res_finished));
++	}
+ 	atomic_inc(&pnm_ctrl->num_idle_comp_unit);
+ 	smp_store_release(&pnm_ctrl->compress[pnm_id].is_idle, true);
+ 
+@@ -178,8 +209,9 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 	int status = CXL_PNM_FAILURE;
+ 	ktime_t kstarted, kdeadline;
+ 	u64 started;
++	struct benchmark_latency bench_latency;
+ 
+-	started = rdtsc();
++	started = rdtsc_ordered();
+ 
+ 	//[TODO, ]: need to execute software decompression when there are not idle units
+ 	if (unlikely(log_enabled))
+@@ -205,6 +237,8 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 		}
+ 	}
+ 	spin_unlock(&pnm_ctrl->decompress_lock);
++	if (unlikely(log_latency_enable))
++		BENCHMARK_TIME(bench_latency.sched_finished);
+ 
+ 	if (!READ_ONCE(sim_is_active)) {
+ 		PNM_ERR("[HOST-D][%d] Simulator has disabled between comp/decomp!\n",
+@@ -226,6 +260,9 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 	/* update the state of pnm unit */
+ 	smp_store_release(&pnm_ctrl->decompress[pnm_id].state, RUNNING);
+ 
++	if (unlikely(log_latency_enable))
++		BENCHMARK_TIME(bench_latency.inst_finished);
++
+ 	/* wait for result of pnm with polling */
+ 	kstarted = ktime_get();
+ 	kdeadline = ktime_add_ns(kstarted, read_poll_ns);
+@@ -235,6 +272,9 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 	if (!READ_ONCE(sim_is_active))
+ 		return CXL_PNM_FAILURE;
+ 
++	if (unlikely(log_latency_enable))
++		BENCHMARK_TIME(bench_latency.com_dcom_finished);
++
+ 	*out_len = READ_ONCE(pnm_ctrl->decompress[pnm_id].dst_size);
+ 	status = READ_ONCE(pnm_ctrl->decompress[pnm_id].commit.status);
+ 
+@@ -243,9 +283,23 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 			*out_len);
+ 
+ 	if (unlikely(pnm_bench_enabled))
+-		bench_data.decomp_cycle[pnm_id] += rdtsc() - started;
++		bench_data.decomp_cycle[pnm_id] += rdtsc_ordered() - started;
+ 
+ 	smp_store_release(&pnm_ctrl->decompress[pnm_id].done, false);
++
++	if (unlikely(log_latency_enable)) {
++		BENCHMARK_TIME(bench_latency.get_res_finished);
++		PNM_INF("[HOST-D][%d] SCHED: %lld  INST: %lld  COMPR: %lld  GET: %lld",
++			tid,
++			BENCHMARK_LATENCY(started,
++					  bench_latency.sched_finished),
++			BENCHMARK_LATENCY(bench_latency.sched_finished,
++					  bench_latency.inst_finished),
++			BENCHMARK_LATENCY(bench_latency.inst_finished,
++					  bench_latency.com_dcom_finished),
++			BENCHMARK_LATENCY(bench_latency.com_dcom_finished,
++					  bench_latency.get_res_finished));
++	}
+ 	atomic_inc(&pnm_ctrl->num_idle_decomp_unit);
+ 	smp_store_release(&pnm_ctrl->decompress[pnm_id].is_idle, true);
+ 
+diff --git a/drivers/pnm/zswap/sim.h b/drivers/pnm/zswap/sim.h
+index 2c53bf2d1..dede78a10 100644
+--- a/drivers/pnm/zswap/sim.h
++++ b/drivers/pnm/zswap/sim.h
+@@ -140,4 +140,11 @@ struct benchmark_data {
+ 	u64 decomp_cycle[MAX_UNIT];
+ };
+ 
++struct benchmark_latency {
++	u64 sched_finished;
++	u64 inst_finished;
++	u64 com_dcom_finished;
++	u64 get_res_finished;
++};
++
+ #endif //__ZSWAP_SIM_H__
+-- 
+2.34.1
+

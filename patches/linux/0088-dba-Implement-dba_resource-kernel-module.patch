@@ -1,7 +1,7 @@
 From 55be519168613110e27a16ebaf0a721395460b96 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Fri, 17 Mar 2023 10:04:59 +0300
-Subject: [PATCH 088/161] [dba] Implement dba_resource kernel module
+Subject: [PATCH 088/225] [dba] Implement dba_resource kernel module
 
 Create kernel module that will create char device `/dev/pnm/dba_resource`
 and implement two IOCTL to allocate and deallocate memory.

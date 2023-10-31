@@ -1,7 +1,7 @@
 From f1cfc9f80ed40d4221824f077ce4ec095812a10d Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 17 Nov 2021 09:58:21 +0900
-Subject: [PATCH 002/161] [drivers/dax] AXDIMM: hackt support for
+Subject: [PATCH 002/225] [drivers/dax] AXDIMM: hackt support for
  axdimm_open/axdimm_mmap
 
 Just copied from AXDIMM DD with removed unused stuff.

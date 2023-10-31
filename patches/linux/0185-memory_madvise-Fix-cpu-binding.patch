@@ -1,0 +1,30 @@
+From 577a964c9432d45c56599001ea1f5d94cc2a9bff Mon Sep 17 00:00:00 2001
+From: Valentin Iliushin <v.iliushin@partner.samsung.com>
+Date: Tue, 19 Sep 2023 14:55:26 +0000
+Subject: [PATCH 185/225] [memory_madvise] Fix cpu binding
+
+Since time(NULL) is usually equal in every thread,
+concurrency in memory_madivse was in fact disabled.
+Bind working threads to sequential cpus.
+
+Signed-off-by: Valentin Iliushin <v.iliushin@partner.samsung.com>
+---
+ scripts/pnm/zswap/tests/madvise/memory_madvise.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/pnm/zswap/tests/madvise/memory_madvise.c b/scripts/pnm/zswap/tests/madvise/memory_madvise.c
+index 996e3f602..bef3cd402 100644
+--- a/scripts/pnm/zswap/tests/madvise/memory_madvise.c
++++ b/scripts/pnm/zswap/tests/madvise/memory_madvise.c
+@@ -194,7 +194,7 @@ int main(int argc, char **argv)
+ 		struct thread_info *const info = &threads[i].thread_info;
+ 
+ 		info->seed = (uint64_t)i + 1;
+-		info->core_id = time(NULL);
++		info->core_id = info->seed;
+ 		info->nr_pages = nr_pages;
+ 	}
+ 
+-- 
+2.34.1
+

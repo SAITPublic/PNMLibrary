@@ -1,7 +1,7 @@
 From 12da198b9d8e04ba275b44bc74d4ffb521169aab Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Fri, 1 Jul 2022 12:54:04 +0300
-Subject: [PATCH 09/33] Add Sgx* operator to DeepRecSys
+Subject: [PATCH 09/34] Add Sgx* operator to DeepRecSys
 
 Add Sgx version of SLS operator to DeepRecSys.
 

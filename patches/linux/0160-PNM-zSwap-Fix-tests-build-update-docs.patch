@@ -1,7 +1,7 @@
 From 1f72b6693ad6e2202ac562178beab5913412eb59 Mon Sep 17 00:00:00 2001
 From: Petr Bred <p.bred@samsung.com>
 Date: Wed, 9 Aug 2023 09:04:41 +0300
-Subject: [PATCH 160/161] [PNM][zSwap] Fix tests build & update docs
+Subject: [PATCH 160/225] [PNM][zSwap] Fix tests build & update docs
 
 * madvice binary name changed
 

@@ -1,0 +1,64 @@
+From 1c38dd8814138f688da2f985132b8b1e6e3ec9d1 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Thu, 26 Oct 2023 20:44:33 +0300
+Subject: [PATCH 221/225] [zSwap] Fix page fault from inst_decomp
+
+* When we shutdown the zswap simulator
+by N >> pnm_zswap_sim/parameters/enabled, we can still end up in the
+decompression inst_decomp function due to a successful compression.
+In this case an uninitialized pnm_id variable was used in the logs
+as pnm_ctrl->decompress[pnm_id].state, which led to OOB and page fault.
+
+Resolve: MCS23-1789, MCS23-1800
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ PNM_ZSWAP_HOW_TO.md     | 5 +++++
+ drivers/pnm/zswap/sim.c | 8 +++++++-
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/PNM_ZSWAP_HOW_TO.md b/PNM_ZSWAP_HOW_TO.md
+index c34e73a8e..978687270 100644
+--- a/PNM_ZSWAP_HOW_TO.md
++++ b/PNM_ZSWAP_HOW_TO.md
+@@ -229,6 +229,11 @@ When the algorithm is set, the simulator should be run:
+ echo "Y" > /sys/module/pnm_zswap_sim/parameters/enabled
+ ```
+ 
++Please do not disable the simulator between compression and decompression operations.
++You need to make sure that all swapped in pages are swapped out before disabling.
++The opposite will lead to errors, since the zSwap compression and decompression algorithms
++differ from the standard ones.
++
+ ## Run performance simulator
+ 
+ As we said early, the default mode for the simulator is a `functional` simulator. So, to run performance simulator you
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 4008d95df..4bfb6e439 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -173,7 +173,7 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ /* for decompression */
+ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ {
+-	int pnm_id;
++	int pnm_id = 0;
+ 	pid_t tid = current->pid;
+ 	int status = CXL_PNM_FAILURE;
+ 	ktime_t kstarted, kdeadline;
+@@ -206,6 +206,12 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 	}
+ 	spin_unlock(&pnm_ctrl->decompress_lock);
+ 
++	if (!READ_ONCE(sim_is_active)) {
++		PNM_ERR("[HOST-D][%d] Simulator has disabled between comp/decomp!\n",
++			tid);
++		return CXL_PNM_FAILURE;
++	}
++
+ 	if (unlikely(log_enabled))
+ 		PNM_INF("[HOST-D][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
+ 			tid, pnm_id, pnm_ctrl->decompress[pnm_id].state,
+-- 
+2.34.1
+

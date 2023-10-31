@@ -13,16 +13,16 @@
 
 #include "base.h"
 
-#include "core/device/sls/control.h"
 #include "core/device/sls/memblockhandler/axdimm/hardware.h"
 #include "core/device/sls/memblockhandler/axdimm/sim.h"
 #include "core/device/sls/memblockhandler/cxl/hardware.h"
 #include "core/device/sls/memblockhandler/cxl/sim.h"
-#include "core/device/sls/memory_map.h"
+#include "core/device/sls/utils/memory_map.h"
 
 #include "common/make_error.h"
+#include "common/topology_constants.h" // NOLINT(misc-include-cleaner)
 
-#include "pnmlib/core/device.h"
+#include "pnmlib/sls/control.h"
 
 #include <linux/sls_resources.h>
 
@@ -35,63 +35,60 @@
 
 namespace pnm::sls::device {
 
-void ISLSMemBlockHandler::init(const MemInfo &info, int device_fd,
-                               Device::Type devtype) {
-  mem_map_.init_device_memory(info, device_fd, devtype);
+void ISlsMemBlockHandler::init(const MemInfo &info, int device_fd) {
+  mem_map_.init_device_memory(info, device_fd);
   mem_map_.print();
 }
 
-void ISLSMemBlockHandler::write_block(sls_mem_blocks_e type,
+void ISlsMemBlockHandler::write_block(sls_mem_blocks_e type,
                                       uint8_t compute_unit, uint32_t offset,
                                       const uint8_t *buf_in,
                                       size_t write_size) {
-  assert(compute_unit < num_compute_units());
+  assert(compute_unit < topo().NumOfCUnits);
   const auto &mem_addr = mem_map_[compute_unit];
   write_block_impl(mem_addr, compute_unit, type, offset, buf_in, write_size);
 }
 
-void ISLSMemBlockHandler::read_block(sls_mem_blocks_e type,
+void ISlsMemBlockHandler::read_block(sls_mem_blocks_e type,
                                      uint8_t compute_unit, uint32_t offset,
                                      uint8_t *buf_out, size_t read_size) {
-  assert(compute_unit < num_compute_units());
+  assert(compute_unit < topo().NumOfCUnits);
   const auto &mem_addr = mem_map_[compute_unit];
   read_block_impl(mem_addr, compute_unit, type, offset, buf_out, read_size);
 }
 
-void *ISLSMemBlockHandler::get_mem_block_ptr(sls_mem_blocks_e type,
+void *ISlsMemBlockHandler::get_mem_block_ptr(sls_mem_blocks_e type,
                                              uint8_t compute_unit,
                                              uint32_t offset) {
   return get_block_ptr(type, compute_unit, offset);
 }
 
 size_t
-ISLSMemBlockHandler::get_min_block_size(sls_mem_blocks_e block_type) const {
+ISlsMemBlockHandler::get_min_block_size(sls_mem_blocks_e block_type) const {
   return mem_map_.get_min_block_size(block_type);
 }
 
-size_t ISLSMemBlockHandler::get_base_memory_size() const {
+size_t ISlsMemBlockHandler::get_base_memory_size() const {
   return mem_map_.get_all_cunits_block_size(SLS_BLOCK_BASE);
 }
 
-std::unique_ptr<ISLSMemBlockHandler>
-ISLSMemBlockHandler::create(Device::Type devtype) {
-  switch (devtype) {
-  case Device::Type::SLS_AXDIMM: {
+std::unique_ptr<ISlsMemBlockHandler>
+ISlsMemBlockHandler::create(BusType bus_type) {
+  switch (bus_type) {
+  case BusType::AXDIMM: {
     using ConcreteMemBlockHandlerType =
         std::conditional_t<PNM_PLATFORM != HARDWARE,
                            AxdimmSimulatorMemBlockHandler,
                            AxdimmHardwareMemBlockHandler>;
     return std::make_unique<ConcreteMemBlockHandlerType>();
   }
-  case Device::Type::SLS_CXL: {
+  case BusType::CXL: {
     using ConcreteMemBlockHandlerType =
         std::conditional_t<PNM_PLATFORM != HARDWARE,
-                           CXLSimulatorMemBlockHandler,
-                           CXLHardwareMemBlockHandler>;
+                           CxlSimulatorMemBlockHandler,
+                           CxlHardwareMemBlockHandler>;
     return std::make_unique<ConcreteMemBlockHandlerType>();
   }
-  default:
-    break;
   }
   throw pnm::error::make_inval("Device type.");
 }

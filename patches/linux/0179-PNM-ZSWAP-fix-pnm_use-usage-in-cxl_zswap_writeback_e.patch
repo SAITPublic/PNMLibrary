@@ -1,0 +1,32 @@
+From df2eedc91911967d1740e7b8f31431e16e363097 Mon Sep 17 00:00:00 2001
+From: "mao.chen" <mao.chen@samsung.com>
+Date: Wed, 13 Sep 2023 18:36:21 +0800
+Subject: [PATCH 179/225] [PNM][ZSWAP]fix pnm_use usage in
+ cxl_zswap_writeback_entry
+
+In cxl_zswap_writeback_entry() function, pnm_use is defined but is not
+assigned a value. An error occurred in the eviction step when the zpool
+is full. pnm_use should be assigned by entry->pnm_use
+
+Resolve: MCS23-1552
+
+Signed-off-by: mao.chen <mao.chen@samsung.com>
+---
+ mm/pnm/pnm_zswap.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index 29b86e2cd..39fc4bce1 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1326,6 +1326,7 @@ static int cxl_zswap_writeback_entry(struct zpool *pool, unsigned long handle)
+ 	WARN_ON(offset != entry->offset);
+ 
+ 	src = (u8 *)zhdr + sizeof(struct cxl_zswap_header);
++	pnm_use = entry->pnm_use;
+ 	if (!zpool_can_sleep_mapped(pool)) {
+ 		memcpy(tmp, src, entry->length);
+ 		src = tmp;
+-- 
+2.34.1
+

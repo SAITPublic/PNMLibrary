@@ -1,0 +1,104 @@
+From ce22224ac177d18843c7f7f98204f6b20e223796 Mon Sep 17 00:00:00 2001
+From: Alex Antonov <alex.antonov@samsung.com>
+Date: Mon, 16 Oct 2023 16:25:58 +0300
+Subject: [PATCH 215/225] [sls] Fix mem_size_gb setting
+
+There was division by zero in
+SLS_AXDIMM_HW_MEM_SZ_GB / sls_params.mem_size_gb.value
+if mem_size_gb was not set.
+
+Signed-off-by: Alex Antonov <alex.antonov@samsung.com>
+---
+ drivers/pnm/sls_resource/topo/axdimm.h |  1 +
+ drivers/pnm/sls_resource/topo/cxl.h    |  1 +
+ drivers/pnm/sls_resource/topo/params.c | 15 ++++++++-------
+ drivers/pnm/sls_resource/topo/params.h |  1 +
+ 4 files changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/topo/axdimm.h b/drivers/pnm/sls_resource/topo/axdimm.h
+index 1a1da8348..ea497d1a4 100644
+--- a/drivers/pnm/sls_resource/topo/axdimm.h
++++ b/drivers/pnm/sls_resource/topo/axdimm.h
+@@ -27,6 +27,7 @@ static const struct sls_topology axdimm_default_sls_topology = {
+ 	.reg_exec = 0x40,
+ 	.reg_poll = 0x840,
+ 	.alignment_sz = PAGE_SIZE,
++	.mem_size_gb = SLS_AXDIMM_HW_MEM_SZ_GB,
+ 	.block_sz = {},
+ 	.base_addr = 66ULL << ONE_GB_SHIFT, // hardware base addr
+ };
+diff --git a/drivers/pnm/sls_resource/topo/cxl.h b/drivers/pnm/sls_resource/topo/cxl.h
+index ba86fa168..27bee1ff2 100644
+--- a/drivers/pnm/sls_resource/topo/cxl.h
++++ b/drivers/pnm/sls_resource/topo/cxl.h
+@@ -29,6 +29,7 @@ static const struct sls_topology cxl_default_sls_topology = {
+ 	.reg_exec = 0x40,
+ 	.reg_poll = 0x440,
+ 	.alignment_sz = HUGE_PAGE_SIZE,
++	.mem_size_gb = SLS_CXL_HW_MEM_SZ_GB,
+ 	.block_sz = {},
+ 	.base_addr = 66ULL << ONE_GB_SHIFT, // hardware base addr
+ };
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index 9d76844e2..2899cbaf4 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -110,28 +110,28 @@ static void set_mem_blocks_sizes(u64 *block_sz, int scale)
+ 
+ int init_topology(void)
+ {
+-	int scale = 0;
++	int scale, default_mem_size_gb;
+ 
+ 	APPLY_PARAMETER(dev_type);
+ 
+ 	switch ((enum sls_device_type)sls_topology.dev_type) {
+ 	case SLS_AXDIMM:
+ 		sls_topology = axdimm_default_sls_topology;
+-		if (sls_params.mem_size_gb.value != SLS_AXDIMM_HW_MEM_SZ_GB)
+-			scale = ilog2(SLS_AXDIMM_HW_MEM_SZ_GB /
+-				      sls_params.mem_size_gb.value);
+ 		break;
+ 	case SLS_CXL:
+ 		sls_topology = cxl_default_sls_topology;
+-		if (sls_params.mem_size_gb.value != SLS_CXL_HW_MEM_SZ_GB)
+-			scale = ilog2(SLS_CXL_HW_MEM_SZ_GB /
+-				      sls_params.mem_size_gb.value);
+ 		break;
+ 	case SLS_UNDEFINED:
+ 	case SLS_MAX:
+ 		return -EINVAL;
+ 	}
+ 
++	// to calculate "scale" we need to know original hw mem_size_gb that
++	// is placed in sls_topology.mem_size_gb. Then sls_topology.mem_size_gb
++	// is rewrote in APPLY_PARAMETER if mem_size_gb is set by the parameter.
++	default_mem_size_gb = sls_topology.mem_size_gb;
++
++	APPLY_PARAMETER(mem_size_gb);
+ 	APPLY_PARAMETER(nr_cunits);
+ 	APPLY_PARAMETER(aligned_tag_sz);
+ 	APPLY_PARAMETER(data_sz);
+@@ -157,6 +157,7 @@ int init_topology(void)
+ 	sls_topology.nr_ch =
+ 		roundup(sls_topology.nr_cs, NR_CS_PER_CH) / NR_CS_PER_CH;
+ 
++	scale = ilog2(default_mem_size_gb / sls_topology.mem_size_gb);
+ 	set_mem_blocks_sizes(sls_topology.block_sz, scale);
+ 
+ 	return 0;
+diff --git a/drivers/pnm/sls_resource/topo/params.h b/drivers/pnm/sls_resource/topo/params.h
+index 376c946b7..ed35732b6 100644
+--- a/drivers/pnm/sls_resource/topo/params.h
++++ b/drivers/pnm/sls_resource/topo/params.h
+@@ -48,6 +48,7 @@ struct sls_topology {
+ 	int reg_exec;
+ 	int reg_poll;
+ 	int alignment_sz;
++	int mem_size_gb;
+ 	uint64_t block_sz[SLS_BLOCK_MAX];
+ 	uint64_t base_addr;
+ };
+-- 
+2.34.1
+

@@ -1,7 +1,7 @@
 From 622aeffd7618eb19172c1d3fd085f0c53c7fb5d1 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 24 Nov 2022 11:35:15 +0300
-Subject: [PATCH 14/23] Get rid of precompile parameter
+Subject: [PATCH 14/24] Get rid of precompile parameter
 
 Remove precompile option from demo app to fit the latest api.
 

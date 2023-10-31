@@ -1,7 +1,7 @@
 From 93513f44780265f508a2e01863e9f652c5045126 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 15 Nov 2021 13:34:17 +0900
-Subject: [PATCH 030/128] [lengths_reducer_ops_axdimm.cc] Call 'axdimm_init' if
+Subject: [PATCH 030/135] [lengths_reducer_ops_axdimm.cc] Call 'axdimm_init' if
  needed
 
 Move 'axdimm_init' call into SLS operator itself, allowing to remove direct

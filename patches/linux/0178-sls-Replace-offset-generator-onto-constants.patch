@@ -1,0 +1,169 @@
+From 871995033504ce274ddc42a96b636045a3fb8621 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 5 Sep 2023 14:46:39 +0000
+Subject: [PATCH 178/225] [sls] Replace offset generator onto constants
+
+Related: MCS23-1534
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/topo/params.c | 123 ++++++++-----------------
+ 1 file changed, 36 insertions(+), 87 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index 490e09eac..73087816b 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -6,6 +6,7 @@
+ #include "cxl.h"
+ #include "log.h"
+ 
++#include <linux/bitfield.h>
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
+ #include <linux/sls_common.h>
+@@ -18,98 +19,46 @@ static struct sls_params sls_params = cxl_default_sls_params;
+ #error "SLS bus/interface should be selected!"
+ #endif /* CONFIG_DEV_SLS_BUS == DEV_TYPE_SLS_AXDIMM */
+ 
+-/* Base offset for each CS */
+-#define EMBT_BASE_CS0_OFFSET 0ULL
+-#define EMBT_BASE_CS1_OFFSET 0x800000000ULL // hardware CS1 offset addr
+-#define SLS_CH_ID 0
+-
+-//[TODO: MCS23-1373] replace this function onto constants
+-static uint64_t sls_make_address(int channel, int rank, int bankgroup, int bank,
+-				 int row, int column, int scale)
++/* CS offsets for interleaved ranks */
++// bankgroup 0 bank 0 row 0 column 0
++#define BASE_OFFSET 0x000000000
++// bankgroup 0 bank 0 row 0x1F000 column 0
++#define INST_OFFSET 0x7c0000000
++// bankgroup 0 bank 0 row 0x1F100 column 0
++#define CFGR_OFFSET 0x7c2000000
++// bankgroup 0 bank 0 row 0x1F200 column 0
++#define TAGS_OFFSET 0x7c4000000
++// bankgroup 0 bank 0 row 0x1F400 column 0
++#define PSUM_OFFSET 0x7c8000000
++#define CS1_OFFSET 0x800000000
++
++/* Mask for scaling */
++#define SCALE_MASK GENMASK_ULL(36, 30)
++
++/*
++ * Here we do right shift only for [30:36] bits,
++ * CH and CS from 36 and 35 position
++ * and five row bits from [30:34] position
++ */
++static uint64_t sls_apply_scale(uint64_t addr, int scale)
+ {
+-	uint64_t addr = 0;
+-	uint64_t tmp_x = 0, tmp = 0, row_t = (uint64_t)row;
+-
+-	addr += ((uint64_t)column & 0x7) << 3;
+-
+-	tmp_x = (row_t >> 3) & 0x1;
+-	tmp = bankgroup & 0x1;
+-	/* BG0 bit[6], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 6);
+-
+-	tmp_x = (row_t >> 2) & 0x1;
+-	tmp = (channel >> 1) & 0x1;
+-	/* HA bit[7], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 7);
+-
+-	/* Column bits[8:14], all 0 */
+-	addr += ((((uint64_t)column >> 3) & 0x7f) << 8);
+-
+-	/* Row R0-R2 bits[15:17], all 0 */
+-	addr += (((uint64_t)row_t & 0x7) << 15);
+-
+-	tmp_x = (row_t >> 5) & 0x1;
+-	tmp = (bankgroup >> 1) & 0x1;
+-	/* BG1 bit[18], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 18);
+-
+-	tmp_x = (row_t >> 6) & 0x1;
+-	tmp = bank & 0x1;
+-	/* BA0 bit[19], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 19);
+-
+-	tmp_x = (row_t >> 7) & 0x1;
+-	tmp = (bank >> 1) & 0x1;
+-	/* BA1 bit[20], always 0 */
+-	addr += ((tmp_x == 0 ? tmp : tmp == 0 ? 1 : 0) << 20);
+-
+-	/* Row R3 bit[21], always 0 */
+-	addr += (((row_t >> 3) & 0x1) << 21);
+-	/*
+-	 * Row R5-R10 bit[22:27], different for INST/CFGR/PSUM,
+-	 * it's a shift of INST/CFGR/PSUM blocks relative to the end of BASE,
+-	 * this defines the start and indirectly the size of INST/CFGR/PSUM.
+-	 * We don't scale these blocks, because it contains specific fixed
+-	 * size buffers and registers.
+-	 * Now total (INST + CFGR + PSUM) blocks size = 1 GB.
+-	 */
+-	addr += (((row_t >> 5) & 0x7f) << 22);
+-	/* Row R4 bit[29], always 0 */
+-	addr += (((row_t >> 4) & 0x1) << 29);
+-	/*
+-	 * Row R12-R16 bit[30:34], same non-zero for INST/CFGR/PSUM,
+-	 * it's a common shift for INST/CONF/PSUM relative to the start of BASE,
+-	 * in other words it's a BASE block size.
+-	 */
+-	addr += ((row_t >> 12) & 0x1f) >> scale << 30;
+-
+-	/*
+-	 * CS bit[35], Chip Select bit, it also scales to proper switch
+-	 * between CS when using scale on a simulator.
+-	 */
+-	addr += ((uint64_t)rank << 35) >> scale;
+-	/* CH bit[36], always 0 */
+-	addr += (((uint64_t)channel & 0x1) << 36) >> scale;
+-
+-	return addr;
++	const uint64_t scaled_bits = FIELD_GET(SCALE_MASK, addr) >> scale;
++	const uint64_t cleared_addr = addr & (~SCALE_MASK);
++
++	return cleared_addr | FIELD_PREP(SCALE_MASK, scaled_bits);
+ }
+ 
+ static void set_mem_blocks_sizes(u64 *block_sz)
+ {
+-	int cs = 0;
+-	int block;
+ 	size_t offsets[SLS_BLOCK_MAX] = {};
+-	const uint64_t scale = sls_topo()->scale;
+-
+-	offsets[SLS_BLOCK_BASE] = EMBT_BASE_CS0_OFFSET;
+-	offsets[SLS_BLOCK_INST] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F000, 0, scale);
+-	offsets[SLS_BLOCK_CFGR] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F100, 0, scale);
+-	offsets[SLS_BLOCK_TAGS] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F200, 0, scale);
+-	offsets[SLS_BLOCK_PSUM] =
+-		sls_make_address(SLS_CH_ID, cs, 0, 0, 0x1F400, 0, scale);
++	const int scale = sls_topo()->scale;
++	int block;
++
++	offsets[SLS_BLOCK_BASE] = sls_apply_scale(BASE_OFFSET, scale);
++	offsets[SLS_BLOCK_INST] = sls_apply_scale(INST_OFFSET, scale);
++	offsets[SLS_BLOCK_CFGR] = sls_apply_scale(CFGR_OFFSET, scale);
++	offsets[SLS_BLOCK_TAGS] = sls_apply_scale(TAGS_OFFSET, scale);
++	offsets[SLS_BLOCK_PSUM] = sls_apply_scale(PSUM_OFFSET, scale);
+ 
+ 	/* init register size for each cs */
+ 	block_sz[SLS_BLOCK_BASE] =
+@@ -121,7 +70,7 @@ static void set_mem_blocks_sizes(u64 *block_sz)
+ 	block_sz[SLS_BLOCK_TAGS] =
+ 		offsets[SLS_BLOCK_PSUM] - offsets[SLS_BLOCK_TAGS];
+ 	block_sz[SLS_BLOCK_PSUM] =
+-		(EMBT_BASE_CS1_OFFSET >> scale) - offsets[SLS_BLOCK_PSUM];
++		sls_apply_scale(CS1_OFFSET, scale) - offsets[SLS_BLOCK_PSUM];
+ 
+ 	if (CONFIG_DEV_SLS_BUS == DEV_TYPE_SLS_AXDIMM)
+ 		return;
+-- 
+2.34.1
+

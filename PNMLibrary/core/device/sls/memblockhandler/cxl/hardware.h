@@ -19,8 +19,8 @@
 
 namespace pnm::sls::device {
 
-class CXLHardwareMemBlockHandler final
-    : public CXLMemBlockHandler<CXLHardwareMemBlockHandler> {
+class CxlHardwareMemBlockHandler
+    : public CxlMemBlockHandler<CxlHardwareMemBlockHandler> {
 public:
   auto psum_reader() const { return RawBlockReader<true>{}; };
   auto tags_reader() const { return UnsupportedBlockReader{}; };

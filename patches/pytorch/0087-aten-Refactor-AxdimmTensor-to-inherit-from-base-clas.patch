@@ -1,7 +1,7 @@
 From c2a3d7a62b4b770563c5e5c011ac31b7061bd890 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Sat, 29 Oct 2022 01:53:47 +0300
-Subject: [PATCH 087/128] [aten] Refactor AxdimmTensor to inherit from base
+Subject: [PATCH 087/135] [aten] Refactor AxdimmTensor to inherit from base
  class
 
 Resolves: AXDIMM-337

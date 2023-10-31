@@ -12,7 +12,7 @@
 
 #include "wrapper.h"
 
-#include "core/device/sls/base.h"
+#include "core/device/sls/utils/constants.h"
 
 #include "common/make_error.h"
 #include "common/topology_constants.h"
@@ -22,8 +22,6 @@
 #include "pnmlib/core/sls_cunit_info.h"
 
 #include <gtest/gtest.h>
-
-#include <linux/imdb_resources.h>
 
 #include <cerrno>
 #include <cstdint>
@@ -37,14 +35,12 @@ uint8_t DeviceWrapper::acquire_compute_unit(uint8_t preferred_unit) {
       [preferred_unit](auto &&device) {
         using T = std::decay_t<decltype(device)>;
 
-        if constexpr (std::is_same_v<T, IMDBDevice *>) {
+        if constexpr (std::is_same_v<T, ImdbDevice *>) {
           return device->lock_thread();
-        } else if constexpr (std::is_same_v<T, SLSDevice *>) {
+        } else if constexpr (std::is_same_v<T, SlsDevice *>) {
           uint8_t value;
-          const pnm::sls::device::BaseDevice::bit_mask mask = 1
-                                                              << preferred_unit;
-          const bool acquired =
-              device->acquire_cunit_for_write_from_range(&value, mask);
+          const pnm::sls::device::cunit mask = 1 << preferred_unit;
+          const bool acquired = device->acquire_cunit_from_range(&value, mask);
           if (!acquired) {
             pnm::error::throw_from_errno(errno);
           }
@@ -61,10 +57,10 @@ void DeviceWrapper::release_compute_unit(uint8_t compute_unit) {
       [compute_unit](auto &&device) {
         using T = std::decay_t<decltype(device)>;
 
-        if constexpr (std::is_same_v<T, IMDBDevice *>) {
+        if constexpr (std::is_same_v<T, ImdbDevice *>) {
           device->release_thread(compute_unit);
-        } else if constexpr (std::is_same_v<T, SLSDevice *>) {
-          device->release_cunit_for_write(compute_unit);
+        } else if constexpr (std::is_same_v<T, SlsDevice *>) {
+          device->release_cunit(compute_unit);
         } else {
           static_assert(always_false_v<T>, "Unprocessed type");
         }
@@ -74,12 +70,10 @@ void DeviceWrapper::release_compute_unit(uint8_t compute_unit) {
 
 uint64_t DeviceWrapper::compute_unit_count() {
   switch (ctx_->type()) {
-  case pnm::Device::Type::IMDB_CXL:
-    return IMDB_THREAD_NUM;
-  case pnm::Device::Type::SLS_CXL:
-    return pnm::device::topo().NumOfChannels;
-  case pnm::Device::Type::SLS_AXDIMM:
-    return pnm::device::topo().NumOfRanks;
+  case pnm::Device::Type::IMDB:
+    return pnm::imdb::device::topo().NumOfThreads;
+  case pnm::Device::Type::SLS:
+    return pnm::sls::device::topo().NumOfCUnits;
   }
   throw pnm::error::make_inval("Device type.");
 }
@@ -89,11 +83,11 @@ bool DeviceWrapper::is_compute_unit_busy(uint8_t unit) {
       [unit](auto &&device) {
         using T = std::decay_t<decltype(device)>;
 
-        if constexpr (std::is_same_v<T, IMDBDevice *>) {
+        if constexpr (std::is_same_v<T, ImdbDevice *>) {
           return device->is_thread_busy(unit);
-        } else if constexpr (std::is_same_v<T, SLSDevice *>) {
-          const auto info =
-              device->get_compute_unit_info(unit, SlsComputeUnitInfo::State);
+        } else if constexpr (std::is_same_v<T, SlsDevice *>) {
+          const auto info = device->get_compute_unit_info(
+              unit, pnm::sls::ComputeUnitInfo::State);
           EXPECT_FALSE(info > 1);
           return info == 1;
         } else {
@@ -105,11 +99,10 @@ bool DeviceWrapper::is_compute_unit_busy(uint8_t unit) {
 
 DeviceWrapper::VariantType DeviceWrapper::get_device(pnm::ContextHandler &ctx) {
   switch (ctx->type()) {
-  case pnm::Device::Type::IMDB_CXL:
-    return {ctx->device()->as<IMDBDevice>()};
-  case pnm::Device::Type::SLS_CXL:
-  case pnm::Device::Type::SLS_AXDIMM:
-    return {ctx->device()->as<SLSDevice>()};
+  case pnm::Device::Type::IMDB:
+    return {ctx->device()->as<ImdbDevice>()};
+  case pnm::Device::Type::SLS:
+    return {ctx->device()->as<SlsDevice>()};
   }
 
   throw pnm::error::make_inval("Device type.");
@@ -120,9 +113,9 @@ uint64_t DeviceWrapper::memory_size() {
       [](auto &&device) -> uint64_t {
         using T = std::decay_t<decltype(device)>;
 
-        if constexpr (std::is_same_v<T, IMDBDevice *>) {
+        if constexpr (std::is_same_v<T, ImdbDevice *>) {
           return device->memory_size();
-        } else if constexpr (std::is_same_v<T, SLSDevice *>) {
+        } else if constexpr (std::is_same_v<T, SlsDevice *>) {
           return device->get_base_memory_size();
         } else {
           static_assert(always_false_v<T>, "Unprocessed type");

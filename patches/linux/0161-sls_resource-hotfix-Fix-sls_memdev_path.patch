@@ -1,7 +1,7 @@
 From fb1d6e27f53329d2950d9565fa02606a20fabc43 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Thu, 6 Jul 2023 09:11:45 +0000
-Subject: [PATCH 161/161] [sls_resource][hotfix] Fix sls_memdev_path
+Subject: [PATCH 161/225] [sls_resource][hotfix] Fix sls_memdev_path
 
 SLS_MEMDEV_PATH was corrupted due to path refactoring
 This commit return SLS_MEMDEV_PATH changes

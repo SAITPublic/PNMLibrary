@@ -1,7 +1,7 @@
 From b7703947d799408d68c51660ab067b5164f2cc9b Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 1 Nov 2021 18:41:10 +0900
-Subject: [PATCH 011/128] [CMakeLists.txt] Add AXDIMM_ROOT_PATH for linking
+Subject: [PATCH 011/135] [CMakeLists.txt] Add AXDIMM_ROOT_PATH for linking
  against libAxdimm.so
 
 So far we don't install libAxdimm.so into system, make user specify

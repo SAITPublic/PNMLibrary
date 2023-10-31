@@ -15,24 +15,24 @@
 #ifndef _IMDB_BASE_DEVICE_H_
 #define _IMDB_BASE_DEVICE_H_
 
-#include "control.h"
 #include "reg_mem.h"
 
 #include "common/compiler_internal.h"
 #include "common/file_descriptor_holder.h"
 #include "common/mapped_file.h"
 
+#include "pnmlib/imdb/control.h"
 #include "pnmlib/imdb/libimdb.h"
 
 #include "pnmlib/core/device.h"
 
 #include <linux/imdb_resources.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace pnm::imdb::device {
 
@@ -44,20 +44,18 @@ public:
   const volatile ThreadCSR *get_csr(uint8_t thread_id) const;
   void dump_thread_csr(uint8_t thread_id) const;
 
-  RegisterPointers register_pointers() const { return regs_; }
+  RegisterPointers &register_pointers() { return regs_; }
 
-  Type get_device_type() const final { return Type::IMDB_CXL; }
+  Type get_device_type() const override { return Type::IMDB; }
 
-  int get_devmem_fd() const final { return *devmem_; }
-  int get_resource_fd() const final { return *resmanager_; }
+  int get_devmem_fd() const override { return *devmem_; }
+  int get_resource_fd() const override { return *resmanager_; }
 
   uint8_t lock_thread();
 
   void release_thread(uint8_t thread);
 
   auto alignment() const { return control_.alignment(); }
-
-  auto memory_size() const { return control_.memory_size(); }
 
   auto free_size() const { return control_.free_size(); }
 
@@ -74,13 +72,15 @@ protected:
     return reinterpret_cast<T *>(bytes + offset);
   }
 
-  void reset_impl(ResetOptions options) final;
+  void reset_impl(ResetOptions options) override;
   virtual uint8_t lock_thread_impl();
   virtual void release_thread_impl(uint8_t thread_id);
 
   bool get_resource_cleanup_impl() const override {
     return control_.get_resource_cleanup();
   }
+
+  size_t memory_size_impl() const override { return control_.memory_size(); }
 
   uint64_t get_leaked_impl() const override { return control_.get_leaked(); }
 
@@ -97,7 +97,7 @@ protected:
   // Device working memory
   pnm::utils::FileDescriptorHolder devmem_;
   pnm::utils::FileDescriptorHolder resmanager_;
-  std::array<pnm::utils::tsan_mutex, IMDB_THREAD_NUM> tsan_mutexes_;
+  std::vector<pnm::utils::tsan_mutex> tsan_mutexes_;
   Control control_;
 };
 

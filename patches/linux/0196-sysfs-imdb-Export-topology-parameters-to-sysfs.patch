@@ -1,0 +1,208 @@
+From cda8a1e7c70efc6c35559914b8f24dfc987e7185 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Fri, 25 Aug 2023 17:33:35 +0300
+Subject: [PATCH 196/225] [sysfs][imdb] Export topology parameters to sysfs
+
+Resolves: MCS23-1525
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/pnm/imdb_resource/Makefile      |  7 ++-
+ drivers/pnm/imdb_resource/sysfs.c       |  6 +-
+ drivers/pnm/imdb_resource/topo/export.c | 83 +++++++++++++++++++++++++
+ drivers/pnm/imdb_resource/topo/export.h | 12 ++++
+ drivers/pnm/imdb_resource/topo/params.c |  1 -
+ include/uapi/linux/imdb_resources.h     |  2 +
+ 6 files changed, 108 insertions(+), 3 deletions(-)
+ create mode 100644 drivers/pnm/imdb_resource/topo/export.c
+ create mode 100644 drivers/pnm/imdb_resource/topo/export.h
+
+diff --git a/drivers/pnm/imdb_resource/Makefile b/drivers/pnm/imdb_resource/Makefile
+index bdf0f964c..664758fa9 100644
+--- a/drivers/pnm/imdb_resource/Makefile
++++ b/drivers/pnm/imdb_resource/Makefile
+@@ -3,7 +3,10 @@
+ obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource.o
+ 
+ ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[IMDB]\"
+-subdir-ccflags-y := -I $(srctree)/$(src)/..
++subdir-ccflags-y += -I $(srctree)/$(src)/ -I $(srctree)/$(src)/..
++
++topo-y := topo/export.o
++topo-y += topo/params.o
+ 
+ imdb_resource-y := resource_device.o
+ imdb_resource-y += allocator.o
+@@ -11,3 +14,5 @@ imdb_resource-y += thread_sched.o
+ imdb_resource-y += sysfs.o
+ imdb_resource-y += proc_mgr.o
+ imdb_resource-y += topo/params.o
++imdb_resource-y += topo/export.o
++sls_resource-y += $(topo-y)
+diff --git a/drivers/pnm/imdb_resource/sysfs.c b/drivers/pnm/imdb_resource/sysfs.c
+index 81f360cbd..7c9d68c67 100644
+--- a/drivers/pnm/imdb_resource/sysfs.c
++++ b/drivers/pnm/imdb_resource/sysfs.c
+@@ -6,6 +6,7 @@
+ #include "allocator.h"
+ #include "proc_mgr.h"
+ #include "thread_sched.h"
++#include "topo/export.h"
+ #include "topo/params.h"
+ 
+ #include "linux/types.h"
+@@ -221,7 +222,7 @@ static int build_thread_sysfs(struct kobject *parent)
+ 	thread_sysfs = kcalloc(imdb_topo()->nr_cunits,
+ 			       sizeof(struct thread_sysfs), GFP_KERNEL);
+ 	if (!thread_sysfs) {
+-		IMDB_ERR("No free memory for cunits directories\n");
++		PNM_ERR("No free memory for cunits directories\n");
+ 		return -ENOMEM;
+ 	}
+ 
+@@ -254,7 +255,10 @@ int imdb_build_sysfs(struct device *dev)
+ 	int rc = 0;
+ 
+ 	rc = sysfs_create_groups(&dev->kobj, attr_groups);
++	if (unlikely(rc))
++		return rc;
+ 
++	rc = imdb_export_topology_constants(&dev->kobj);
+ 	if (unlikely(rc))
+ 		return rc;
+ 
+diff --git a/drivers/pnm/imdb_resource/topo/export.c b/drivers/pnm/imdb_resource/topo/export.c
+new file mode 100644
+index 000000000..8951a71f7
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/topo/export.c
+@@ -0,0 +1,83 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#include "export.h"
++#include "params.h"
++
++#include <linux/imdb_resources.h>
++
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <linux/pnm_log.h>
++
++#define SINGLE_VALUE_ATTR(param, value)                                       \
++	static ssize_t param##_show(struct device *device,                    \
++				    struct device_attribute *attr, char *buf) \
++	{                                                                     \
++		return sysfs_emit(buf, "%d\n", value);                        \
++	}                                                                     \
++	static DEVICE_ATTR_RO(param)
++
++#define EXPORT_PARAM(param) SINGLE_VALUE_ATTR(param, imdb_topo()->param)
++#define DEV_ATTR_REF(param) (&dev_attr_##param.attr)
++
++EXPORT_PARAM(nr_pools);
++EXPORT_PARAM(nr_cunits);
++EXPORT_PARAM(mem_size_gb);
++
++static struct kobject *mem_topo_kobj;
++
++static struct attribute *mem_topo_attrs[] = {
++	DEV_ATTR_REF(nr_pools),
++	DEV_ATTR_REF(nr_cunits),
++	DEV_ATTR_REF(mem_size_gb),
++	NULL,
++};
++
++static struct attribute_group mem_topo_attr_group = {
++	.attrs = mem_topo_attrs,
++};
++
++static const struct attribute_group *mem_topo_attr_groups[] = {
++	&mem_topo_attr_group,
++	NULL,
++};
++
++int imdb_export_topology_constants(struct kobject *resource_kobj)
++{
++	PNM_DBG("Building IMDB memory topology sysfs\n");
++
++	mem_topo_kobj = kobject_create_and_add(IMDB_DEVICE_TOPOLOGY_PATH,
++					       resource_kobj);
++
++	if (!mem_topo_kobj) {
++		PNM_ERR("Unable to create topology sysfs kobject\n");
++		return -ENOMEM;
++	}
++
++	if (sysfs_create_groups(mem_topo_kobj, mem_topo_attr_groups)) {
++		PNM_ERR("Unable to create topology sysfs groups\n");
++		kobject_del(mem_topo_kobj);
++		return -ENOMEM;
++	}
++
++	PNM_DBG("Built IMDB memory topology sysfs\n");
++
++	return 0;
++}
++
++void imdb_destroy_topology_constants(void)
++{
++	PNM_DBG("Destroying IMDB memory topology sysfs\n");
++
++	if (!mem_topo_kobj) {
++		PNM_ERR("Unexpected state of topology sysfs kobject (%p).\n",
++			mem_topo_kobj);
++		return;
++	}
++
++	sysfs_remove_groups(mem_topo_kobj, mem_topo_attr_groups);
++	kobject_del(mem_topo_kobj);
++
++	PNM_DBG("Destroyed IMDB memory topology sysfs\n");
++}
+diff --git a/drivers/pnm/imdb_resource/topo/export.h b/drivers/pnm/imdb_resource/topo/export.h
+new file mode 100644
+index 000000000..88c4eae83
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/topo/export.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#ifndef __IMDB_TOPOLOGY_EXPORT__
++#define __IMDB_TOPOLOGY_EXPORT__
++
++#include <linux/kobject.h>
++
++int imdb_export_topology_constants(struct kobject *resource_kobj);
++void imdb_destroy_topology_constants(void);
++
++#endif /* __IMDB_TOPOLOGY_EXPORT__ */
+diff --git a/drivers/pnm/imdb_resource/topo/params.c b/drivers/pnm/imdb_resource/topo/params.c
+index acd83048e..e95f5fe19 100644
+--- a/drivers/pnm/imdb_resource/topo/params.c
++++ b/drivers/pnm/imdb_resource/topo/params.c
+@@ -2,7 +2,6 @@
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+ #include "params.h"
+-#include "log.h"
+ 
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
+diff --git a/include/uapi/linux/imdb_resources.h b/include/uapi/linux/imdb_resources.h
+index 382e1f254..4e95de87d 100644
+--- a/include/uapi/linux/imdb_resources.h
++++ b/include/uapi/linux/imdb_resources.h
+@@ -23,6 +23,8 @@
+ #define IMDB_SYSFS_PATH \
+ 	"/sys/class/" PNM_RESOURCE_CLASS_NAME "/" IMDB_RESOURCE_DEVICE_NAME
+ 
++#define IMDB_DEVICE_TOPOLOGY_PATH "topology"
++
+ #define IMDB_THREAD_NUM 3
+ #define IMDB_NUM_OF_RANK 2
+ 
+-- 
+2.34.1
+

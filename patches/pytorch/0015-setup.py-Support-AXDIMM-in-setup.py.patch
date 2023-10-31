@@ -1,7 +1,7 @@
 From f0ca5e9c111a5a4c4bb5449c3bba46522c235eae Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 2 Nov 2021 10:25:32 +0900
-Subject: [PATCH 015/128] [setup.py] Support AXDIMM in setup.py
+Subject: [PATCH 015/135] [setup.py] Support AXDIMM in setup.py
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

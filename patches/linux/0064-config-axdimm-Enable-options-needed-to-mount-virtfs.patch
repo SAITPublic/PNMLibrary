@@ -1,7 +1,7 @@
 From c45100263c1a4e90345b0b975f6a3dd83aad7afd Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Fri, 18 Nov 2022 15:09:44 +0000
-Subject: [PATCH 064/161] [config-axdimm] Enable options needed to mount virtfs
+Subject: [PATCH 064/225] [config-axdimm] Enable options needed to mount virtfs
 
 virtfs is a system for host-guest filesystem passthrough
 

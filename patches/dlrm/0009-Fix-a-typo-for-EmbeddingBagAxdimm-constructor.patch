@@ -1,7 +1,7 @@
 From 7dcbf263d537c5d8088389ab7b6bea2b96bb3335 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 26 Oct 2022 17:39:16 +0900
-Subject: [PATCH 09/23] Fix a typo for EmbeddingBagAxdimm constructor
+Subject: [PATCH 09/24] Fix a typo for EmbeddingBagAxdimm constructor
 
 'precompile' is EmbeddingBagAxdimm operator parameter, not torch.tensor.
 

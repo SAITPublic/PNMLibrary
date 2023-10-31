@@ -1,7 +1,7 @@
 From 922f8503be472dcd94de9c8817fa9213130d1669 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Sat, 29 Oct 2022 02:03:31 +0300
-Subject: [PATCH 089/128] [aten] Factory functions for simple, secure and sgx
+Subject: [PATCH 089/135] [aten] Factory functions for simple, secure and sgx
  tensors
 
 Resolves: AXDIMM-337

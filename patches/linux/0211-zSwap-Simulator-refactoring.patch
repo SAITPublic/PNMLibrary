@@ -1,0 +1,664 @@
+From ba3aae085c621a3ad854e49a44d93fb9919e16f3 Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Fri, 29 Sep 2023 13:26:51 +0000
+Subject: [PATCH 211/225] [zSwap] Simulator refactoring
+
+- exclude data races using memory barriers
+- collapse unit compression/decompression functions into single one
+- get rid of dummy cycles including unit_poll_ns
+- do no rely compression and decompression logic
+on num_idle_comp_unit/num_idle_decomp_unit
+
+Resolves: MCS23-1536
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 455 ++++++++++++----------------------------
+ drivers/pnm/zswap/sim.h |   6 +
+ 2 files changed, 136 insertions(+), 325 deletions(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 17002895d..a19e475d6 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -64,10 +64,6 @@ module_param_named(completion_queue_depth, completion_queue_depth, uint, 0644);
+ static unsigned int pnm_core = 8;
+ module_param_named(pnm_core, pnm_core, uint, 0644);
+ 
+-/* Timeout for poll nsec */
+-static unsigned long unit_poll_ns = 100000;
+-module_param_named(unit_poll_ns, unit_poll_ns, ulong, 0644);
+-
+ /* Timeout for poll nsec */
+ static unsigned long read_poll_ns = 10000000000;
+ module_param_named(read_poll_ns, read_poll_ns, ulong, 0644);
+@@ -117,25 +113,22 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 		PNM_INF("[HOST-C][%d] IDLE UNITs %d\n", tid,
+ 			atomic_read(&pnm_ctrl->num_idle_comp_unit));
+ 
+-	if (atomic_read(&pnm_ctrl->num_idle_comp_unit) == 0) {
+-		spin_unlock(&pnm_ctrl->compress_lock);
+-		PNM_INF("all compress unit is utilized\n");
+-		return status;
+-	}
+-
+ 	for (pnm_id = 0; pnm_id < pnm_ctrl->num_compress; pnm_id++) {
+ 		/* to check if an unit is idle */
+ 		if (READ_ONCE(pnm_ctrl->compress[pnm_id].is_idle)) {
+ 			atomic_dec(&pnm_ctrl->num_idle_comp_unit);
+-			WRITE_ONCE(pnm_ctrl->compress[pnm_id].is_idle, false);
++			smp_store_release(&pnm_ctrl->compress[pnm_id].is_idle,
++					  false);
+ 			status = CXL_PNM_APPROVAL;
+ 			break;
+ 		}
+ 	}
+ 	spin_unlock(&pnm_ctrl->compress_lock);
+ 
+-	if (status != CXL_PNM_APPROVAL)
++	if (status != CXL_PNM_APPROVAL) {
++		PNM_INF("All compress unit is utilized\n");
+ 		return status;
++	}
+ 
+ 	if (unlikely(log_enabled))
+ 		PNM_INF("[HOST-C][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
+@@ -149,38 +142,30 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 	       sizeof(struct instruction));
+ 
+ 	/* update the state of pnm unit */
+-	WRITE_ONCE(pnm_ctrl->compress[pnm_id].state, RUNNING);
++	smp_store_release(&pnm_ctrl->compress[pnm_id].state, RUNNING);
+ 
+ 	/* wait for result of pnm with polling */
+ 	kstarted = ktime_get();
+ 	kdeadline = ktime_add_ns(kstarted, read_poll_ns);
+-	do {
+-		if (pnm_ctrl->compress[pnm_id].done) {
+-			*out_len = pnm_ctrl->compress[pnm_id].dst_size;
++	while (!smp_load_acquire(&pnm_ctrl->compress[pnm_id].done) &&
++	       ktime_before(ktime_get(), kdeadline))
++		;
++	if (!READ_ONCE(sim_is_active))
++		return CXL_PNM_FAILURE;
+ 
+-			if (unlikely(log_enabled))
+-				PNM_INF("[HOST-C][%d] READ RESULT [%d] [%ld]\n",
+-					tid, pnm_id, *out_len);
++	*out_len = READ_ONCE(pnm_ctrl->compress[pnm_id].dst_size);
++	status = READ_ONCE(pnm_ctrl->compress[pnm_id].commit.status);
+ 
+-			WRITE_ONCE(pnm_ctrl->compress[pnm_id].done, false);
+-			if (unlikely(pnm_bench_enabled)) {
+-				bench_data.comp_cycle[pnm_id] +=
+-					rdtsc() - started;
+-			}
+-			return READ_ONCE(
+-				pnm_ctrl->compress[pnm_id].commit.status);
+-		}
+-	} while (ktime_before(ktime_get(), kdeadline));
++	if (unlikely(log_enabled))
++		PNM_INF("[HOST-C][%d] READ RESULT [%d] [%ld]\n", tid, pnm_id,
++			*out_len);
+ 
+-	WRITE_ONCE(pnm_ctrl->compress[pnm_id].state, FAILED);
+-	WRITE_ONCE(pnm_ctrl->compress[pnm_id].is_idle, true);
+-	atomic_inc(&pnm_ctrl->num_idle_comp_unit);
++	if (unlikely(pnm_bench_enabled))
++		bench_data.comp_cycle[pnm_id] += rdtsc() - started;
+ 
+-	if (unlikely(log_enabled))
+-		/* Timeout: Failed to get result */
+-		PNM_INF("[HOST-C][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
+-			pnm_ctrl->compress[pnm_id].commit.tid,
+-			ktime_get() - kstarted);
++	smp_store_release(&pnm_ctrl->compress[pnm_id].done, false);
++	atomic_inc(&pnm_ctrl->num_idle_comp_unit);
++	smp_store_release(&pnm_ctrl->compress[pnm_id].is_idle, true);
+ 
+ 	return status;
+ }
+@@ -202,29 +187,25 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 			atomic_read(&pnm_ctrl->num_idle_decomp_unit));
+ 
+ 	spin_lock(&pnm_ctrl->decompress_lock);
+-	while (READ_ONCE(sim_is_active)) {
+-		if (atomic_read(&pnm_ctrl->num_idle_decomp_unit) > 0)
+-			break;
+-	}
+-
+-	// unit scheduling with round robin policy
+-	//  1.  find an unit which is idle
+-	//  2.  insert an instruction into unit->inst
+-	//  3.  change the state of pnm selected
+-	for (pnm_id = 0; pnm_id < pnm_ctrl->num_decompress; pnm_id++) {
+-		/* to check if an unit is idle */
+-		if (READ_ONCE(pnm_ctrl->decompress[pnm_id].is_idle)) {
+-			atomic_dec(&pnm_ctrl->num_idle_decomp_unit);
+-			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].is_idle, false);
+-			status = CXL_PNM_APPROVAL;
+-			break;
++	while (READ_ONCE(sim_is_active) && status != CXL_PNM_APPROVAL) {
++		// unit scheduling with round robin policy
++		//  1.  find an unit which is idle
++		//  2.  insert an instruction into unit->inst
++		//  3.  change the state of pnm selected
++		for (pnm_id = 0; pnm_id < pnm_ctrl->num_decompress; pnm_id++) {
++			/* to check if an unit is idle */
++			if (READ_ONCE(pnm_ctrl->decompress[pnm_id].is_idle)) {
++				atomic_dec(&pnm_ctrl->num_idle_decomp_unit);
++				smp_store_release(
++					&pnm_ctrl->decompress[pnm_id].is_idle,
++					false);
++				status = CXL_PNM_APPROVAL;
++				break;
++			}
+ 		}
+ 	}
+ 	spin_unlock(&pnm_ctrl->decompress_lock);
+ 
+-	if (status != CXL_PNM_APPROVAL)
+-		return status;
+-
+ 	if (unlikely(log_enabled))
+ 		PNM_INF("[HOST-D][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
+ 			tid, pnm_id, pnm_ctrl->decompress[pnm_id].state,
+@@ -237,38 +218,30 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 	       sizeof(struct instruction));
+ 
+ 	/* update the state of pnm unit */
+-	WRITE_ONCE(pnm_ctrl->decompress[pnm_id].state, RUNNING);
++	smp_store_release(&pnm_ctrl->decompress[pnm_id].state, RUNNING);
+ 
+ 	/* wait for result of pnm with polling */
+ 	kstarted = ktime_get();
+ 	kdeadline = ktime_add_ns(kstarted, read_poll_ns);
+-	do {
+-		/* to check if state of pnm_unit is DONE */
+-		if (READ_ONCE(pnm_ctrl->decompress[pnm_id].done)) {
+-			*out_len = pnm_ctrl->decompress[pnm_id].dst_size;
++	while (!smp_load_acquire(&pnm_ctrl->decompress[pnm_id].done) &&
++	       ktime_before(ktime_get(), kdeadline))
++		;
++	if (!READ_ONCE(sim_is_active))
++		return CXL_PNM_FAILURE;
+ 
+-			if (unlikely(log_enabled))
+-				PNM_INF("[HOST-D][%d] READ RESULT [%d] [%ld]\n",
+-					tid, pnm_id, *out_len);
++	*out_len = READ_ONCE(pnm_ctrl->decompress[pnm_id].dst_size);
++	status = READ_ONCE(pnm_ctrl->decompress[pnm_id].commit.status);
+ 
+-			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].done, false);
+-			if (unlikely(pnm_bench_enabled)) {
+-				bench_data.decomp_cycle[pnm_id] +=
+-					rdtsc() - started;
+-			}
+-			return READ_ONCE(
+-				pnm_ctrl->decompress[pnm_id].commit.status);
+-		}
+-	} while (ktime_before(ktime_get(), kdeadline));
++	if (unlikely(log_enabled))
++		PNM_INF("[HOST-D][%d] READ RESULT [%d] [%ld]\n", tid, pnm_id,
++			*out_len);
+ 
+-	WRITE_ONCE(pnm_ctrl->decompress[pnm_id].state, FAILED);
+-	WRITE_ONCE(pnm_ctrl->decompress[pnm_id].is_idle, true);
+-	atomic_inc(&pnm_ctrl->num_idle_decomp_unit);
++	if (unlikely(pnm_bench_enabled))
++		bench_data.decomp_cycle[pnm_id] += rdtsc() - started;
+ 
+-	if (unlikely(log_enabled))
+-		PNM_INF("[HOST-D][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
+-			pnm_ctrl->decompress[pnm_id].commit.tid,
+-			ktime_get() - kstarted);
++	smp_store_release(&pnm_ctrl->decompress[pnm_id].done, false);
++	atomic_inc(&pnm_ctrl->num_idle_decomp_unit);
++	smp_store_release(&pnm_ctrl->decompress[pnm_id].is_idle, true);
+ 
+ 	return status;
+ }
+@@ -341,268 +314,91 @@ static void destroy_compression_core(struct compression_core *core)
+ 				      destroy_psim_core(core);
+ }
+ 
+-int pnm_compress_unit(void *p)
++int pnm_unit(void *p)
+ {
+ 	int status;
++	int valid_opcode;
++	char *log_prefix;
+ 	struct unit_info *unit = (struct unit_info *)p;
+ 	struct commit *commit_out = &unit->commit;
+-	ktime_t started, finished;
+ 	struct compression_core *ccore;
+ 
++	if (unit->type == COMPRESS_UNIT_TYPE) {
++		valid_opcode = CXL_PNM_OP_COMP_STORE;
++		log_prefix = COMPRESS_LOG_PREFIX;
++	} else if (unit->type == DECOMPRESS_UNIT_TYPE) {
++		valid_opcode = CXL_PNM_OP_DECOMP_LOAD;
++		log_prefix = DECOMPRESS_LOG_PREFIX;
++	} else {
++		if (unlikely(log_enabled))
++			PNM_ERR("[%d] STATE [FAILED] - UNSUPPORTED OPCODE SUPPLIED\n",
++				unit->inst.tid);
++		return -1;
++	}
++
+ 	ccore = construct_compression_core();
+ 
+ 	if (ccore == NULL)
+ 		return -EINVAL;
+ 
+ 	while (!kthread_should_stop() && READ_ONCE(sim_is_active)) {
+-		started = ktime_get();
+-		finished = ktime_add_ns(started, unit_poll_ns);
+-		do {
+-			if (READ_ONCE(unit->state) & RUNNING)
+-				break;
+-
+-			if (kthread_should_stop() || !READ_ONCE(sim_is_active))
+-				break;
+-
+-		} while (ktime_before(ktime_get(), finished));
+-
+-		if (READ_ONCE(unit->state) & RUNNING) {
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-C][%d] STATE [RUNNING] - READY TO RUN\n",
+-					unit->inst.tid);
+-
+-			/* for exception */
+-			if (unit->inst.opcode != CXL_PNM_OP_COMP_STORE) {
+-				/* update the state of pnm unit */
+-				WRITE_ONCE(unit->state, FAILED);
+-
+-				if (unlikely(log_enabled))
+-					PNM_INF("[PNM-C][%d] STATE [FAILED] - OPCODE ERROR\n",
+-						unit->inst.tid);
+-			}
+-
+-			/* execute compression unit */
+-			status = ccore->compress_page(ccore, unit);
+-
+-			/* init for next execution */
+-			unit->started = 0;
+-			unit->finished = 0;
+-			unit->consumed_cycles = 0;
+-			unit->delay_cycles = 0;
+-
+-			/* TODO: register update & completion queue */
+-			commit_out->opcode = unit->inst.opcode;
+-			commit_out->tid = unit->inst.tid;
+-			commit_out->dst_size = unit->dst_size;
+-			commit_out->offset = unit->inst.offset;
++		if (!(READ_ONCE(unit->state) & RUNNING))
++			continue;
+ 
++		/* for exception */
++		if (unit->inst.opcode != valid_opcode) {
+ 			/* update the state of pnm unit */
+-			if (status == 0)
+-				WRITE_ONCE(commit_out->status, CXL_PNM_SUCCESS);
+-			else
+-				WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
+-
+-			WRITE_ONCE(unit->state, DONE);
+-			WRITE_ONCE(unit->done, true);
+-
+ 			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-C][%d] STATE [DONE] - FINISH\n",
+-					unit->inst.tid);
+-
+-			/* wait until the thread takes results */
+-			while (!kthread_should_stop() &&
+-			       READ_ONCE(sim_is_active)) {
+-				if (!READ_ONCE(unit->done)) {
+-					/* update statistics of pnm unit */
+-					unit->num_used++;
+-					unit->num_succ++;
+-
+-					WRITE_ONCE(unit->state, IDLE);
+-					WRITE_ONCE(unit->is_idle, true);
+-					atomic_inc(
+-						&pnm_ctrl->num_idle_comp_unit);
+-
+-					if (unlikely(log_enabled))
+-						PNM_INF("[PNM-C][%d] STATE [IDLE] - HOST GET RES\n",
+-							unit->inst.tid);
+-
+-					break;
+-				}
+-
+-				if (READ_ONCE(unit->state) & FAILED)
+-					break;
+-			}
+-		}
+-
+-		if (READ_ONCE(unit->state) & FAILED) {
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-C][%d] STATE [FAILED]\n",
+-					unit->inst.tid);
+-
+-			/* init for next execution */
+-			unit->started = 0;
+-			unit->finished = 0;
+-			unit->consumed_cycles = 0;
+-			unit->delay_cycles = 0;
+-
+-			/* TODO: register update & completion queue */
+-			commit_out->opcode = 0;
+-			commit_out->tid = 0;
+-			commit_out->dst_size = 0;
+-			commit_out->offset = 0;
++				PNM_INF("[%s][%d] STATE [FAILED] - OPCODE ERROR\n",
++					log_prefix, unit->inst.tid);
++			WRITE_ONCE(unit->state, FAILED);
+ 			WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
+-
+-			/* update the state of pnm unit */
+-			WRITE_ONCE(unit->state, IDLE);
+-
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-C][%d] STATE [IDLE]\n",
+-					unit->inst.tid);
+-
+ 			/* update statistics of pnm unit */
+ 			unit->num_used++;
+ 			unit->num_failed++;
+-
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-C][%d] IDLE UNITs %d\n",
+-					unit->inst.tid,
+-					atomic_read(
+-						&pnm_ctrl->num_idle_comp_unit));
++			smp_store_release(&unit->done, true);
++			continue;
+ 		}
+-	}
+-
+-	destroy_compression_core(ccore);
+-
+-	return 0;
+-}
+-
+-int pnm_decompress_unit(void *p)
+-{
+-	int status;
+-	struct unit_info *unit = (struct unit_info *)p;
+-	struct commit *commit_out = &unit->commit;
+-	ktime_t started, finished;
+-	struct compression_core *ccore;
+-
+-	ccore = construct_compression_core();
+-
+-	if (ccore == NULL)
+-		return -EINVAL;
+-
+-	while (!kthread_should_stop() && READ_ONCE(sim_is_active)) {
+-		started = ktime_get();
+-		finished = ktime_add_ns(started, unit_poll_ns);
+-		do {
+-			if (READ_ONCE(unit->state) & RUNNING)
+-				break;
+-
+-			if (kthread_should_stop() || !READ_ONCE(sim_is_active))
+-				break;
+-
+-		} while (ktime_before(ktime_get(), finished));
+-
+-		if (READ_ONCE(unit->state) & RUNNING) {
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-D][%d] STATE [RUNNING] - READY TO RUN\n",
+-					unit->inst.tid);
+ 
+-			/* for exception */
+-			if (unit->inst.opcode != CXL_PNM_OP_DECOMP_LOAD) {
+-				/* update the state of pnm unit */
+-				WRITE_ONCE(unit->state, FAILED);
++		if (unlikely(log_enabled))
++			PNM_INF("[%s][%d] STATE [RUNNING] - READY TO EXECUTE THE INSTRUCTION\n",
++				log_prefix, unit->inst.tid);
+ 
+-				if (unlikely(log_enabled))
+-					PNM_INF("[PNM-D][%d] STATE [FAILED] - OPCODE ERROR\n",
+-						unit->inst.tid);
+-			}
++		/* Clear unit before operation */
++		unit->consumed_cycles = 0;
++		unit->delay_cycles = 0;
++		unit->finished = 0;
+ 
++		if (unit->type == COMPRESS_UNIT_TYPE) {
+ 			/* execute compression unit */
++			status = ccore->compress_page(ccore, unit);
++		} else {
++			/* execute decompression unit */
+ 			status = ccore->decompress_page(ccore, unit);
+-
+-			/* init for next execution */
+-			unit->started = 0;
+-			unit->finished = 0;
+-			unit->consumed_cycles = 0;
+-			unit->delay_cycles = 0;
+-
+-			/* TODO: register update & completion queue */
+-			commit_out->opcode = unit->inst.opcode;
+-			commit_out->tid = unit->inst.tid;
+-			commit_out->dst_size = unit->dst_size;
+-			commit_out->offset = unit->inst.offset;
+-
+-			/* update the state of pnm unit */
+-			if (status == 0)
+-				WRITE_ONCE(commit_out->status, CXL_PNM_SUCCESS);
+-			else
+-				WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
+-
+-			WRITE_ONCE(unit->state, DONE);
+-			WRITE_ONCE(unit->done, true);
+-
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-D][%d] STATE [DONE] - FINISH\n",
+-					unit->inst.tid);
+-
+-			/* wait until the thread takes results */
+-			while (!kthread_should_stop() ||
+-			       READ_ONCE(sim_is_active)) {
+-				if (!READ_ONCE(unit->done)) {
+-					/* update statistics of pnm unit */
+-					unit->num_used++;
+-					unit->num_succ++;
+-
+-					WRITE_ONCE(unit->state, IDLE);
+-					WRITE_ONCE(unit->is_idle, true);
+-					atomic_inc(
+-						&pnm_ctrl->num_idle_decomp_unit);
+-
+-					if (unlikely(log_enabled))
+-						PNM_INF("[PNM-D][%d] STATE [IDLE] - HOST GET RES\n",
+-							unit->inst.tid);
+-
+-					break;
+-				}
+-
+-				if (READ_ONCE(unit->state) & FAILED)
+-					break;
+-			}
+ 		}
+ 
+-		if (READ_ONCE(unit->state) == FAILED) {
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-D][%d] STATE [FAILED]\n",
+-					unit->inst.tid);
+-
+-			/* init for next execution */
+-			unit->started = 0;
+-			unit->finished = 0;
+-			unit->consumed_cycles = 0;
+-			unit->delay_cycles = 0;
+-
+-			/* TODO: register update & completion queue */
+-			commit_out->opcode = 0;
+-			commit_out->tid = 0;
+-			commit_out->dst_size = 0;
+-			commit_out->offset = 0;
+-			WRITE_ONCE(commit_out->status, 0);
++		/* init for next execution */
++		unit->started = 0;
+ 
+-			/* update the state of pnm unit */
+-			WRITE_ONCE(unit->state, IDLE);
++		/* TODO: register update & completion queue */
++		commit_out->opcode = unit->inst.opcode;
++		commit_out->tid = unit->inst.tid;
++		commit_out->dst_size = unit->dst_size;
++		commit_out->offset = unit->inst.offset;
+ 
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-D][%d] STATE [IDLE]\n",
+-					unit->inst.tid);
+-
+-			unit->num_used++;
+-			unit->num_failed++;
++		/* update the state of pnm unit */
++		if (status == 0)
++			WRITE_ONCE(commit_out->status, CXL_PNM_SUCCESS);
++		else
++			WRITE_ONCE(commit_out->status, CXL_PNM_FAILURE);
+ 
+-			if (unlikely(log_enabled))
+-				PNM_INF("[PNM-D][%d] IDLE UNITs %d\n",
+-					unit->inst.tid,
+-					atomic_read(
+-						&pnm_ctrl->num_idle_decomp_unit));
+-		}
++		smp_store_release(&unit->state, DONE);
++		unit->num_used++;
++		unit->num_succ++;
++		if (unlikely(log_enabled))
++			PNM_INF("[%s][%d] STATE [DONE] - FINISH\n", log_prefix,
++				unit->inst.tid);
++		smp_store_release(&unit->done, true);
+ 	}
+ 
+ 	destroy_compression_core(ccore);
+@@ -662,13 +458,13 @@ static int init_procfs(void)
+ {
+ 	proc_fs_pnm = proc_mkdir("pnm", NULL);
+ 	if (!proc_fs_pnm) {
+-		pr_err("[pnm_sim] Init the proc fs failed, cannot create pnm directory!");
++		PNM_ERR("[pnm_sim] Init the proc fs failed, cannot create pnm directory!");
+ 		goto create_proc_dir_fail;
+ 	}
+ 	proc_zswap_bench_file =
+ 		proc_create("zswap_bench", 0644, proc_fs_pnm, &pnm_cycle_fops);
+ 	if (!proc_zswap_bench_file) {
+-		pr_err("[pnm_sim] Init the proc fs failed, cannot create zswap_bench file!");
++		PNM_ERR("[pnm_sim] Init the proc fs failed, cannot create zswap_bench file!");
+ 		goto create_proc_entry_fail;
+ 	}
+ 	return 0;
+@@ -688,14 +484,21 @@ static void cxl_pnm_sim_shutdown(void)
+ {
+ 	int i;
+ 
++	WRITE_ONCE(sim_is_active, false);
++
+ 	/* pnm_sim threads stop */
+-	for (i = 0; i < pnm_ctrl->num_compress; i++)
++	for (i = 0; i < pnm_ctrl->num_compress; i++) {
+ 		kthread_stop(pnm_ctrl->compress[i].task_unit);
++		/* relax compress while loops with done */
++		smp_store_release(&pnm_ctrl->compress[i].done, true);
++	}
+ 
+-	for (i = 0; i < pnm_ctrl->num_decompress; i++)
++	for (i = 0; i < pnm_ctrl->num_decompress; i++) {
+ 		kthread_stop(pnm_ctrl->decompress[i].task_unit);
++		/* relax decompress while loops with done */
++		smp_store_release(&pnm_ctrl->compress[i].done, true);
++	}
+ 
+-	WRITE_ONCE(sim_is_active, false);
+ 	release_procfs();
+ }
+ 
+@@ -773,9 +576,10 @@ static void pnm_thread_create(void)
+ 		pnm_ctrl->compress[i].is_idle = true;
+ 		pnm_ctrl->compress[i].consumed_cycles = 0;
+ 		pnm_ctrl->compress[i].delay_cycles = 0;
+-		pnm_ctrl->compress[i].task_unit = kthread_create(
+-			pnm_compress_unit, &pnm_ctrl->compress[i],
+-			"pnm_compress_unit[%d]", i);
++		pnm_ctrl->compress[i].type = COMPRESS_UNIT_TYPE;
++		pnm_ctrl->compress[i].task_unit =
++			kthread_create(pnm_unit, &pnm_ctrl->compress[i],
++				       "pnm_compress_unit[%d]", i);
+ 		if (!IS_ERR(pnm_ctrl->compress[i].task_unit)) {
+ 			kthread_bind(pnm_ctrl->compress[i].task_unit,
+ 				     pnm_ctrl->compress[i].core_id);
+@@ -801,9 +605,10 @@ static void pnm_thread_create(void)
+ 		pnm_ctrl->decompress[i].is_idle = true;
+ 		pnm_ctrl->decompress[i].consumed_cycles = 0;
+ 		pnm_ctrl->decompress[i].delay_cycles = 0;
+-		pnm_ctrl->decompress[i].task_unit = kthread_create(
+-			pnm_decompress_unit, &pnm_ctrl->decompress[i],
+-			"pnm_decompress_unit[%d]", i);
++		pnm_ctrl->decompress[i].type = DECOMPRESS_UNIT_TYPE;
++		pnm_ctrl->decompress[i].task_unit =
++			kthread_create(pnm_unit, &pnm_ctrl->decompress[i],
++				       "pnm_decompress_unit[%d]", i);
+ 		if (!IS_ERR(pnm_ctrl->decompress[i].task_unit)) {
+ 			kthread_bind(pnm_ctrl->decompress[i].task_unit,
+ 				     pnm_ctrl->decompress[i].core_id);
+@@ -835,7 +640,7 @@ static int pnm_sim_init(void)
+ 	/* Descriptor for info of PNM device */
+ 	pnm_ctrl = ioremap_cache(PNM_INFO_BASE_ADDR, PNM_INFO_SIZE);
+ 	if (!pnm_ctrl) {
+-		pr_err("[pnm_sim] Init pnm_sim failed, because the result of ioremap_cache is NULL!");
++		PNM_ERR("[pnm_sim] Init pnm_sim failed, the result of ioremap_cache is NULL!");
+ 		return -EIO;
+ 	}
+ 
+@@ -882,12 +687,12 @@ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ 		init_benchmark_data();
+ 		ret = init_procfs();
+ 		if (ret) {
+-			pr_err("[pnm_sim] pnm simulator engine load failed!\n");
++			PNM_ERR("[pnm_sim] pnm simulator engine load failed!\n");
+ 			goto init_procfs_fail;
+ 		}
+ 		ret = pnm_sim_init();
+ 		if (ret) {
+-			pr_err("[pnm_sim] pnm simulator engine load failed!\n");
++			PNM_ERR("[pnm_sim] pnm simulator engine load failed!\n");
+ 			goto pnm_sim_init_fail;
+ 		}
+ 		pnm_unit_gen();
+diff --git a/drivers/pnm/zswap/sim.h b/drivers/pnm/zswap/sim.h
+index ed9972b89..2c53bf2d1 100644
+--- a/drivers/pnm/zswap/sim.h
++++ b/drivers/pnm/zswap/sim.h
+@@ -38,6 +38,11 @@ void cxl_pnm_sim_exit(void);
+ #define PNM_INFO_BASE_ADDR (0X400003000)
+ #define PNM_INFO_SIZE (0x1000)
+ 
++#define COMPRESS_UNIT_TYPE 16
++#define DECOMPRESS_UNIT_TYPE 32
++#define COMPRESS_LOG_PREFIX "PNM-C"
++#define DECOMPRESS_LOG_PREFIX "PNM-D"
++
+ /* Registers in PNM */
+ struct pnm_reg {
+ 	bool enable; /* enable a PNM (RW): 1 bit */
+@@ -78,6 +83,7 @@ struct unit_info {
+ 	unsigned long delay_cycles;
+ 
+ 	uint32_t dst_size;
++	uint8_t type;
+ };
+ 
+ /* Information for queues in PNM */
+-- 
+2.34.1
+

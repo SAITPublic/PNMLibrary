@@ -37,18 +37,18 @@ done
 
 setup_sim() {
     # 1. Setup sls_resource module.
-    sudo modprobe -v sls_resource device=CXL
+    sudo modprobe -v sls_resource
 
     # 2. Setup shared memory for SLS simulator. `pnm_ctl' must be in PATH.
-    pnm_ctl setup-shm --sls --mem=64G
+    pnm_ctl setup-shm --sls
 }
 
 cleanup_sim() {
-    # 1. Remove sls_resource module.
-    sudo rmmod sls_resource
-
-    # 2. Remove shared memory for SLS simulator.
+    # 1. Remove shared memory for SLS simulator.
     pnm_ctl destroy-shm --sls
+
+    # 2. Remove sls_resource module.
+    sudo rmmod sls_resource
 }
 
 if [ "x$INSTALL" = "xtrue" ]

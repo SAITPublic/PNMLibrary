@@ -18,7 +18,7 @@ For better header dependency tracking, we use following rule for header inclusio
 Different header levels should be split by the new line, for example:
 
 ```
-#include "core/memory/barrier.h"
+#include "core/device/imdb/base.h"
 #include "core/memory/sls/accessor.h"
 
 #include "common/compiler_internal.h"

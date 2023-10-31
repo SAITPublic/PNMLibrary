@@ -1,7 +1,7 @@
 From d53ce2462846904e4d518518b5d73008fecc83ea Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Tue, 4 Jul 2023 01:56:13 -0400
-Subject: [PATCH 126/128] [pnm] Add parameters to specify a device for SLS
+Subject: [PATCH 126/135] [pnm] Add parameters to specify a device for SLS
  operation
 
 The device's type parameter was added to ctor and starter. Parameter

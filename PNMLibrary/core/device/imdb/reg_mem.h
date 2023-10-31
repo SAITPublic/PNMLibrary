@@ -19,26 +19,27 @@
 
 #include "pnmlib/common/views.h"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace pnm::imdb::device {
 
 inline auto regs_as_ints(ThreadCSR *regs) {
-  return pnm::view_cast<uint32_t>(pnm::make_view(regs, 1));
+  return pnm::views::view_cast<uint32_t>(pnm::views::make_view(regs, 1));
 }
 
 inline auto regs_as_ints(const ThreadCSR *regs) {
-  return pnm::view_cast<const uint32_t>(pnm::make_view(regs, 1));
+  return pnm::views::view_cast<const uint32_t>(pnm::views::make_view(regs, 1));
 }
 
-template <typename T, std::size_t size>
-auto to_volatile_ptrs(std::array<volatile T, size> &values_arr) {
-  std::array<volatile T *, size> ptrs_arr;
+template <typename T>
+auto to_volatile_ptrs(std::unique_ptr<volatile T[]> &values_arr, size_t size) {
+  std::shared_ptr<volatile T *[]> ptrs_arr =
+      std::shared_ptr<volatile T *[]>(new volatile T *[size]);
 
   for (std::size_t i = 0; i < size; ++i) {
-    ptrs_arr[i] = &values_arr[i];
+    ptrs_arr[i] = &values_arr.get()[i];
   }
 
   return ptrs_arr;
@@ -52,7 +53,7 @@ struct RegisterPointers {
   /** @brief Pointer to the global device registers (status). */
   volatile StatusCSR *status;
   /** @brief Pointers to per-thread device registers. */
-  std::array<volatile ThreadCSR *, MAX_THREADS> thread;
+  std::shared_ptr<volatile ThreadCSR *[]> thread;
 };
 
 } // namespace pnm::imdb::device

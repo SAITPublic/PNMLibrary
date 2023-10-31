@@ -27,17 +27,19 @@
 #include <iterator>
 #include <vector>
 
-/*! \brief Text fixture that create and store embedded tables. */
+using pnm::sls::device::topo;
+
+/*! \brief Text fixture that create and store embedding tables. */
 
 TEST_F(TablePreprocessing, MemcheckLoadWithoutTag) {
-  sls::secure::DLRMPreprocessor<uint32_t, std::ifstream,
-                                sls::secure::TrivialMemoryWriter>
-      table(root + "embedded.bin", info.rows(), info.cols());
+  pnm::sls::secure::DLRMPreprocessor<uint32_t, std::ifstream,
+                                     pnm::sls::secure::TrivialMemoryWriter>
+      table(root + "embedding.bin", info.rows(), info.cols());
 
   auto rbytes = rank_bytes();
 
   auto *ptr = static_cast<uint8_t *>(
-      aligned_alloc(pnm::device::topo().RankInterleavingSize, rbytes));
+      aligned_alloc(topo().RankInterleavingSize, rbytes));
   std::fill(ptr, ptr + rbytes, 255);
 
   table.load(ptr, false);
@@ -46,14 +48,14 @@ TEST_F(TablePreprocessing, MemcheckLoadWithoutTag) {
 }
 
 TEST_F(TablePreprocessing, MemcheckLoadWithTag) {
-  sls::secure::DLRMPreprocessor<uint32_t, std::ifstream,
-                                sls::secure::TrivialMemoryWriter>
-      table(root + "embedded.bin", info.rows(), info.cols());
+  pnm::sls::secure::DLRMPreprocessor<uint32_t, std::ifstream,
+                                     pnm::sls::secure::TrivialMemoryWriter>
+      table(root + "embedding.bin", info.rows(), info.cols());
 
   auto rank_bytes = rank_bytes_with_tag();
 
   auto *ptr = static_cast<uint8_t *>(
-      aligned_alloc(pnm::device::topo().RankInterleavingSize, rank_bytes));
+      aligned_alloc(topo().RankInterleavingSize, rank_bytes));
   std::fill(ptr, ptr + rank_bytes, 255);
 
   table.load(ptr, true);
@@ -64,7 +66,7 @@ TEST_F(TablePreprocessing, MemcheckLoadWithTag) {
 TEST_F(TablePreprocessing, OTPEvalCheck) {
   std::vector<char> mem(data_count() * sizeof(uint32_t), 0);
 
-  sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> table(
+  pnm::sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> table(
       mem.data(), info.rows(), info.cols());
   table.load(mem.data(), false); // Now in mem we have -OTP
 
@@ -78,13 +80,13 @@ TEST_F(TablePreprocessing, OTPEvalCheck) {
 }
 
 TEST(TablePreprocessor, BufferSize) {
-  const sls::secure::DLRMPreprocessor<uint64_t, PtrReader, PtrWriter> t64(
+  const pnm::sls::secure::DLRMPreprocessor<uint64_t, PtrReader, PtrWriter> t64(
       nullptr, {5, 10}, 8);
   EXPECT_EQ(t64.encrypted_buffer_size(false), 8 * (5 + 10) * sizeof(uint64_t));
   EXPECT_EQ(t64.encrypted_buffer_size(true),
             (8 + 2) * (5 + 10) * sizeof(uint64_t));
 
-  const sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> t32(
+  const pnm::sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> t32(
       nullptr, {2, 4, 16}, 16);
   EXPECT_EQ(t32.encrypted_buffer_size(false),
             16 * (2 + 4 + 16) * sizeof(uint32_t));

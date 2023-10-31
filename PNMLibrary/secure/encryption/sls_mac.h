@@ -28,7 +28,7 @@
 #include <numeric>
 #include <vector>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 /*! \brief Class performs verification tag encryption and
  * validation of SLS result.
@@ -41,10 +41,10 @@ class VerificationEngine
 
 public:
   using typename CryptoEngine::key_type;
-  using tag_type = pnm::uint128_t;
+  using tag_type = pnm::types::uint128_t;
   constexpr static auto TAG_BYTES = sizeof(tag_type);
 
-  constexpr static auto Q = pnm::longint_traits<tag_type>::BIG_VALUE;
+  constexpr static auto Q = pnm::types::longint_traits<tag_type>::BIG_VALUE;
 
   VerificationEngine(uintptr_t table_address, uint32_t version)
       : CryptoEngine(version), base_address_{table_address} {}
@@ -70,7 +70,7 @@ public:
   generate_mac(InIt1 begin, InIt2 end,
                uintptr_t address) const NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW {
     auto T = linear_checksum(begin, end); // T_i from article
-    alignas(16) FixedVector<uint8_t, TAG_BYTES> mac_otp{};
+    alignas(16) pnm::types::FixedVector<uint8_t, TAG_BYTES> mac_otp{};
     generate_otp(0x10, version_, address, aes_engine_, mac_otp);
     auto E = *reinterpret_cast<tag_type *>(mac_otp.data());
     return T - E;
@@ -164,7 +164,7 @@ public:
                           BinaryFunction op) const {
     auto reduce_func = [this, op](const auto &sum,
                                   [[maybe_unused]] auto address) {
-      alignas(16) FixedVector<uint8_t, TAG_BYTES> otp{};
+      alignas(16) pnm::types::FixedVector<uint8_t, TAG_BYTES> otp{};
       generate_otp(0x10, version_, address, aes_engine_, otp);
       auto Ei = *reinterpret_cast<tag_type *>(otp.data());
       return op(sum, Ei);
@@ -181,8 +181,8 @@ public:
     // Preallocated buffer for OTPs
     std::vector<tag_type> buffer(std::distance(first, last), tag_type{});
 
-    generate_otp_vec(0x10, version_, pnm::make_view(first, last), 1, 1,
-                     aes_engine_, pnm::make_view(buffer));
+    generate_otp_vec(0x10, version_, pnm::views::make_view(first, last), 1, 1,
+                     aes_engine_, pnm::views::make_view(buffer));
 
     return std::accumulate(buffer.begin(), buffer.end(), init, op);
   }
@@ -193,7 +193,7 @@ private:
 
   template <typename InIt1, typename InIt2>
   tag_type linear_checksum(InIt1 begin, InIt2 end) const {
-    alignas(16) FixedVector<uint8_t, TAG_BYTES> otp{};
+    alignas(16) pnm::types::FixedVector<uint8_t, TAG_BYTES> otp{};
     generate_otp(0x01, version_, base_address_, aes_engine_, otp);
     auto s = *reinterpret_cast<tag_type *>(otp.data());
 
@@ -211,6 +211,6 @@ private:
 
   uintptr_t base_address_;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif

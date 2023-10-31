@@ -9,18 +9,19 @@
  * without the express written permission of Samsung Electronics.
  */
 
-#include "sls/operation/inst_generator.h"
-
-#include "core/device/sls/rank_address.h"
+#include "core/device/sls/utils/inst_generator.h"
+#include "core/device/sls/utils/rank_address.h"
 
 #include "common/compiler_internal.h"
 #include "common/topology_constants.h"
+#include "hw/pnm_addr_constants.h"
 
 #include <gtest/gtest.h>
 
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <numeric>
@@ -28,7 +29,7 @@
 #include <vector>
 
 namespace {
-using pnm::device::topo;
+using pnm::sls::device::topo;
 
 ALWAYS_INLINE
 uintptr_t golden_interleaved_phys_offset(uintptr_t rank_offset,
@@ -37,15 +38,17 @@ uintptr_t golden_interleaved_phys_offset(uintptr_t rank_offset,
   //   - interleaving every 128B (rank)
   //   - pattern switches every 128 KB
 
+  static constexpr size_t NumOfRankPerCS = 2;
+
   // Offset within chunk.
   const auto chunk_offset = rank_offset % topo().RankInterleavingSize;
 
   // Physical offset base: total size of whole chunks * num ranks per cs.
-  auto offset =
-      (rank_offset - chunk_offset) * (topo().NumOfRanks / topo().NumOfCS);
+  auto offset = (rank_offset - chunk_offset) * NumOfRankPerCS;
 
   // Pattern switches every 128 KB.
-  const auto pattern_count = offset / topo().ChannelInterleavingSize;
+  static constexpr auto ChannelInterleavingSize = 1ULL << (HA_XOR_BIT + 1);
+  const auto pattern_count = offset / ChannelInterleavingSize;
 
   // Correction for the first rank (even pattern count): 0 bytes.
   // Correction for the second rank (odd pattern count): ±128 bytes.
@@ -157,9 +160,9 @@ TEST(InterleavedAddress, VerifyTransformation) {
     for (auto HA : {0, 1}) {
       uint64_t iaddress = pnm::sls::device::interleaved_address(rank_addr, HA);
 
-      static constexpr auto ISIZE = 128;
-      uint64_t golden =
-          ::golden_interleaved_phys_offset(rank_addr, HA) + ISIZE * HA;
+      const auto interleaving_size = topo().RankInterleavingSize;
+      uint64_t golden = ::golden_interleaved_phys_offset(rank_addr, HA) +
+                        interleaving_size * HA;
 
       ASSERT_EQ(iaddress, golden) << fmt::format(
           "HA [{0:}]: address "

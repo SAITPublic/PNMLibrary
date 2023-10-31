@@ -1,7 +1,7 @@
 From a14b94290a5b425007ad5ff2787daf5bf8365e21 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 9 Aug 2022 18:27:26 +0900
-Subject: [PATCH 028/161] [scripts] Move axdimm commit version file to
+Subject: [PATCH 028/225] [scripts] Move axdimm commit version file to
  /usr/modules/$version
 
 Otherwise dpkg fails to install multiple linux-headers package versions

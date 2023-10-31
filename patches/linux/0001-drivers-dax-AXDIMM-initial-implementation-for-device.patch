@@ -1,7 +1,7 @@
 From 9ea930e79e3808fd69d90969e73df104de4d7677 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 16 Nov 2021 20:41:29 +0900
-Subject: [PATCH 001/161] [drivers/dax] AXDIMM: initial implementation for
+Subject: [PATCH 001/225] [drivers/dax] AXDIMM: initial implementation for
  device open
 
 Dirty hook to properly remap regions, to be refined.

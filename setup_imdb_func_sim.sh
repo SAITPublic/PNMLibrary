@@ -40,15 +40,15 @@ setup_sim() {
     sudo modprobe -v imdb_resource
 
     # 2. Setup shared memory for IMDB simulator. `pnm_ctl' must be in PATH.
-    pnm_ctl setup-shm --imdb --mem=64G
+    pnm_ctl setup-shm --imdb
 }
 
 cleanup_sim() {
-    # 1. Remove imdb_resource module.
-    sudo rmmod imdb_resource
-
-    # 2. Remove shared memory for IMDB simulator.
+    # 1. Remove shared memory for IMDB simulator.
     pnm_ctl destroy-shm --imdb
+
+    # 2. Remove imdb_resource module.
+    sudo rmmod imdb_resource
 }
 
 if [ "x$INSTALL" = "xtrue" ]

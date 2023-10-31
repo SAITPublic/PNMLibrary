@@ -21,8 +21,6 @@
 
 #include <cstdint>
 
-namespace sls::secure {
-
 /*! \brief Class that perform SLS on CPU.
  *
  * This class is one of a set of runners that called from OperationExecutor.
@@ -30,23 +28,23 @@ namespace sls::secure {
  *
  * @tparam T is a type of table's entries.
  * */
-template <typename T> class DummyCPU : public IDevice {
+template <typename T> class DummyCPU : public pnm::sls::secure::IDevice {
 public:
-  using MemoryReader = TrivialMemoryReader;
-  using MemoryWriter = TrivialMemoryWriter;
+  using MemoryReader = pnm::sls::secure::TrivialMemoryReader;
+  using MemoryWriter = pnm::sls::secure::TrivialMemoryWriter;
 
 private:
-  void init_impl([[maybe_unused]] const DeviceArguments *args) override {}
+  void init_impl(
+      [[maybe_unused]] const pnm::sls::secure::DeviceArguments *args) override {
+  }
 
   void load_impl([[maybe_unused]] const void *src,
                  [[maybe_unused]] uint64_t size_bytes) override {}
 
   void run_impl([[maybe_unused]] uint64_t minibatch_size,
-                [[maybe_unused]] pnm::common_view<const uint32_t> lengths,
-                [[maybe_unused]] pnm::common_view<const uint32_t> indices,
-                [[maybe_unused]] pnm::common_view<uint8_t> psum) override {}
+                [[maybe_unused]] pnm::views::common<const uint32_t> lengths,
+                [[maybe_unused]] pnm::views::common<const uint32_t> indices,
+                [[maybe_unused]] pnm::views::common<uint8_t> psum) override {}
 };
-
-} // namespace sls::secure
 
 #endif // _DUMMY_CPU_H

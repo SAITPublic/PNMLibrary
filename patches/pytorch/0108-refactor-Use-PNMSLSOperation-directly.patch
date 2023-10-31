@@ -1,7 +1,7 @@
 From c9cf687a906b914887d287cc0242030a3cdc60ef Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 14 Mar 2023 19:23:17 +0300
-Subject: [PATCH 108/128] [refactor] Use PNMSLSOperation directly
+Subject: [PATCH 108/135] [refactor] Use PNMSLSOperation directly
 
 Update usage after API change:
 * Create the operation on stack

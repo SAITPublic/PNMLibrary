@@ -1,7 +1,7 @@
 From c7be84ace912104bd95675a98c05065e9a6c110f Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Wed, 19 Apr 2023 19:21:02 +0300
-Subject: [PATCH 115/128] [axdimm][fix] Edit members ordering
+Subject: [PATCH 115/135] [axdimm][fix] Edit members ordering
 
 PNM context own allocators that need for allocation and deallocation memory in buffers
 We get segfault when program try to destroy buffers, because buffers dtor try to use `dead` allocator

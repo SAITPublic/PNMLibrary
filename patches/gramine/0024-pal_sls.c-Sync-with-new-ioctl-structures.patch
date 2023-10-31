@@ -1,7 +1,7 @@
 From a51b8401f65d66591ded121e28e3db861edee9ca Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Thu, 29 Jun 2023 10:33:05 +0000
-Subject: [PATCH 24/27] [pal_sls.c] Sync with new ioctl structures
+Subject: [PATCH 24/29] [pal_sls.c] Sync with new ioctl structures
 
 * Ioctls were updated, and most of them removed. Update code accordingly
 * Use mmap for now, add TODO to get rid of it

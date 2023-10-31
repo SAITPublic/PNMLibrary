@@ -1,7 +1,7 @@
 From 63ea413d77bd3861ed4e95c5ccbec4a3a77a5ca1 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Thu, 20 Jul 2023 01:50:05 -0400
-Subject: [PATCH 142/161] [sls-cxl] Workaround to make SLS-CXL HW stable in
+Subject: [PATCH 142/225] [sls-cxl] Workaround to make SLS-CXL HW stable in
  multiple runs
 
 Introduce NOP ioctl that used to switch CPU context and flush some

@@ -1,7 +1,7 @@
 From bd6ebde1371dcc09687bece664908ad55ddaa6de Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 9 Nov 2021 16:31:41 +0900
-Subject: [PATCH 025/128] [lengths_reducer_ops_axdimm.cc] NFC: fix wording
+Subject: [PATCH 025/135] [lengths_reducer_ops_axdimm.cc] NFC: fix wording
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

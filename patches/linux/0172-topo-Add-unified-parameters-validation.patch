@@ -1,0 +1,170 @@
+From 300934370b6ece5733e3b87d4c01d6d421575c9c Mon Sep 17 00:00:00 2001
+From: Sergei Makarov <serg.makarov@samsung.com>
+Date: Mon, 4 Sep 2023 15:51:34 +0300
+Subject: [PATCH 172/225] [topo] Add unified parameters validation
+
+Introduce united function to validate topology as a whole.
+Add several checks on module parameters, namely:
+- Check that all buffer sizes are divide on 64.
+- Check that all integer values are positive.
+- Check that topology follows address map for SLS devices.
+
+Also validate default settings against introduced rules.
+
+For now, only validation for `int` values is supported,
+which for now is enough for all our parameters.
+
+Resolves MCS23-1545.
+
+Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>
+---
+ drivers/pnm/sls_resource/mem_info.c    |  8 +--
+ drivers/pnm/sls_resource/topo/params.c | 81 +++++++++++++++++++++++---
+ 2 files changed, 78 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/mem_info.c b/drivers/pnm/sls_resource/mem_info.c
+index 04b617c4f..537e25111 100644
+--- a/drivers/pnm/sls_resource/mem_info.c
++++ b/drivers/pnm/sls_resource/mem_info.c
+@@ -47,9 +47,9 @@ void sls_destroy_mem_info(const struct sls_mem_info *mem_info)
+ }
+ EXPORT_SYMBOL(sls_destroy_mem_info);
+ 
+-static inline void make_cuinit_regions(uint64_t nr_regions_per_cunit,
+-				       struct sls_mem_cunit_region *dst_regions,
+-				       const struct sls_mem_region *src_regions)
++static inline void make_cunit_regions(uint64_t nr_regions_per_cunit,
++				      struct sls_mem_cunit_region *dst_regions,
++				      const struct sls_mem_region *src_regions)
+ {
+ 	const int cunits_per_cs = sls_topo()->nr_cunits / sls_topo()->nr_cs;
+ 	const struct sls_mem_region *src = src_regions;
+@@ -108,7 +108,7 @@ sls_create_mem_cunit_info(const struct sls_mem_info *mem_info)
+ 		src = &mem_info->regions[cs * nr_regions_per_cunit];
+ 
+ 		/* form cunit address layout */
+-		make_cuinit_regions(nr_regions_per_cunit, dst, src);
++		make_cunit_regions(nr_regions_per_cunit, dst, src);
+ 
+ 		/* apply cunit interleaving */
+ 		apply_interleaving(nr_regions_per_cunit, cs, dst);
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index bf85c3738..fb8958a25 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -146,19 +146,47 @@ const struct sls_params *sls_topo(void)
+ 	return &sls_params;
+ }
+ 
++// Check that topology in `params` is consistent.
++static int check_topo_consistent(const struct sls_params *params)
++{
++	bool is_valid = true;
++
++	const size_t buf_alignment = 64;
++	is_valid &= ((params->buf_sz % buf_alignment) == 0);
++	is_valid &= is_power_of_2(params->nr_cunits);
++	is_valid &= is_power_of_2(params->nr_ranks);
++	is_valid &= (params->nr_cs <= params->nr_cunits);
++	is_valid &= (params->nr_ranks == params->nr_ch * params->nr_cs);
++	is_valid &= (params->cunit_interleaving_sz == 0 ||
++		     params->cunit_interleaving_sz == SZ_128);
++	is_valid &= (params->ch_interleaving_sz == 0 ||
++		     params->ch_interleaving_sz == SZ_128K);
++	is_valid &= (params->interleaving_stride == 0 ||
++		     params->interleaving_stride == SZ_128);
++	is_valid &= (params->aligned_tag_sz == SZ_64);
++
++	return is_valid ? 0 : -EINVAL;
++}
++
+ static int set_dev_type(const char *val, const struct kernel_param *kp)
+ {
+ 	enum sls_device_type *dev_type = (enum sls_device_type *)kp->arg;
++	int rc;
+ 
+ 	if (strcmp("AXDIMM", val) == 0) {
+ 		*dev_type = SLS_AXDIMM;
++
++		rc = check_topo_consistent(&axdimm_default_sls_params);
++		if (rc)
++			return rc;
++
+ 		sls_params = axdimm_default_sls_params;
+ 		return 0;
+ 	}
+ 	if (strcmp("CXL", val) == 0) {
+ 		*dev_type = SLS_CXL;
+ 		sls_params = cxl_default_sls_params;
+-		return 0;
++		return check_topo_consistent(&sls_params);
+ 	}
+ 
+ 	SLS_ERR("Unknown device name: %s\n", val);
+@@ -185,18 +213,57 @@ static int get_dev_type(char *buffer, const struct kernel_param *kp)
+ 	return -EINVAL;
+ }
+ 
+-static const struct kernel_param_ops dev_type_ops = {
++static const struct kernel_param_ops param_ops_dev_type = {
+ 	.set = set_dev_type,
+ 	.get = get_dev_type,
+ };
+ 
+-// [TODO: @p.bred] Make validation and unified cb for all parameters
+-module_param_cb(dev_type, &dev_type_ops, &sls_params.dev_type, 0444);
++static int set_value(const char *value, const struct kernel_param *kp)
++{
++	int *field_val, rc;
++	ptrdiff_t offset;
++	struct sls_params temp_params;
++
++	temp_params = sls_params;
++	offset = (char *)kp->arg - (char *)&sls_params;
++
++	field_val = (int *)((char *)&temp_params + offset);
++	rc = kstrtoint(value, 0, field_val);
++	if (rc != 0)
++		return rc;
++
++	// Common rule: parameter values should not be negative.
++	if (*field_val < 0)
++		return -EINVAL;
++
++	rc = check_topo_consistent(&temp_params);
++	if (rc != 0)
++		return rc;
++
++	memcpy((char *)&temp_params + offset, kp->arg, sizeof(int));
++
++	return rc;
++}
++
++static int get_value(char *buffer, const struct kernel_param *kp)
++{
++	return sysfs_emit(buffer, "%d\n", *((int *)kp->arg));
++}
++
++static const struct kernel_param_ops param_ops_topo = {
++	.set = set_value,
++	.get = get_value,
++};
++
++#define param_check_dev_type(name, p) __param_check(name, p, int)
++#define param_check_topo(name, p) __param_check(name, p, int)
++
++#define TYPED_NAMED_PARAM(param, type) \
++	module_param_named(param, sls_params.param, type, 0444)
+ 
+-// [TODO: y-lavrinenko] Add the parameters validation
+-#define NAMED_PARAM(param) \
+-	module_param_named(param, sls_params.param, int, 0444)
++#define NAMED_PARAM(param) TYPED_NAMED_PARAM(param, topo)
+ 
++TYPED_NAMED_PARAM(dev_type, dev_type);
+ NAMED_PARAM(nr_ranks);
+ NAMED_PARAM(nr_cunits);
+ NAMED_PARAM(nr_cs);
+-- 
+2.34.1
+

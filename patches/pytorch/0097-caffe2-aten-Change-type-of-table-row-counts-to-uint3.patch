@@ -1,7 +1,7 @@
 From 265ed2a829e8c8d15af807ad6b954f5f0540c06e Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Mon, 19 Dec 2022 14:20:36 +0300
-Subject: [PATCH 097/128] [caffe2,aten] Change type of table row counts to
+Subject: [PATCH 097/135] [caffe2,aten] Change type of table row counts to
  uint32_t.
 
 The numbers of rows in embedding tables were represented as uint64_t.

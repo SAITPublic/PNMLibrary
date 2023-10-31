@@ -1,7 +1,7 @@
 From adbffd26dace8c26415ec34ff3918c8fe6509988 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Sun, 30 Jul 2023 20:39:48 -0400
-Subject: [PATCH 152/161]  [pnm][zswap] Fix race in decompression pipeline
+Subject: [PATCH 152/225]  [pnm][zswap] Fix race in decompression pipeline
 
  The scope of `decompress_lock` was enlarged to cover the polling loop.
  This allows to solve next issue: when there is only one available

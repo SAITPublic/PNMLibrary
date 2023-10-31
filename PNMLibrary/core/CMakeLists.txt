@@ -3,15 +3,13 @@ add_subdirectory(memory)
 add_subdirectory(operation_runner)
 add_subdirectory(context)
 
-add_library(pnm_runner INTERFACE)
-target_link_libraries(pnm_runner INTERFACE imdb_runner)
-
 set(PNM_API_LIBS
   pnm_device
   pnm_memory
   sls_device
   sls_operation
   pnm_context
+  pnm_runner
 )
 
 # `/dev/null` is a hack to compile a shared library without sources.

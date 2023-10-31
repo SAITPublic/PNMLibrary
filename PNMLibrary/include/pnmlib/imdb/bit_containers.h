@@ -58,7 +58,7 @@ constexpr auto bit_vector_storage_size(uint64_t max_value) {
  *
  * See detail: https://confluence.samsungds.net/display/NP/IMDB+PoC+Pipeline
  *
- * Inherited methods from @see pnm::views::bit_compressed_view:
+ * Inherited methods from @see pnm::views::bit_compressed:
  *  -- size()
  *  -- capacity()
  *  -- bytes()
@@ -75,7 +75,7 @@ constexpr auto bit_vector_storage_size(uint64_t max_value) {
 template <typename T = uint32_t,
           typename C = std::vector<
               T, pnm::utils::aligned_allocator<T, container_alignment>>>
-class compressed_vector : public views::bit_compressed_view<T, C> {
+class compressed_vector : public views::bit_compressed<T, C> {
 public:
   constexpr compressed_vector() = default;
 
@@ -113,13 +113,13 @@ public:
       : compressed_vector(value_bits, list.begin(), list.end()) {}
 
   constexpr auto view() const & {
-    return views::bit_compressed_view<const T>(
+    return views::bit_compressed<const T>(
         this->value_bits(), this->size(), this->container().data(),
         this->container().data() + this->container().size());
   }
 
   constexpr auto view() & {
-    return views::bit_compressed_view<T>(
+    return views::bit_compressed<T>(
         this->value_bits(), this->size(), this->container().data(),
         this->container().data() + this->container().size());
   }
@@ -144,11 +144,11 @@ private:
   }
 
   using inner_storage = C;
-  using base = views::bit_compressed_view<T, C>;
+  using base = views::bit_compressed<T, C>;
 };
 
 /** @brief Interpret an address as a compressed vector and make a
- * pnm::views::bit_compressed_view to it
+ * pnm::views::bit_compressed to it
  *
  * @param value_bits value size in bits
  * @param start address where data is stored
@@ -161,7 +161,7 @@ constexpr auto compressed_view_from_raw(uint64_t value_bits, T *start,
                                         uint64_t value_counts) {
   T *end = start +
            details::compressed_vector_storage_size<T>(value_bits, value_counts);
-  return views::bit_compressed_view<T>(value_bits, value_counts, start, end);
+  return views::bit_compressed<T>(value_bits, value_counts, start, end);
 }
 
 /** @brief A container that implements BitVector logic to store fixed amount of
@@ -225,13 +225,13 @@ public:
       : bit_vector(list.begin(), list.end()) {}
 
   constexpr auto view() const & {
-    return views::bit_vector_view<pnm::common_view<const T>>(
+    return views::bit_vector_view<pnm::views::common<const T>>(
         this->size(), this->container().data(),
         this->container().data() + this->container().size());
   }
 
   constexpr auto view() & {
-    return views::bit_vector_view<pnm::common_view<T>>(
+    return views::bit_vector_view<pnm::views::common<T>>(
         this->size(), this->container().data(),
         this->container().data() + this->container().size());
   }
@@ -272,7 +272,7 @@ private:
 template <typename T>
 static constexpr auto bit_view_from_raw(T *start, uint64_t max_value) {
   T *end = start + details::bit_vector_storage_size<T>(max_value);
-  return views::bit_vector_view<pnm::common_view<T>>(max_value, start, end);
+  return views::bit_vector_view<pnm::views::common<T>>(max_value, start, end);
 }
 
 } // namespace pnm::containers

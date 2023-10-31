@@ -1,7 +1,7 @@
 From cc7b433b2a76c5222e5b606de91b328415cd0a65 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 3 Nov 2021 16:19:29 +0900
-Subject: [PATCH 020/128] [caffe2/core] Disable async scheduling for AXDIMM
+Subject: [PATCH 020/135] [caffe2/core] Disable async scheduling for AXDIMM
  operations
 
 Use current sync scheduling for AXDIMM operations. Async scheduling

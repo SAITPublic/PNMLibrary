@@ -1,7 +1,7 @@
 From 8c8293f1d83eeead36f20b403588b208d125a485 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Tue, 6 Sep 2022 13:27:00 +0300
-Subject: [PATCH 02/27] [application] Add AXDIMM run manifest
+Subject: [PATCH 02/29] [application] Add AXDIMM run manifest
 
 ---
  application/axdimm_secndp_test/Makefile       | 46 ++++++++++++++++

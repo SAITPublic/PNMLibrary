@@ -40,7 +40,7 @@ using namespace tools::gen::imdb;
 using pnm::operations::Scan;
 
 auto &context() {
-  static auto ctx = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  static auto ctx = pnm::make_context(pnm::Device::Type::IMDB);
   return ctx;
 }
 
@@ -90,7 +90,7 @@ template <> struct PredicateHelper<predictor_input_vector> {
   static pnm::memory::Buffer<uint32_t> generate() {
     predictor_input_vector pv =
         details::generate_input<OperationType::InList>().front();
-    pnm::memory::Buffer<uint32_t> buf(pnm::make_view(pv.container()),
+    pnm::memory::Buffer<uint32_t> buf(pnm::views::make_view(pv.container()),
                                       context());
     return buf;
   }
@@ -125,7 +125,7 @@ template <> struct ResultHelper<index_vector> {
   }
 };
 
-template <typename T> struct IMDBScanOperationTest : public ::testing::Test {
+template <typename T> struct ImdbScanOperationTest : public ::testing::Test {
   using predicate_type = typename T::first;
   using result_type = typename T::second;
 
@@ -145,7 +145,7 @@ template <typename T> struct IMDBScanOperationTest : public ::testing::Test {
   void basic() {
     const auto column = details::generate_column();
     const pnm::memory::Buffer<compressed_element_type> column_buffer(
-        pnm::make_view(column.container()), context());
+        pnm::views::make_view(column.container()), context());
 
     const auto predicate = predicate_helper::generate();
     auto result = result_helper::make(column_buffer);
@@ -193,11 +193,11 @@ using types = ::testing::Types<
     pnm::utils::TypePair<RangeOperation, index_vector>,
     pnm::utils::TypePair<predictor_input_vector, index_vector>>;
 
-TYPED_TEST_SUITE(IMDBScanOperationTest, types);
+TYPED_TEST_SUITE(ImdbScanOperationTest, types);
 
-TYPED_TEST(IMDBScanOperationTest, Basic) { this->basic(); }
+TYPED_TEST(ImdbScanOperationTest, Basic) { this->basic(); }
 
-TEST(IMDBScanOperationExtraTest, TooManyBits) {
+TEST(ImdbScanOperationExtraTest, TooManyBits) {
   constexpr uint64_t wrong_bit_compression = 28;
   constexpr index_type column_size = 100;
 

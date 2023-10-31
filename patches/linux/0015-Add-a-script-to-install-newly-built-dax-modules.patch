@@ -1,7 +1,7 @@
 From df0cfb3882ba6a9f0f09a8b85a34d47ae8e0c733 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 16 Dec 2021 10:12:11 +0900
-Subject: [PATCH 015/161] Add a script to install newly built dax modules
+Subject: [PATCH 015/225] Add a script to install newly built dax modules
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

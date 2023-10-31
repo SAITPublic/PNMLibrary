@@ -18,9 +18,8 @@
 
 #include "test/mocks/context/utils.h"
 
-#include "pnmlib/sls/embedded_tables.h"
+#include "pnmlib/sls/embedding_tables.h"
 #include "pnmlib/sls/operation.h"
-#include "pnmlib/sls/type.h"
 
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/runner.h"
@@ -32,30 +31,29 @@
 
 namespace test_app {
 
-template <typename T> class SLSTestHelper {
+template <typename T> class SlsTestHelper {
 public:
-  SLSTestHelper(const HelperRunParams &run_params,
+  SlsTestHelper(const HelperRunParams &run_params,
                 const SlsModelParams &model_params,
-                const SLSParamsGenerator &params_generator)
+                const SlsParamsGenerator &params_generator)
       : run_params_(run_params), model_params_(model_params),
         params_generator_(params_generator),
-        ctx_(test::mock::make_context_mock(run_params.context_type)),
-        runner_{ctx_} {}
+        ctx_(test::mock::make_context_mock(run_params.context_type)) {}
 
-  virtual ~SLSTestHelper() = default;
+  virtual ~SlsTestHelper() = default;
 
-  SLSType generate_data_types() const;
+  pnm::operations::SlsOperation::Type generate_data_types() const;
 
-  PNMSLSOperation
-  create_sls_op(const pnm::memory::EmbeddedTables *tables) const {
-    const SLSType data_type = generate_data_types();
+  pnm::operations::SlsOperation
+  create_sls_op(const pnm::memory::EmbeddingTables *tables) const {
+    const pnm::operations::SlsOperation::Type data_type = generate_data_types();
 
     return {static_cast<uint32_t>(model_params_.sparse_feature_size),
-            pnm::make_const_view(model_params_.tables_rows_num), tables,
+            pnm::views::make_const_view(model_params_.tables_rows_num), tables,
             data_type};
   }
 
-  std::vector<T> run_sls(PNMSLSOperation &sls_op,
+  std::vector<T> run_sls(pnm::operations::SlsOperation &sls_op,
                          const SlsOpParams &sls_op_params,
                          const pnm::Runner &runner) const {
     const auto &[lS_indices, lS_lengths] = sls_op_params;
@@ -63,10 +61,10 @@ public:
     auto psum_res = params_generator_.generate_psum(run_params_, model_params_,
                                                     kpsum_init_val<T>);
 
-    sls_op.set_run_params(run_params_.mini_batch_size,
-                          pnm::make_view(lS_lengths),
-                          pnm::make_view(lS_indices),
-                          pnm::view_cast<uint8_t>(pnm::make_view(psum_res)));
+    sls_op.set_run_params(
+        run_params_.mini_batch_size, pnm::views::make_view(lS_lengths),
+        pnm::views::make_view(lS_indices),
+        pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum_res)));
 
     for (int i = 0; i < run_params_.num_requests; ++i) {
       runner.run(sls_op);
@@ -82,18 +80,20 @@ public:
 
   HelperRunParams run_params_;
   SlsModelParams model_params_;
-  const SLSParamsGenerator &params_generator_;
+  const SlsParamsGenerator &params_generator_;
   pnm::ContextHandler ctx_;
-  pnm::Runner runner_;
 };
 
-template <> inline SLSType SLSTestHelper<float>::generate_data_types() const {
-  return SLSType::Float;
+template <>
+inline pnm::operations::SlsOperation::Type
+SlsTestHelper<float>::generate_data_types() const {
+  return pnm::operations::SlsOperation::Type::Float;
 }
 
 template <>
-inline SLSType SLSTestHelper<uint32_t>::generate_data_types() const {
-  return SLSType::Uint32;
+inline pnm::operations::SlsOperation::Type
+SlsTestHelper<uint32_t>::generate_data_types() const {
+  return pnm::operations::SlsOperation::Type::Uint32;
 }
 
 } // namespace test_app

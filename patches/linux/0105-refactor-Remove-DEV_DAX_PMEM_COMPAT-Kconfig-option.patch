@@ -1,7 +1,7 @@
 From c7af9a76827e42f50751336e7ce18e3dcf955e1c Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Fri, 28 Apr 2023 12:19:46 +0300
-Subject: [PATCH 105/161] [refactor] Remove DEV_DAX_PMEM_COMPAT Kconfig option
+Subject: [PATCH 105/225] [refactor] Remove DEV_DAX_PMEM_COMPAT Kconfig option
 
 Remove forementioned option, since it triggers checkpatch
 warning, while not more used.

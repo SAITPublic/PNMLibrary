@@ -15,9 +15,10 @@
 #include "imdb/software_scan/avx2/scan.h"
 
 #include "core/device/imdb/reg_mem.h"
+#include "core/device/simulator/base_simulator.h"
 
-#include "common/make_error.h"
 #include "common/profile.h"
+#include "common/topology_constants.h"
 
 #include "pnmlib/imdb/bit_containers.h"
 #include "pnmlib/imdb/libimdb.h"
@@ -27,21 +28,20 @@
 #include "pnmlib/common/misc_utils.h"
 #include "pnmlib/common/views.h"
 
-#include <linux/imdb_resources.h>
-
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <thread>
-#include <utility>
 
 namespace pnm::imdb::device {
 
+using pnm::imdb::device::topo;
+
 SimulatorCore::SimulatorCore(const RegisterPointers &regs, uint8_t *memory)
-    : memory_{memory}, regs_{regs}, thread_pool_(IMDB_THREAD_NUM) {
+    : pnm::sls::device::BaseAsyncSimulator(topo().NumOfThreads),
+      memory_{memory}, regs_{regs} {
   // 0b111 for 3 threads.
-  regs_.status->IMDB_COM_STATUS = (1U << IMDB_THREAD_NUM) - 1;
+  regs_.status->IMDB_COM_STATUS = (1U << topo().NumOfThreads) - 1;
 
   // Set identification registers (values taken from the hardware device).
   //
@@ -53,65 +53,17 @@ SimulatorCore::SimulatorCore(const RegisterPointers &regs, uint8_t *memory)
   // Number of cores: 1
   // Memory capacity: 0 (probably, not implemented in hardware yet?)
   regs_.common->IMDB_CAP = 0b11'01'00000000'00000000;
+  pnm::sls::device::BaseAsyncSimulator::start();
 }
 
-SimulatorCore::~SimulatorCore() {
-  for (size_t thread_id = 0; thread_id < IMDB_THREAD_NUM; ++thread_id) {
-    if (is_thread_enabled(thread_id)) {
-      disable_thread(thread_id);
-    }
-  }
-}
-
-void SimulatorCore::enable_thread(size_t thread_id) {
-  if (is_thread_enabled(thread_id)) {
-    throw pnm::error::make_inval(
-        "Trying to enable already enabled IMDB thread {}.", thread_id);
-  }
-  auto &controls = thread_controls_[thread_id];
-  controls.stop_flag.inner.store(false);
-
-  auto future =
-      thread_pool_.run([this, thread_id]() { worker_job(thread_id); });
-  controls.future = std::move(future);
-}
-
-void SimulatorCore::disable_thread(size_t thread_id) {
-  if (!is_thread_enabled(thread_id)) {
-    throw pnm::error::make_inval(
-        "Trying to disable IMDB thread {} that is not enabled.", thread_id);
-  }
-
-  auto &controls = thread_controls_[thread_id];
-  controls.stop_flag.inner.store(true);
-  controls.future.value().wait();
-
-  controls.future = std::nullopt;
-}
-
-bool SimulatorCore::is_thread_enabled(size_t thread_id) const {
-  if (thread_id >= IMDB_THREAD_NUM) {
-    throw pnm::error::make_inval("IMDB thread id {} is too large.", thread_id);
-  }
-
-  return thread_controls_[thread_id].future.has_value();
-}
+SimulatorCore::~SimulatorCore() { stop(); }
 
 void SimulatorCore::worker_job(size_t thread_id) {
   ClockTimerType clock_timer;
   clock_timer.tick();
 
   auto &own_regs = *regs_.thread[thread_id];
-  const auto &stop_flag = thread_controls_[thread_id].stop_flag;
-  while (true) {
-    // Exit if requested to.
-    {
-      const bool should_exit = stop_flag.inner.load();
-      if (should_exit) {
-        break;
-      }
-    }
-
+  while (!should_stop(thread_id)) {
     // Continue polling until ready to start the scan operation.
     // Each time the scan operation does not start, return to the beginning of
     // the loop to check the stop flag.
@@ -241,7 +193,7 @@ void SimulatorCore::dispatch_scan_operation(
       auto *column_result_addr = virtual_address<pnm::imdb::index_type *>(
           thread_context.thread_regs.THREAD_RES_ADDR +
           thread_context.thread_regs.THREAD_RES_INDEX_OFFSET);
-      auto index_vector_view = pnm::make_view(
+      auto index_vector_view = pnm::views::make_view(
           column_result_addr, thread_context.thread_regs.THREAD_RSLT_LMT);
 
       auto result_size = invoke_scan(predicate, index_vector_view);

@@ -1,7 +1,7 @@
 From 8a9ea76dea9f8289393ba2044da986d9d5d8e17b Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Fri, 7 Apr 2023 16:44:49 +0300
-Subject: [PATCH 095/161] [dba] udpdate dba_resource script
+Subject: [PATCH 095/225] [dba] udpdate dba_resource script
 
 Signed-off-by: Savelii Motov <s.motov@samsung.com>
 ---

@@ -1,7 +1,7 @@
 From 985014b531ad7e6407e9c7cf909545855f587050 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Mon, 3 Oct 2022 09:33:30 +0000
-Subject: [PATCH 073/128] [caffe2] Use exported targets from axdimm_driver
+Subject: [PATCH 073/135] [caffe2] Use exported targets from axdimm_driver
 
 ---
  caffe2/CMakeLists.txt | 8 ++++++--

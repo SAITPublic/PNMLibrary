@@ -1,7 +1,7 @@
 From 547b203183907a04759d62de77c621797b7dd933 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 3 Nov 2021 12:43:13 +0900
-Subject: [PATCH 019/128] [caffe2/python] Add missed AXDIMM support in python
+Subject: [PATCH 019/135] [caffe2/python] Add missed AXDIMM support in python
 
 * support AXDIMM in 'extension_loader.DlopenGuard'
 * add caffe2_pb2.AXDIMM initialization in __init__.py

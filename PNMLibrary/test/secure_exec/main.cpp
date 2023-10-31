@@ -16,6 +16,7 @@
 #include "secure/plain/sls.h"
 
 #include "common/mapped_file.h"
+#include "common/topology_constants.h"
 
 #include "tools/datagen/sls/general/indices_info.h"
 #include "tools/datagen/sls/general/tables_info.h"
@@ -57,7 +58,8 @@
 #include <utility>
 #include <vector>
 
-using namespace sls::secure;
+using namespace pnm::sls::secure;
+using namespace tools::gen::sls;
 
 template <typename T> T as(void *ptr) { return static_cast<T>(ptr); }
 
@@ -66,10 +68,10 @@ TEST(MemIO, ReadWrite) {
   std::vector<uint32_t> data(size);
   std::iota(data.begin(), data.end(), 0);
 
-  sls::secure::TrivialMemoryReader in(data.data());
+  pnm::sls::secure::TrivialMemoryReader in(data.data());
 
   std::vector<uint32_t> out_data(size, 0);
-  sls::secure::TrivialMemoryWriter out(out_data.data());
+  pnm::sls::secure::TrivialMemoryWriter out(out_data.data());
 
   for (auto i = 0; i < size; i += 10) {
     std::array<uint32_t, 10> slice{};
@@ -96,7 +98,7 @@ struct SmallTablesProcessing : public ::testing::Test {
     IndicesInfo indices;
   } info;
 
-  // Prepare small embedded tables, indices and golden vectors
+  // Prepare small embedding tables, indices and golden vectors
   void SetUp() override {
     const std::vector<uint32_t> rows_count{150U, 210U, 150U, 150U, 150U, 1024};
     constexpr static size_t sparse_feature_size = 16;
@@ -117,8 +119,8 @@ struct SmallTablesProcessing : public ::testing::Test {
     auto generator =
         GoldenVecGeneratorFactory::default_factory().create("uint32_t");
 
-    auto tables = sls::tests::get_test_tables_mmap(root);
-    auto indices = sls::tests::get_test_indices(root, prefix);
+    auto tables = get_test_tables_mmap(root);
+    auto indices = get_test_indices(root, prefix);
     ASSERT_NO_THROW(
         generator->compute_and_store_golden_sls(root, prefix, tables, indices));
   }
@@ -126,7 +128,8 @@ struct SmallTablesProcessing : public ::testing::Test {
   void TearDown() override { std::filesystem::remove_all(root); }
 
 protected:
-  static constexpr auto TAG_SIZE = sizeof(pnm::uint128_t) / sizeof(uint32_t);
+  static constexpr auto TAG_SIZE =
+      sizeof(pnm::types::uint128_t) / sizeof(uint32_t);
 
   template <typename C> auto reduce(const C &c) {
     return std::accumulate(c.begin(), c.end(), 0UL);
@@ -135,7 +138,7 @@ protected:
   void test_impl(bool with_tag);
 
   auto load_indices() {
-    auto indices = sls::tests::get_test_indices(root, prefix);
+    auto indices = get_test_indices(root, prefix);
     std::vector<uint32_t> indices_data(reduce(indices.info.lengths()));
     indices.in.read(reinterpret_cast<char *>(indices_data.data()),
                     static_cast<std::streamsize>(
@@ -145,72 +148,81 @@ protected:
 };
 
 using RunnerTypes = ::testing::Types<
-    pnm::utils::TypePair<SyncCPURunner<uint32_t>, TrivialCPU<uint32_t>>,
-    pnm::utils::TypePair<ProdConsCPURunner<uint32_t>, TrivialCPU<uint32_t>>,
-    pnm::utils::TypePair<SyncSLSRunner<uint32_t>, UntrustedDevice<uint32_t>>,
-    pnm::utils::TypePair<ProdConsSLSRunner<uint32_t>,
+    pnm::utils::TypePair<SyncCpuRunner<uint32_t>, TrivialCPU<uint32_t>>,
+    pnm::utils::TypePair<ProdConsCpuRunner<uint32_t>, TrivialCPU<uint32_t>>,
+    pnm::utils::TypePair<SyncSlsRunner<uint32_t>, UntrustedDevice<uint32_t>>,
+    pnm::utils::TypePair<ProdConsSlsRunner<uint32_t>,
                          UntrustedDevice<uint32_t>>>;
 
 TYPED_TEST_SUITE(SmallTablesProcessing, RunnerTypes);
 
 TYPED_TEST(SmallTablesProcessing, OpExecCPULoadNoTagAsanCheck) {
-  auto emb_tables = sls::tests::get_test_tables_mmap(this->root);
+  auto emb_tables = get_test_tables_mmap(this->root);
 
   typename TestFixture::runner_type runner;
 
-  auto params = sls::tests::SimpleDeviceParamsGenerator<
-      typename TestFixture::device_type>::
-      generate_params(pnm::make_view(emb_tables.info.rows()),
+  auto params = SimpleDeviceParamsGenerator<typename TestFixture::device_type>::
+      generate_params(pnm::views::make_view(emb_tables.info.rows()),
                       emb_tables.info.cols(), false);
 
   runner.init(&params);
   runner.load_tables(
       reinterpret_cast<const char *>(emb_tables.mapped_file.data()),
-      pnm::make_view(emb_tables.info.rows()), emb_tables.info.cols(), false);
+      pnm::views::make_view(emb_tables.info.rows()), emb_tables.info.cols(),
+      false);
 }
 
 TYPED_TEST(SmallTablesProcessing, OpExecCPULoadTagAsanCheck) {
-  auto emb_tables = sls::tests::get_test_tables_mmap(this->root);
+  static constexpr bool with_tag = true;
+
+  if (with_tag &&
+      pnm::sls::device::topo().Bus == pnm::sls::device::BusType::CXL) {
+    GTEST_SKIP() << "SLS-CXL HW does not support tags\n";
+  }
+
+  auto emb_tables = get_test_tables_mmap(this->root);
 
   typename TestFixture::runner_type runner;
 
-  auto params = sls::tests::SimpleDeviceParamsGenerator<
-      typename TestFixture::device_type>::
-      generate_params(pnm::make_view(emb_tables.info.rows()),
+  auto params = SimpleDeviceParamsGenerator<typename TestFixture::device_type>::
+      generate_params(pnm::views::make_view(emb_tables.info.rows()),
                       emb_tables.info.cols(), true);
 
   runner.init(&params);
   runner.load_tables(
       reinterpret_cast<const char *>(emb_tables.mapped_file.data()),
-      pnm::make_view(emb_tables.info.rows()), emb_tables.info.cols(), true);
+      pnm::views::make_view(emb_tables.info.rows()), emb_tables.info.cols(),
+      true);
 }
 
 template <typename TArgs>
 void SmallTablesProcessing<TArgs>::test_impl(bool with_tag) {
-  auto emb_tables = sls::tests::get_test_tables_mmap(root);
+  auto emb_tables = get_test_tables_mmap(root);
   auto [indices, indices_data] = load_indices();
-  auto golden = sls::tests::get_golden_vector(root, prefix);
+  auto golden = get_golden_vector(root, prefix);
 
   runner_type runner;
-  auto params =
-      sls::tests::SimpleDeviceParamsGenerator<device_type>::generate_params(
-          pnm::make_view(emb_tables.info.rows()), emb_tables.info.cols(),
-          with_tag);
+  auto params = SimpleDeviceParamsGenerator<device_type>::generate_params(
+      pnm::views::make_view(emb_tables.info.rows()), emb_tables.info.cols(),
+      with_tag);
 
   runner.init(&params);
   runner.load_tables(
       reinterpret_cast<const char *>(emb_tables.mapped_file.data()),
-      pnm::make_view(emb_tables.info.rows()), emb_tables.info.cols(), with_tag);
+      pnm::views::make_view(emb_tables.info.rows()), emb_tables.info.cols(),
+      with_tag);
 
   auto sls_requests = indices.info.num_requests();
   std::vector<uint32_t> psum;
   psum.resize(sls_requests * emb_tables.info.cols(), 0);
 
   std::vector<uint8_t> status(sls_requests);
-  auto res = runner.run(
-      indices.info.minibatch_size(), pnm::make_view(indices.info.lengths()),
-      pnm::make_view(std::cref(indices_data).get()),
-      pnm::view_cast<uint8_t>(pnm::make_view(psum)), pnm::make_view(status));
+  auto res =
+      runner.run(indices.info.minibatch_size(),
+                 pnm::views::make_view(indices.info.lengths()),
+                 pnm::views::make_view(std::cref(indices_data).get()),
+                 pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)),
+                 pnm::views::make_view(status));
 
   EXPECT_TRUE(res);
 
@@ -227,9 +239,12 @@ void SmallTablesProcessing<TArgs>::test_impl(bool with_tag) {
   }
 }
 
-TYPED_TEST(SmallTablesProcessing, SecureApiSLSNoTag) { this->test_impl(false); }
+TYPED_TEST(SmallTablesProcessing, SecureApiSlsNoTag) { this->test_impl(false); }
 
-TYPED_TEST(SmallTablesProcessing, SecureApiSLSWithTag) {
+TYPED_TEST(SmallTablesProcessing, SecureApiSlsWithTag) {
+  if (pnm::sls::device::topo().Bus == pnm::sls::device::BusType::CXL) {
+    GTEST_SKIP() << "SLS-CXL HW does not support tags\n";
+  }
   this->test_impl(true);
 }
 
@@ -286,46 +301,51 @@ protected:
 };
 TYPED_TEST_SUITE(OperationExecutorSimple, RunnerTypes);
 
-TYPED_TEST(OperationExecutorSimple, SLSNoTag) {
+TYPED_TEST(OperationExecutorSimple, SlsNoTag) {
   typename TestFixture::runner_type runner;
 
-  auto params = sls::tests::SimpleDeviceParamsGenerator<
-      typename TestFixture::device_type>::
-      generate_params(pnm::make_view(this->num_entries),
+  auto params = SimpleDeviceParamsGenerator<typename TestFixture::device_type>::
+      generate_params(pnm::views::make_view(this->num_entries),
                       this->sparse_feature_size, false);
   runner.init(&params);
-  runner.load_tables(this->data.data(), pnm::make_view(this->num_entries),
+  runner.load_tables(this->data.data(),
+                     pnm::views::make_view(this->num_entries),
                      this->sparse_feature_size, false);
 
   std::vector<uint32_t> psum(
       this->sparse_feature_size * this->tables_nb * this->minibatch_size, 0);
 
-  runner.run(this->minibatch_size, pnm::make_view(this->length),
-             pnm::make_view(this->indices),
-             pnm::view_cast<uint8_t>(pnm::make_view(psum)));
+  runner.run(this->minibatch_size, pnm::views::make_view(this->length),
+             pnm::views::make_view(this->indices),
+             pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)));
 
   ASSERT_EQ(psum, this->golden);
 }
 
-TYPED_TEST(OperationExecutorSimple, SLSWithTag) {
+TYPED_TEST(OperationExecutorSimple, SlsWithTag) {
   typename TestFixture::runner_type runner;
 
-  auto params = sls::tests::SimpleDeviceParamsGenerator<
-      typename TestFixture::device_type>::
-      generate_params(pnm::make_view(this->num_entries),
+  if (pnm::sls::device::topo().Bus == pnm::sls::device::BusType::CXL) {
+    GTEST_SKIP() << "SLS-CXL HW does not support tags\n";
+  }
+
+  auto params = SimpleDeviceParamsGenerator<typename TestFixture::device_type>::
+      generate_params(pnm::views::make_view(this->num_entries),
                       this->sparse_feature_size, true);
   runner.init(&params);
-  runner.load_tables(this->data.data(), pnm::make_view(this->num_entries),
+  runner.load_tables(this->data.data(),
+                     pnm::views::make_view(this->num_entries),
                      this->sparse_feature_size, true);
 
   std::vector<uint32_t> psum(
       this->sparse_feature_size * this->tables_nb * this->minibatch_size, 0);
 
   std::vector<uint8_t> checks(psum.size() / this->sparse_feature_size, false);
-  auto result = runner.run(this->minibatch_size, pnm::make_view(this->length),
-                           pnm::make_view(this->indices),
-                           pnm::view_cast<uint8_t>(pnm::make_view(psum)),
-                           pnm::make_view(checks));
+  auto result =
+      runner.run(this->minibatch_size, pnm::views::make_view(this->length),
+                 pnm::views::make_view(this->indices),
+                 pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)),
+                 pnm::views::make_view(checks));
 
   EXPECT_TRUE(result);
   EXPECT_TRUE(
@@ -333,7 +353,12 @@ TYPED_TEST(OperationExecutorSimple, SLSWithTag) {
   ASSERT_EQ(psum, this->golden);
 }
 
-TYPED_TEST(OperationExecutorSimple, SLSWithTagCorrupted) {
+TYPED_TEST(OperationExecutorSimple, SlsWithTagCorrupted) {
+
+  if (pnm::sls::device::topo().Bus == pnm::sls::device::BusType::CXL) {
+    GTEST_SKIP() << "SLS-CXL HW does not support tags\n";
+  }
+
   // With existing code we cann't corrupt data after offloading to device
   // The simplest way to corrupt data is to create dataset with overflow
   std::vector bad_data{1,   2,   3,   4,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -392,30 +417,31 @@ TYPED_TEST(OperationExecutorSimple, SLSWithTagCorrupted) {
   const std::vector<uint32_t> rows{10, 15, 10};
   const std::vector<uint32_t> num_entries_wa{std::begin(rows), std::end(rows)};
 
-  auto params = sls::tests::SimpleDeviceParamsGenerator<
-      typename TestFixture::device_type>::
-      generate_params(pnm::make_view(rows), this->sparse_feature_size, true);
+  auto params = SimpleDeviceParamsGenerator<typename TestFixture::device_type>::
+      generate_params(pnm::views::make_view(rows), this->sparse_feature_size,
+                      true);
   runner.init(&params);
 
-  runner.load_tables(bad_data.data(), pnm::make_view(rows),
+  runner.load_tables(bad_data.data(), pnm::views::make_view(rows),
                      this->sparse_feature_size, true);
 
   std::vector<uint32_t> psum(
       this->minibatch_size * this->tables_nb * this->sparse_feature_size, 0);
 
   std::vector<uint8_t> checks(psum.size() / this->sparse_feature_size, false);
-  auto result = runner.run(this->minibatch_size, pnm::make_view(this->length),
-                           pnm::make_view(this->indices),
-                           pnm::view_cast<uint8_t>(pnm::make_view(psum)),
-                           pnm::make_view(checks));
+  auto result =
+      runner.run(this->minibatch_size, pnm::views::make_view(this->length),
+                 pnm::views::make_view(this->indices),
+                 pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)),
+                 pnm::views::make_view(checks));
 
   EXPECT_FALSE(result);
 
-  auto golden_v = pnm::make_rowwise_view(bad_golden.data(),
-                                         bad_golden.data() + bad_golden.size(),
-                                         this->sparse_feature_size);
-  auto psum_rv = pnm::make_rowwise_view(psum.data(), psum.data() + psum.size(),
-                                        this->sparse_feature_size);
+  auto golden_v = pnm::views::make_rowwise_view(
+      bad_golden.data(), bad_golden.data() + bad_golden.size(),
+      this->sparse_feature_size);
+  auto psum_rv = pnm::views::make_rowwise_view(
+      psum.data(), psum.data() + psum.size(), this->sparse_feature_size);
 
   auto it1 = golden_v.begin();
   auto it2 = psum_rv.begin();

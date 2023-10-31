@@ -145,21 +145,21 @@ package "Secure environment"{
                  AXDIMM device.
             }
 
-            class TrivialCPUArgs{
+            class TrivialCpuArgs{
                  A simple container for necessary parameters to
                  CPU device.
             }
 
-            DeviceArguments *-- TrivialCPUArgs
+            DeviceArguments *-- TrivialCpuArgs
             DeviceArguments *-- UntrustedDeviceParams
         }
 
         IDevice <.. DeviceArguments: takes as a parameter
     }
 
-    package "Embedded tables encryption and verification classes"{
+    package "Embedding tables encryption and verification classes"{
         abstract class IPreprocessor{
-            Interface for embedded table preprocessor
+            Interface for embedding table preprocessor
             +std::unique_ptr<IPostprocessor<T>> load(...);
             +encrypted_buffer_size(...);
         }
@@ -193,18 +193,18 @@ package "Secure environment"{
     }
 
     package "SLS work offload models"{
-        class SLSSync{
+        class SlsSync{
             Run task in same thread in sync. mode
             +run(...)
         }
 
-        class SLSProducerConsumer{
+        class SlsProducerConsumer{
             renaming of ProducerConsumer
             Run task in separate thread in async. mode
             with producer/consumer pattern aka thread pool
         }
 
-        SLSProducerConsumer <|-- ProducerConsumer
+        SlsProducerConsumer <|-- ProducerConsumer
 
     }
 
@@ -241,15 +241,15 @@ package "Secure environment"{
         }
 
         Runner *-- OperationExecutor: instantiation\nof OperationExecutor
-        Runner <.. SLSOffloadingStrategyFactory : strategy
+        Runner <.. SlsOffloadingStrategyFactory : strategy
 
-        class SLSOffloadingStrategyFactory{
+        class SlsOffloadingStrategyFactory{
             Creates 'SLS over OTP run model' model e.g.
             sync, async, producer/consumer
             +create_strategy(...)
         }
 
-        SLSOffloadingStrategyFactory <.. "SLS work offload models": create
+        SlsOffloadingStrategyFactory <.. "SLS work offload models": create
     }
 }
 

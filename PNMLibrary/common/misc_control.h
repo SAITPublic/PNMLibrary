@@ -9,7 +9,7 @@
 #include <filesystem>
 #include <fstream>
 
-namespace pnm::control::utils {
+namespace pnm::control {
 template <typename T>
 void read_file(const std::filesystem::path &path, T &value) {
   std::ifstream file(path); // NOLINT(misc-const-correctness)
@@ -55,6 +55,6 @@ void write_file(const std::filesystem::path &path, const T &value) {
     throw pnm::error::make_io(pnm::error::write_to_file, path.string());
   }
 }
-} // namespace pnm::control::utils
+} // namespace pnm::control
 
 #endif // MISC_CONTROL_H

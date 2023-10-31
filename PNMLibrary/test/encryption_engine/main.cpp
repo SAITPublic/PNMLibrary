@@ -88,16 +88,16 @@ struct SLS_OP {
 };
 
 TEST(VerificationEngine, TypeCheck) {
-  ASSERT_FALSE(std::is_class_v<pnm::uint128_t>);
-  ASSERT_EQ(typeid(pnm::uint128_t).hash_code(),
+  ASSERT_FALSE(std::is_class_v<pnm::types::uint128_t>);
+  ASSERT_EQ(typeid(pnm::types::uint128_t).hash_code(),
             typeid(unsigned __int128).hash_code());
 }
 
 TEST(EncryptionEngine, SLS_No_MAC) {
   const char tkey[] = "123456789012345";
-  sls::FixedVector<uint8_t, 16> key{};
+  pnm::types::FixedVector<uint8_t, 16> key{};
   std::copy(tkey, tkey + sizeof(tkey), key.data());
-  const sls::secure::EncryptionEngine engine{42, key};
+  const pnm::sls::secure::EncryptionEngine engine{42, key};
 
   auto table = DataGenerator::create_table();
   auto indices = DataGenerator::create_indices();
@@ -120,7 +120,7 @@ TEST(EncryptionEngine, SLS_No_MAC) {
   std::transform(indices.begin(), indices.end(), selected_offsets.begin(),
                  [&offsets](auto idx) { return offsets[idx]; });
 
-  auto offset_view = pnm::make_view(selected_offsets);
+  auto offset_view = pnm::views::make_view(selected_offsets);
   engine.decrypt_psum(psum_encrypted.begin(), psum_encrypted.end(),
                       offset_view.begin(), offset_view.end(), psum.begin(),
                       SLS_OP{});
@@ -133,9 +133,9 @@ TEST(EncryptionEngine, SLS_No_MAC) {
 
 TEST(EncryptionEngine, SLS_No_MAC_staged) {
   const char tkey[] = "123456789012345";
-  sls::FixedVector<uint8_t, 16> key{};
+  pnm::types::FixedVector<uint8_t, 16> key{};
   std::copy(tkey, tkey + sizeof(tkey), key.data());
-  const sls::secure::EncryptionEngine engine{42, key};
+  const pnm::sls::secure::EncryptionEngine engine{42, key};
 
   auto table = DataGenerator::create_table();
   auto indices = DataGenerator::create_indices();
@@ -158,7 +158,7 @@ TEST(EncryptionEngine, SLS_No_MAC_staged) {
   std::transform(indices.begin(), indices.end(), selected_offsets.begin(),
                  [&offsets](auto idx) { return offsets[idx]; });
 
-  auto offset_view = pnm::make_view(selected_offsets);
+  auto offset_view = pnm::views::make_view(selected_offsets);
   auto otp_sum = engine.offset_transform_reduce_vec(
       offset_view.begin(), offset_view.end(),
       std::vector<uint32_t>(DataGenerator::cols_count, 0), SLS_OP{});
@@ -174,9 +174,9 @@ TEST(EncryptionEngine, SLS_No_MAC_staged) {
 
 void encryption_test_with_mac(bool corrupted_data) {
   const char tkey[] = "123456789012345";
-  sls::FixedVector<uint8_t, 16> key{};
+  pnm::types::FixedVector<uint8_t, 16> key{};
   std::copy(tkey, tkey + sizeof(tkey), key.data());
-  const sls::secure::EncryptionEngine engine{42, key};
+  const pnm::sls::secure::EncryptionEngine engine{42, key};
 
   auto table = DataGenerator::create_table();
   auto indices = DataGenerator::create_indices();
@@ -184,8 +184,8 @@ void encryption_test_with_mac(bool corrupted_data) {
 
   auto encr_tables = table;
 
-  using tag_type = sls::secure::VerificationEngine<>::tag_type;
-  const sls::secure::VerificationEngine vengine(42, 315, key);
+  using tag_type = pnm::sls::secure::VerificationEngine<>::tag_type;
+  const pnm::sls::secure::VerificationEngine vengine(42, 315, key);
 
   std::vector<uintptr_t> offsets{0};
   offsets.reserve(table.size());
@@ -216,7 +216,7 @@ void encryption_test_with_mac(bool corrupted_data) {
   std::transform(indices.begin(), indices.end(), selected_offsets.begin(),
                  [&offsets](auto idx) { return offsets[idx]; });
 
-  auto offset_view = pnm::make_view(selected_offsets);
+  auto offset_view = pnm::views::make_view(selected_offsets);
   engine.decrypt_psum(psum_encrypted.begin(), psum_encrypted.end(),
                       offset_view.begin(), offset_view.end(), psum.begin(),
                       SLS_OP{});

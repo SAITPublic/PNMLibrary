@@ -15,12 +15,13 @@
 #include "pnmlib/common/compiler.h"
 
 #include <any>
+#include <cstdint>
 #include <unordered_map>
 
 namespace pnm::property {
 /** @brief The definition of the supported properties */
 // [TODO: y-lavrinenko] Think about property type definition by property class
-enum class PropertiesTypes { MEM_ALLOCATION_POLICY, MEM_LOCATION };
+enum class PropertiesTypes : uint8_t { MEM_ALLOCATION_POLICY, MEM_LOCATION };
 
 /** @brief Base class for a property */
 template <PropertiesTypes Type> struct PNM_API Base {

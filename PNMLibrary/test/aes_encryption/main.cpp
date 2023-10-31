@@ -64,17 +64,17 @@ std::unordered_map<unsigned, std::array<unsigned char, plain_size>> goldens{
       0x3a, 0xa3, 0xe4, 0x1d, 0xc6, 0x30, 0x96, 0x67, 0x25, 0xa7, 0xfb, 0x92}}};
 } // namespace
 
-template <typename EncryptionBackend, sls::secure::AES_KEY_SIZE KeySize>
+template <typename EncryptionBackend, pnm::sls::secure::AES_KEY_SIZE KeySize>
 void aes_encryption_test() {
   constexpr auto KEY_BITS = static_cast<unsigned>(KeySize);
   fmt::print("Start with AES-{}\n", KEY_BITS);
   constexpr auto KEY_SIZE = KEY_BITS / 8;
-  typename sls::secure::AES_Engine<KeySize, EncryptionBackend>::AES_Key_type
-      key;
+  typename pnm::sls::secure::AES_Engine<KeySize,
+                                        EncryptionBackend>::AES_Key_type key;
 
   std::copy(KEY_SET[KEY_BITS], KEY_SET[KEY_BITS] + KEY_SIZE, key.data());
 
-  const sls::secure::AES_Engine<KeySize, EncryptionBackend> engine{key};
+  const pnm::sls::secure::AES_Engine<KeySize, EncryptionBackend> engine{key};
 
   auto output = output_buffer();
   engine.encrypt(plain_text, plain_text + plain_size, output.data());
@@ -89,7 +89,7 @@ void aes_encryption_test() {
   fmt::print("====AES-{} OK====\n", KEY_BITS);
 }
 
-using namespace sls::secure;
+using namespace pnm::sls::secure;
 
 TEST(AES_NI, AES_128) {
   aes_encryption_test<AES_NI_Backend, AES_KEY_SIZE::AES_128>();

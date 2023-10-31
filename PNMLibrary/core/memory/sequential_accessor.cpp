@@ -12,7 +12,7 @@
 
 #include "sequential_accessor.h"
 
-#include "core/memory/barrier.h"
+#include "common/memory/barrier.h"
 
 #include "pnmlib/core/device.h"
 #include "pnmlib/core/memory.h"
@@ -36,7 +36,12 @@ pnm::memory::SequentialAccessorCore::SequentialAccessorCore(
 }
 
 const uint8_t *
-pnm::memory::SequentialAccessorCore::access_impl(uint64_t byte_offset) const {
+pnm::memory::SequentialAccessorCore::access_impl(uint64_t byte_offset,
+                                                 uint64_t size) const {
+  if constexpr (PNM_PLATFORM != FUNCSIM) {
+    pnm::memory::flush(virtual_region_.data() + byte_offset, size);
+    pnm::memory::mfence();
+  }
   return virtual_region_.data() + byte_offset;
 }
 
@@ -59,6 +64,7 @@ void pnm::memory::SequentialAccessorCore::store_impl(const void *value,
                                                      uint64_t byte_offset) {
   std::memcpy(virtual_region_.data() + byte_offset, value, size);
   if constexpr (PNM_PLATFORM != FUNCSIM) {
-    flush(virtual_region_.data() + byte_offset, size);
+    pnm::memory::flush(virtual_region_.data() + byte_offset, size);
+    pnm::memory::mfence();
   }
 }

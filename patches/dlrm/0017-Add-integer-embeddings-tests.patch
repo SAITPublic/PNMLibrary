@@ -1,7 +1,7 @@
 From 7fe6eef6e72e1333a97b87d2c9e9b04b5bf4759b Mon Sep 17 00:00:00 2001
 From: Valentin Iliushin <v.iliushin@partner.samsung.com>
 Date: Tue, 6 Dec 2022 14:18:32 +0300
-Subject: [PATCH 17/23] Add integer embeddings tests
+Subject: [PATCH 17/24] Add integer embeddings tests
 
 Add tests for PyTorch Axdimm tensor with integer embeddings
 

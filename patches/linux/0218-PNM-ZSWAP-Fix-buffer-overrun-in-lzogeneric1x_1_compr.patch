@@ -1,0 +1,35 @@
+From b94d7465e8702979c5b9b1e6a5ea1117cea9255a Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Wed, 25 Oct 2023 23:44:53 -0400
+Subject: [PATCH 218/225] [PNM][ZSWAP] Fix buffer overrun in
+ lzogeneric1x_1_compress
+
+When compressed page size exceeds original page size we get output
+buffer overflow in 'lzogeneric1x_1_compress'.
+
+Fix this in the same way to upstream zSwap: just allocate two pages
+for 'dstmem' instead of one.
+
+Resolves: MCS23-1793.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ mm/pnm/pnm_zswap.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index ecdbcbc5c..f5614554a 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -738,7 +738,7 @@ static int cxl_zswap_dstmem_prepare(unsigned int cpu)
+ 	struct mutex *mutex;
+ 	u8 *dst, *wrkmem, *instbuf;
+ 
+-	dst = kmalloc_node(PAGE_SIZE, GFP_KERNEL, cpu_to_node(cpu));
++	dst = kmalloc_node(PAGE_SIZE * 2, GFP_KERNEL, cpu_to_node(cpu));
+ 	if (!dst)
+ 		return -ENOMEM;
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,313 @@
+From 47b4dd602024d42b7a3a50a12c991d545a2a970c Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Fri, 25 Aug 2023 14:31:50 +0300
+Subject: [PATCH 195/225] [imdb] Use module params instead of macro
+
+Unbinded macrodefinitions:
+- IMDB_THREAD_NUM
+- IMDB_NUM_OF_RANK
+- IMDB_MEMORY_TOTAL_SIZE
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ drivers/pnm/imdb_resource/Makefile       |  1 +
+ drivers/pnm/imdb_resource/allocator.c    | 24 ++++++++++++------
+ drivers/pnm/imdb_resource/private.h      |  4 ---
+ drivers/pnm/imdb_resource/proc_mgr.c     |  3 ++-
+ drivers/pnm/imdb_resource/sysfs.c        | 32 ++++++++++++++++--------
+ drivers/pnm/imdb_resource/thread_sched.c |  7 +++---
+ drivers/pnm/imdb_resource/topo/params.c  | 26 +++++++++++++++++++
+ drivers/pnm/imdb_resource/topo/params.h  | 15 +++++++++++
+ 8 files changed, 86 insertions(+), 26 deletions(-)
+ create mode 100644 drivers/pnm/imdb_resource/topo/params.c
+ create mode 100644 drivers/pnm/imdb_resource/topo/params.h
+
+diff --git a/drivers/pnm/imdb_resource/Makefile b/drivers/pnm/imdb_resource/Makefile
+index 668431ebf..bdf0f964c 100644
+--- a/drivers/pnm/imdb_resource/Makefile
++++ b/drivers/pnm/imdb_resource/Makefile
+@@ -10,3 +10,4 @@ imdb_resource-y += allocator.o
+ imdb_resource-y += thread_sched.o
+ imdb_resource-y += sysfs.o
+ imdb_resource-y += proc_mgr.o
++imdb_resource-y += topo/params.o
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index bad0c4421..10a3197fa 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -4,6 +4,7 @@
+ #include "allocator.h"
+ #include "private.h"
+ #include "proc_mgr.h"
++#include "topo/params.h"
+ 
+ #include <linux/imdb_resources.h>
+ #include <linux/kernel.h>
+@@ -31,7 +32,7 @@ void imdb_alloc_unlock(void)
+ /* Use this function under allocator_lock mutex */
+ static int allocate_memory(struct pnm_allocation *req)
+ {
+-	if (req->memory_pool == IMDB_NUM_OF_RANK)
++	if (req->memory_pool == imdb_topo()->nr_pools)
+ 		req->memory_pool = pnm_alloc_most_free_pool(&alloc);
+ 
+ 	return pnm_alloc_pool_malloc(&alloc, req->memory_pool, req->size,
+@@ -63,7 +64,7 @@ int allocator_ioctl(struct file *filp, unsigned int cmd,
+ 	if (rc)
+ 		return -EFAULT;
+ 
+-	if (req.memory_pool > IMDB_NUM_OF_RANK)
++	if (req.memory_pool > imdb_topo()->nr_pools)
+ 		return -EINVAL;
+ 
+ 	/*
+@@ -108,9 +109,14 @@ uint64_t get_avail_size(void)
+ 	return pnm_alloc_free_sz(&alloc);
+ }
+ 
++static uint64_t mem_size_in_bytes(void)
++{
++	return ((uint64_t)imdb_topo()->mem_size_gb) << 30;
++}
++
+ uint64_t get_mem_size(void)
+ {
+-	return IMDB_MEMORY_TOTAL_SIZE;
++	return mem_size_in_bytes();
+ }
+ 
+ uint64_t get_granularity(void)
+@@ -121,7 +127,9 @@ uint64_t get_granularity(void)
+ int initialize_memory_allocator(void)
+ {
+ 	uint64_t start = 0, gran = IMDB_MEMORY_ADDRESS_ALIGN;
+-	uint8_t idx, nr_pools = IMDB_NUM_OF_RANK;
++	uint8_t idx;
++	uint8_t nr_pools = imdb_topo()->nr_pools;
++	uint64_t pool_size = mem_size_in_bytes() / nr_pools;
+ 	struct range *ranges =
+ 		kcalloc(nr_pools, sizeof(struct range), GFP_KERNEL);
+ 	int err_code;
+@@ -130,9 +138,11 @@ int initialize_memory_allocator(void)
+ 
+ 	if (!ranges)
+ 		return -ENOMEM;
+-	for (idx = 0; idx < nr_pools; ++idx, start += IMDB_RANK_SIZE)
+-		ranges[idx] =
+-			(struct range){ start, start + IMDB_RANK_SIZE - 1 };
++	for (idx = 0; idx < nr_pools; ++idx, start += pool_size)
++		ranges[idx] = (struct range){
++			start,
++			start + pool_size - 1,
++		};
+ 
+ 	err_code = pnm_alloc_init(&alloc, gran, nr_pools, ranges);
+ 	if (!err_code)
+diff --git a/drivers/pnm/imdb_resource/private.h b/drivers/pnm/imdb_resource/private.h
+index d5e04107a..c790178ce 100644
+--- a/drivers/pnm/imdb_resource/private.h
++++ b/drivers/pnm/imdb_resource/private.h
+@@ -13,8 +13,4 @@
+  */
+ #define IMDB_MEMORY_ADDRESS_ALIGN PMD_SIZE
+ 
+-#define IMDB_MEMORY_SCALE ((uint64_t)CONFIG_IMDB_MEMORY_SCALE)
+-#define IMDB_MEMORY_TOTAL_SIZE (32ULL << (30 - IMDB_MEMORY_SCALE))
+-#define IMDB_RANK_SIZE (IMDB_MEMORY_TOTAL_SIZE / IMDB_NUM_OF_RANK)
+-
+ #endif /* __IMDB_PRIVATE_H__ */
+diff --git a/drivers/pnm/imdb_resource/proc_mgr.c b/drivers/pnm/imdb_resource/proc_mgr.c
+index 0d946b47a..acdb9903a 100644
+--- a/drivers/pnm/imdb_resource/proc_mgr.c
++++ b/drivers/pnm/imdb_resource/proc_mgr.c
+@@ -5,6 +5,7 @@
+ 
+ #include "allocator.h"
+ #include "thread_sched.h"
++#include "topo/params.h"
+ 
+ #include "linux/imdb_resources.h"
+ #include "linux/ioport.h"
+@@ -163,7 +164,7 @@ static int clear_threads(struct imdb_proc_res *proc_res)
+ 	int rc = 0;
+ 	uint8_t it = 0;
+ 
+-	for (it = 0; it < IMDB_THREAD_NUM; ++it) {
++	for (it = 0; it < imdb_topo()->nr_cunits; ++it) {
+ 		if (proc_res->threads_mask & (1 << it)) {
+ 			rc |= thread_sched_clear_res(it);
+ 			PNM_DBG("Process manager release thread[%d]\n", it);
+diff --git a/drivers/pnm/imdb_resource/sysfs.c b/drivers/pnm/imdb_resource/sysfs.c
+index fce55cdd0..81f360cbd 100644
+--- a/drivers/pnm/imdb_resource/sysfs.c
++++ b/drivers/pnm/imdb_resource/sysfs.c
+@@ -6,12 +6,14 @@
+ #include "allocator.h"
+ #include "proc_mgr.h"
+ #include "thread_sched.h"
++#include "topo/params.h"
+ 
+ #include "linux/types.h"
+ #include <linux/device.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/kobject.h>
+ #include <linux/pnm_log.h>
++#include <linux/slab.h>
+ #include <linux/stringify.h>
+ #include <linux/sysfs.h>
+ 
+@@ -139,7 +141,7 @@ struct thread_sysfs {
+ 	struct attribute_group group;
+ 	const struct attribute_group *groups[WITH_NULL_TERM(THREAD_ATTR_COUNT)];
+ 	struct kobject thread_kobj;
+-} thread_sysfs[IMDB_THREAD_NUM];
++} *thread_sysfs;
+ 
+ static const char *const thread_attr_name[] = {
+ 	"state",
+@@ -214,17 +216,24 @@ static int build_thread_sysfs(struct kobject *parent)
+ {
+ 	struct thread_sysfs *tsysfs = NULL;
+ 	int rc = 0;
+-	uint8_t thread = 0;
++	uint8_t cunit = 0;
+ 
+-	for (thread = 0; thread < IMDB_THREAD_NUM; ++thread) {
+-		tsysfs = &thread_sysfs[thread];
+-		rc = create_thread_kobject(tsysfs, parent, thread);
++	thread_sysfs = kcalloc(imdb_topo()->nr_cunits,
++			       sizeof(struct thread_sysfs), GFP_KERNEL);
++	if (!thread_sysfs) {
++		IMDB_ERR("No free memory for cunits directories\n");
++		return -ENOMEM;
++	}
++
++	for (cunit = 0; cunit < imdb_topo()->nr_cunits; ++cunit) {
++		tsysfs = &thread_sysfs[cunit];
++		rc = create_thread_kobject(tsysfs, parent, cunit);
+ 		if (unlikely(rc)) {
+-			PNM_ERR("Can't create thread kobject\n");
++			PNM_ERR("Can't create cunit kobject\n");
+ 			return -EFAULT;
+ 		}
+ 
+-		fill_thread_sysfs(tsysfs, thread);
++		fill_thread_sysfs(tsysfs, cunit);
+ 
+ 		tsysfs->group.attrs = tsysfs->attributes;
+ 		tsysfs->groups[0] = &tsysfs->group;
+@@ -232,7 +241,7 @@ static int build_thread_sysfs(struct kobject *parent)
+ 
+ 		rc = sysfs_create_groups(&tsysfs->thread_kobj, tsysfs->groups);
+ 		if (unlikely(rc)) {
+-			PNM_ERR("Can't create thread group\n");
++			PNM_ERR("Can't create cunit group\n");
+ 			return -EFAULT;
+ 		}
+ 	}
+@@ -258,13 +267,14 @@ void imdb_destroy_sysfs(struct device *dev)
+ {
+ 	struct kobject *kobj = &dev->kobj;
+ 	struct thread_sysfs *tsysfs = NULL;
+-	uint8_t thread = 0;
++	uint8_t cunit = 0;
+ 
+-	for (thread = 0; thread < IMDB_THREAD_NUM; ++thread) {
+-		tsysfs = thread_sysfs + thread;
++	for (cunit = 0; cunit < imdb_topo()->nr_cunits; ++cunit) {
++		tsysfs = &thread_sysfs[cunit];
+ 		sysfs_remove_groups(kobj, thread_sysfs->groups);
+ 		kobject_del(&tsysfs->thread_kobj);
+ 	}
+ 
+ 	sysfs_remove_groups(kobj, attr_groups);
++	kfree(thread_sysfs);
+ }
+diff --git a/drivers/pnm/imdb_resource/thread_sched.c b/drivers/pnm/imdb_resource/thread_sched.c
+index c9caf8dce..72db10199 100644
+--- a/drivers/pnm/imdb_resource/thread_sched.c
++++ b/drivers/pnm/imdb_resource/thread_sched.c
+@@ -3,6 +3,7 @@
+ 
+ #include "thread_sched.h"
+ #include "proc_mgr.h"
++#include "topo/params.h"
+ 
+ #include <linux/fs.h>
+ #include <linux/imdb_resources.h>
+@@ -26,7 +27,7 @@ void reset_thread_sched(void)
+ int init_thread_sched(void)
+ {
+ 	PNM_DBG("Thread scheduler init\n");
+-	return pnm_sched_init(&thread_sched, IMDB_THREAD_NUM,
++	return pnm_sched_init(&thread_sched, imdb_topo()->nr_cunits,
+ 			      PNM_SCHED_NO_TIMEOUT);
+ }
+ 
+@@ -43,8 +44,8 @@ int thread_sched_ioctl(struct file *filp, uint cmd, ulong __user arg)
+ 
+ 	switch (cmd) {
+ 	case IMDB_IOCTL_GET_THREAD: {
+-		ret = pnm_sched_get_free_cunit(&thread_sched,
+-					       GENMASK(IMDB_THREAD_NUM - 1, 0));
++		ret = pnm_sched_get_free_cunit(
++			&thread_sched, GENMASK(imdb_topo()->nr_cunits - 1, 0));
+ 		if (likely(ret >= 0)) {
+ 			thread = ret;
+ 			ret = imdb_register_thread(filp, thread);
+diff --git a/drivers/pnm/imdb_resource/topo/params.c b/drivers/pnm/imdb_resource/topo/params.c
+new file mode 100644
+index 000000000..acd83048e
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/topo/params.c
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include "params.h"
++#include "log.h"
++
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++
++static struct imdb_params imdb_params = {
++	.nr_pools = 2,
++	.nr_cunits = 3,
++	.mem_size_gb = 32,
++};
++
++const struct imdb_params *imdb_topo(void)
++{
++	return &imdb_params;
++}
++
++#define NAMED_PARAM(param) \
++	module_param_named(param, imdb_params.param, int, 0444)
++
++NAMED_PARAM(nr_pools);
++NAMED_PARAM(nr_cunits);
++NAMED_PARAM(mem_size_gb);
+diff --git a/drivers/pnm/imdb_resource/topo/params.h b/drivers/pnm/imdb_resource/topo/params.h
+new file mode 100644
+index 000000000..72dcb74fc
+--- /dev/null
++++ b/drivers/pnm/imdb_resource/topo/params.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __IMDB_PARAMETERS_H__
++#define __IMDB_PARAMETERS_H__
++
++struct imdb_params {
++	int nr_pools;
++	int nr_cunits;
++	unsigned int mem_size_gb;
++};
++
++const struct imdb_params *imdb_topo(void);
++
++#endif // __IMDB_PARAMETERS_H__
+-- 
+2.34.1
+

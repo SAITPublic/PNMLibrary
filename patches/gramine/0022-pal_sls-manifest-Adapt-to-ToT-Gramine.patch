@@ -1,7 +1,7 @@
 From 6352437112bd7099f03c5d1e43778190af81bc7b Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Mon, 5 Jun 2023 12:21:08 +0300
-Subject: [PATCH 22/27] [pal_sls, manifest] Adapt to ToT Gramine
+Subject: [PATCH 22/29] [pal_sls, manifest] Adapt to ToT Gramine
 
 Related to MCS23-1167
 

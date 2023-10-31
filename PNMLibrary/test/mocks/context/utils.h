@@ -15,20 +15,19 @@
 
 #include "pnmlib/core/context.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
 namespace test::mock {
 
-enum class ContextType {
-  CXL = 0,
-  AXDIMM,
+enum class ContextType : uint8_t {
+  SLS,
   RANDOM_OFFSETS_ALLOCATOR,
-  DEFAULT = CXL
 };
 
 std::unique_ptr<pnm::Context> make_context_mock(ContextType);
-std::string context_type_to_str(ContextType type);
+std::string format_as(ContextType type);
 
 } // namespace test::mock
 #endif

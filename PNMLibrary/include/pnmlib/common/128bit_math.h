@@ -13,7 +13,7 @@
 #ifndef PNM_128BIT_MATH_H
 #define PNM_128BIT_MATH_H
 
-namespace pnm {
+namespace pnm::types {
 
 template <typename T> struct longint_traits {};
 
@@ -21,6 +21,6 @@ using uint128_t = unsigned __int128;
 template <> struct longint_traits<uint128_t> {
   static constexpr auto BIG_VALUE = ((unsigned __int128)(1) << 127) - 1;
 };
-} // namespace pnm
+} // namespace pnm::types
 
 #endif // PNM_128BIT_MATH_H

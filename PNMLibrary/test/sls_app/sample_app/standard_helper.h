@@ -22,24 +22,26 @@
 #include "tools/datagen/sls/general/traits.h"
 #include "tools/datagen/sls/utils.h"
 
+#include <fmt/core.h>
+
 #include <filesystem>
 #include <string>
 #include <vector>
 
 namespace test_app {
 
-template <typename T> class SLSTestStandardHelper : public SLSTestHelper<T> {
+template <typename T> class SlsTestStandardHelper : public SlsTestHelper<T> {
 public:
-  using SLSTestHelper<T>::SLSTestHelper;
+  using SlsTestHelper<T>::SlsTestHelper;
 
-  SLSTestStandardHelper(const StandardRunParams &run_params,
+  SlsTestStandardHelper(const StandardRunParams &run_params,
                         const SlsModelParams &model_params,
-                        const SLSParamsGenerator &params_generator)
-      : SLSTestHelper<T>(run_params.helper_params, model_params,
+                        const SlsParamsGenerator &params_generator)
+      : SlsTestHelper<T>(run_params.helper_params, model_params,
                          params_generator),
         testapp_run_params_(run_params.testapp_params) {}
 
-  ~SLSTestStandardHelper() override = default;
+  ~SlsTestStandardHelper() override = default;
 
   SlsOpParams
   generate_sls_run_params_impl(const std::filesystem::path &root) const {
@@ -53,22 +55,21 @@ public:
 
     const std::string generator_indices_name = "random";
 
-    const std::string entry_type = DataTypeTraits<T>().name;
+    const std::string entry_type = tools::gen::sls::DataTypeTraits<T>().name;
 
-    const sls::tests::GeneratorWithOverflowParams params{
+    const tools::gen::sls::GeneratorWithOverflowParams params{
         .max_num_lookup = testapp_run_params_.max_num_lookup,
         .min_num_lookup = testapp_run_params_.min_num_lookup,
         .mini_batch_size = this->run_params_.mini_batch_size,
         .root = root,
         .prefix = indices_set_name,
         .generator_lengths_name = generator_lengths_name,
-        .overflow_type =
-            overflow_type_to_string(testapp_run_params_.overflow_type),
+        .overflow_type = fmt::format("{}", testapp_run_params_.overflow_type),
         .generator_indices_name = generator_indices_name,
         .entry_type = entry_type};
 
-    sls::tests::get_or_create_test_indices(params, op_params.lS_lengths,
-                                           op_params.lS_indices);
+    tools::gen::sls::get_or_create_test_indices(params, op_params.lS_lengths,
+                                                op_params.lS_indices);
 
     return op_params;
   }
@@ -84,7 +85,7 @@ public:
   std::vector<T> load_golden(const std::filesystem::path &root,
                              const std::string &indices_set_name) const {
     std::vector<T> golden;
-    auto in = sls::tests::get_golden_vector(root, indices_set_name);
+    auto in = tools::gen::sls::get_golden_vector(root, indices_set_name);
     auto size = stream_size(in);
     golden.resize(size / sizeof(T));
     in.read(reinterpret_cast<char *>(golden.data()), size);
@@ -93,7 +94,7 @@ public:
   }
 
   void print_params() const override {
-    SLSTestHelper<T>::print_params();
+    SlsTestHelper<T>::print_params();
     testapp_run_params_.print();
   }
 

@@ -1,7 +1,7 @@
 From fde0f7008724ba93ea62d01e96e941bfcdcbb3c4 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 7 Dec 2021 09:24:54 +0900
-Subject: [PATCH 012/161] [drivers/dax/axdimm] NFC: add better explanation for
+Subject: [PATCH 012/225] [drivers/dax/axdimm] NFC: add better explanation for
  reserved space at the beginning of AXDIMM memory
 
 The offset caused by the fact that _dax_pmem_probe reserves memory space for

@@ -1,0 +1,66 @@
+@startuml
+package PNM {
+abstract class BaseAsyncSimulator {
++void enable_thread(size_t thread_id);
++void disable_thread(size_t thread_id);
++bool is_thread_enabled(size_t thread_id) const;
+~bool should_stop(size_t thread_id) const;
+}
+}
+
+package SLS {
+class ComputeUnit
+class AxdimmReductionRunner
+class CxlReductionRunner
+class CxlComputeUnit
+class AxdimmComputeUnit
+
+abstract class BaseSlsSimulator {
+~void worker_job(size_t thread_id) override;
+~virtual void exec_sls(size_t thread_id) = 0;
+}
+
+class ComputeDevice
+class SimulatorComputeDevice
+class AxdimmSimulatorComputeDevice
+class CxlSimulatorComputeDevice
+
+class AxdimmSimulator {
+~void shift_buffers(uint8_t compute_unit);
+~void clear_buffers(uint8_t compute_unit);
+~void exec_sls(size_t thread_id) override;
+}
+
+class CxlSimulator {
+~void exec_sls(size_t thread_id) override;
+}
+
+class BaseDevice
+class AxdimmSimulatorCore
+class CxlSimulatorCore
+
+ComputeUnit <|-- AxdimmComputeUnit
+ComputeUnit <|-- CxlComputeUnit
+CxlComputeUnit ..> CxlSimulatorComputeDevice
+CxlComputeUnit ..> ComputeDevice
+AxdimmComputeUnit ..> AxdimmSimulatorComputeDevice
+AxdimmComputeUnit ..> ComputeDevice
+AxdimmReductionRunner ..> AxdimmComputeUnit
+CxlReductionRunner ..> CxlComputeUnit
+
+
+BaseAsyncSimulator <|-- BaseSlsSimulator
+BaseSlsSimulator <|-- AxdimmSimulator
+BaseSlsSimulator <|-- CxlSimulator
+BaseSlsSimulator *-- BaseDevice
+AxdimmSimulator *-- AxdimmSimulatorCore
+CxlSimulator *-- CxlSimulatorCore
+
+ComputeDevice *-- BaseDevice
+ComputeDevice <|-- SimulatorComputeDevice
+SimulatorComputeDevice <|-- AxdimmSimulatorComputeDevice
+SimulatorComputeDevice <|-- CxlSimulatorComputeDevice
+
+note top of ComputeDevice : This is just BaseDevice proxy and used by compute units for hardware runs
+}
+@enduml

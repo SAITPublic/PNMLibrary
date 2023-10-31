@@ -1,7 +1,7 @@
 From b2260408372999c7e5f371b07bd37d4eb18deb29 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 29 Oct 2021 17:16:00 +0900
-Subject: [PATCH 003/128] [caffe2/core] Define AXDIMMOperatorRegistry and
+Subject: [PATCH 003/135] [caffe2/core] Define AXDIMMOperatorRegistry and
  friends
 
 Define AXDIMMOperatorRegistry and necessary macro:

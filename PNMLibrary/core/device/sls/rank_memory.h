@@ -44,7 +44,7 @@ struct RankMemory {
    * 1 << NUM_OF_RANK == 16 for 4 ranks, mask range: 0b0000 - 0b1111.
    */
   static auto num_of_pack() {
-    static auto num_of_pack_v = 1ULL << pnm::device::topo().NumOfRanks;
+    static auto num_of_pack_v = 1ULL << topo().NumOfCUnits;
     return num_of_pack_v;
   }
 
@@ -87,7 +87,7 @@ struct RankMemory {
   using packs_to_objects = packs_array<mem_objects_vector>;
   using object_write_map =
       std::map<uint64_t /*rank offset*/,
-               pnm::common_view<const uint8_t> /*user data range*/>;
+               pnm::views::common<const uint8_t> /*user data range*/>;
 
   static uint64_t
   get_max_object_size_in_bytes(const mem_objects_vector &objects) {

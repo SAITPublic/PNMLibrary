@@ -1,7 +1,7 @@
 From cd743064bd82bfd3b53fd628213f4df92d00cf68 Mon Sep 17 00:00:00 2001
 From: "s.koval" <s.koval@samsung.com>
 Date: Mon, 5 Sep 2022 13:05:30 +0300
-Subject: [PATCH 067/128] [caffe2] Process zero layout descriptor
+Subject: [PATCH 067/135] [caffe2] Process zero layout descriptor
 
 * Check whether table layout descriptor is zero
 

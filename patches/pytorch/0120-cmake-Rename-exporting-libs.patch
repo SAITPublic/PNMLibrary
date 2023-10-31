@@ -1,7 +1,7 @@
 From b7d3dba6b024dc292274f1dabed8376c8abfbf49 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Fri, 12 May 2023 16:30:02 +0300
-Subject: [PATCH 120/128] [cmake] Rename exporting libs
+Subject: [PATCH 120/135] [cmake] Rename exporting libs
 
 - Rename libAxdimmAI.so to LibPnmAI.so
 - Rename libAxdimmSecure.so to LibPnmAISecure.so

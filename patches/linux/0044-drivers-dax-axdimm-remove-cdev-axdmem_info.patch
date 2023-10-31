@@ -1,7 +1,7 @@
 From 969c87221097902eb6dcfb0a3e3062a0461461b8 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@partner.samsung.com>
 Date: Wed, 28 Sep 2022 12:50:25 +0300
-Subject: [PATCH 044/161] [drivers/dax/axdimm] remove cdev axdmem_info
+Subject: [PATCH 044/225] [drivers/dax/axdimm] remove cdev axdmem_info
 
 As we used sysfs interface, axdmem_info cdev is no longer needed
 

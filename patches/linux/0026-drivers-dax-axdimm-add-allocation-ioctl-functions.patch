@@ -1,7 +1,7 @@
 From 73460ccf9c5b0b84f550581b8a58207e7189bc99 Mon Sep 17 00:00:00 2001
 From: "s.koval" <s.koval@samsung.com>
 Date: Mon, 18 Jul 2022 10:21:58 +0300
-Subject: [PATCH 026/161] [drivers/dax/axdimm] add allocation ioctl functions
+Subject: [PATCH 026/225] [drivers/dax/axdimm] add allocation ioctl functions
 
 * Add allocation, deallocation and getter calls
 * Add public structures to share in userspace

@@ -1,7 +1,7 @@
 From bfad265dfbc65d2ea33e99f0cb6c6444a1477b9e Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Mon, 10 Jul 2023 21:33:27 -0400
-Subject: [PATCH 130/161] [pnm][zswap] Add zswap PNM library
+Subject: [PATCH 130/225] [pnm][zswap] Add zswap PNM library
 
 The library for zswap operation on cxl-zswap device was added.
 

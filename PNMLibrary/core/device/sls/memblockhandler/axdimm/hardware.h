@@ -19,7 +19,7 @@
 
 namespace pnm::sls::device {
 
-class AxdimmHardwareMemBlockHandler final
+class AxdimmHardwareMemBlockHandler
     : public AxdimmMemBlockHandler<AxdimmHardwareMemBlockHandler> {
 public:
   auto psum_reader() const { return RankedBlockReader{}; }

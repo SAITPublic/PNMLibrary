@@ -1,7 +1,7 @@
 From 6bc0275e41cf70b79fb6d6b6d66072adffe91166 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 26 May 2022 10:52:22 +0900
-Subject: [PATCH 043/128] [caffe2/CMakeLists] Link against newly introduced
+Subject: [PATCH 043/135] [caffe2/CMakeLists] Link against newly introduced
  libAxdimmAI.so
 
 Now AXDIMM control library for DLRM is called libAxdimmAI.so, reflect this

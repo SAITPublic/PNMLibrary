@@ -1,5 +1,5 @@
 @startuml
-title axdimm::secure::SyncCPURunner
+title axdimm::secure::SyncCpuRunner
 box "Untrusted environment" #LightYellow
     participant ":DLRM" as in <<E, #990000>>
     participant "::SecureRunner" as SR <<C, #00AA00>>

@@ -1,7 +1,7 @@
 From e93d0802480f396859343438248594cc70ab855a Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Sat, 12 Nov 2022 18:14:06 +0300
-Subject: [PATCH 11/23] Add secure tensors to dlrm
+Subject: [PATCH 11/24] Add secure tensors to dlrm
 
 Resolves: AXDIMM-337
 

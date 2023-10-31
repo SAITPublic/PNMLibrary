@@ -1,7 +1,7 @@
 From 9a26e1610f60765442f7cc779238988969ee6ecd Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Fri, 15 Jul 2022 14:53:25 +0300
-Subject: [PATCH 032/161] [drivers/dax/axdimm] Add rank scheduling
+Subject: [PATCH 032/225] [drivers/dax/axdimm] Add rank scheduling
 
 Resolves: AXDIMM-48
 

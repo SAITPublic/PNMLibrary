@@ -21,16 +21,17 @@
 
 namespace pnm::memory {
 
-class AXDIMMTransferManager : public TransferManager {
+class AxdimmTransferManager : public TransferManager {
 private:
   using VRegionType = VirtualRankedRegion;
   using RegionType = RankedRegion;
 
-  uint64_t copy_to_device_impl(common_view<const uint8_t> host_region,
+  uint64_t copy_to_device_impl(pnm::views::common<const uint8_t> host_region,
                                const DeviceRegionInfo &dev_region) override;
 
-  uint64_t copy_from_device_impl(const DeviceRegionInfo &dev_region,
-                                 common_view<uint8_t> host_region) override;
+  uint64_t
+  copy_from_device_impl(const DeviceRegionInfo &dev_region,
+                        pnm::views::common<uint8_t> host_region) override;
 };
 
 } // namespace pnm::memory

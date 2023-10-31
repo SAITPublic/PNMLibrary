@@ -1,0 +1,52 @@
+From 310f4b13662fd45b51effbaad0ddd0cac08346cd Mon Sep 17 00:00:00 2001
+From: Alex Antonov <alex.antonov@samsung.com>
+Date: Thu, 12 Oct 2023 18:15:57 +0300
+Subject: [PATCH 210/225] [pnm] Fix compilation warnings
+
+* Definition should be at the start of a function
+* param->value is int64_t type
+
+Signed-off-by: Alex Antonov <alex.antonov@samsung.com>
+---
+ drivers/pnm/imdb_resource/allocator.c  | 4 +++-
+ drivers/pnm/sls_resource/topo/params.c | 2 +-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index 9f61b8415..decdc7fda 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -45,6 +45,8 @@ static int allocate_memory(struct pnm_allocation *req)
+ /* Use this function under allocator_lock mutex */
+ static int deallocate_memory(const struct pnm_allocation *req)
+ {
++	uint64_t addr;
++
+ 	if (req->is_global == 1) {
+ 		int rc = 0;
+ 
+@@ -53,7 +55,7 @@ static int deallocate_memory(const struct pnm_allocation *req)
+ 			return rc;
+ 	}
+ 
+-	uint64_t addr = req->addr;
++	addr = req->addr;
+ 
+ 	return pnm_alloc_pool_free(&alloc, req->memory_pool, req->size, &addr);
+ }
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index 0b7d8d969..4363917aa 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -215,7 +215,7 @@ static int get_dev_type(char *buffer, const struct kernel_param *kp)
+ 		break;
+ 	}
+ 
+-	PNM_ERR("Unknown device name: %d\n", param->value);
++	PNM_ERR("Unknown device name: %lld\n", param->value);
+ 
+ 	return -EINVAL;
+ }
+-- 
+2.34.1
+

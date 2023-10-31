@@ -1,6 +1,7 @@
 # Everything build-related
 build/*
 install/*
+_packages/*
 CMakeUserPresets.json
 
 # Editors

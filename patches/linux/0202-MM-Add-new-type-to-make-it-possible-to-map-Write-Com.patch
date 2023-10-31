@@ -1,0 +1,45 @@
+From 6f74f2a9f6a49f692c41dcb7bcf4cb2baa762829 Mon Sep 17 00:00:00 2001
+From: Alex Antonov <alex.antonov@samsung.com>
+Date: Mon, 18 Sep 2023 19:46:59 +0300
+Subject: [PATCH 202/225] [MM] Add new type to make it possible to map
+ Write-Combine Cache
+
+PNM must be able to allocate DAX device with special
+cache policies for different regions.
+This commit allows to set WC policy.
+
+Signed-off-by: Alex Antonov <alex.antonov@samsung.com>
+---
+ include/linux/memremap.h | 1 +
+ mm/memremap.c            | 3 +++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/include/linux/memremap.h b/include/linux/memremap.h
+index af975f443..9db0d4b9a 100644
+--- a/include/linux/memremap.h
++++ b/include/linux/memremap.h
+@@ -71,6 +71,7 @@ enum memory_type {
+ 	MEMORY_DEVICE_COHERENT,
+ 	MEMORY_DEVICE_FS_DAX,
+ 	MEMORY_DEVICE_GENERIC,
++	MEMORY_DEVICE_GENERIC_WCCACHE,
+ 	MEMORY_DEVICE_PCI_P2PDMA,
+ 	MEMORY_DEVICE_MAX, // to check correct initialization
+ };
+diff --git a/mm/memremap.c b/mm/memremap.c
+index 08cbf54fe..761143087 100644
+--- a/mm/memremap.c
++++ b/mm/memremap.c
+@@ -339,6 +339,9 @@ void *memremap_pages(struct dev_pagemap *pgmap, int nid)
+ 		break;
+ 	case MEMORY_DEVICE_GENERIC:
+ 		break;
++	case MEMORY_DEVICE_GENERIC_WCCACHE:
++		params.pgprot = pgprot_writecombine(params.pgprot);
++		break;
+ 	case MEMORY_DEVICE_PCI_P2PDMA:
+ 		params.pgprot = pgprot_noncached(params.pgprot);
+ 		break;
+-- 
+2.34.1
+

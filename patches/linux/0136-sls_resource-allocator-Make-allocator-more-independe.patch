@@ -1,7 +1,7 @@
 From 89077d234b069bc12a2b544858c8a7dd6e9031ee Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Tue, 11 Jul 2023 02:40:39 -0400
-Subject: [PATCH 136/161] [sls_resource][allocator] Make allocator more
+Subject: [PATCH 136/225] [sls_resource][allocator] Make allocator more
  independent
 
 Related-to: MCS23-1300

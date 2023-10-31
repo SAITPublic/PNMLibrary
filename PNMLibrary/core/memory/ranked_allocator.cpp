@@ -23,15 +23,19 @@
 
 #include <linux/sls_resources.h>
 
+#include <linux/pnm_resources.h>
 #include <sys/ioctl.h>
 
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
 
-pnm::memory::DeviceRegion pnm::memory::RankedAllocator::allocate_impl(
-    uint64_t size, const pnm::property::PropertiesList &props) {
+namespace pnm::memory {
+DeviceRegion
+RankedAllocator::allocate_impl(uint64_t size,
+                               const pnm::property::PropertiesList &props) {
   RegionType region{
       std::vector<SequentialRegion>(regions_count_, SequentialRegion{})};
 
@@ -58,29 +62,29 @@ pnm::memory::DeviceRegion pnm::memory::RankedAllocator::allocate_impl(
       props.get_property<property::AllocPolicy>().policy());
 }
 
-void pnm::memory::RankedAllocator::allocate_single(
+void RankedAllocator::allocate_single(
     uint64_t size, const pnm::property::PropertiesList &props,
-    pnm::memory::RankedAllocator::RegionType &region) {
-  auto rank =
+    RankedAllocator::RegionType &region) {
+  auto cunit =
       props.has_property<property::CURegion>()
-          ? std::optional{props.get_property<property::CURegion>().rank()}
+          ? std::optional{props.get_property<property::CURegion>().cunit()}
           : std::nullopt;
-  auto seq_region = allocate_ioctl(size, rank);
-  region.regions[seq_region.location] = seq_region;
+  auto seq_region = allocate_ioctl(size, cunit);
+  region.regions[*seq_region.location] = seq_region;
 }
 
-void pnm::memory::RankedAllocator::allocate_replicate_all(
+void RankedAllocator::allocate_replicate_all(
     uint64_t size, const pnm::property::PropertiesList &props,
-    pnm::memory::RankedAllocator::RegionType &region) {
+    RankedAllocator::RegionType &region) {
   if (props.has_property<property::CURegion>()) {
     throw pnm::error::InvalidArguments(
         "Cannot specify CURegion with SLS_ALLOC_REPLICATE_ALL.");
   }
 
-  for (uint32_t rank = 0; rank < regions_count_; ++rank) {
+  for (uint8_t rank = 0; rank < regions_count_; ++rank) {
     try {
       auto seq_region = allocate_ioctl(size, rank);
-      region.regions[seq_region.location] = seq_region;
+      region.regions[*seq_region.location] = seq_region;
     } catch (...) {
       deallocate_impl(region);
       throw;
@@ -88,8 +92,7 @@ void pnm::memory::RankedAllocator::allocate_replicate_all(
   }
 }
 
-void pnm::memory::RankedAllocator::deallocate_impl(
-    const pnm::memory::DeviceRegion &region) {
+void RankedAllocator::deallocate_impl(const DeviceRegion &region) {
   const auto &typed_region = std::get<RegionType>(region);
 
   for (const auto &seq_region : typed_region.regions) {
@@ -99,12 +102,12 @@ void pnm::memory::RankedAllocator::deallocate_impl(
   }
 }
 
-void pnm::memory::RankedAllocator::deallocate_ioctl(
-    const SequentialRegion &seq_region) {
-  const sls_memory_alloc_request request{
-      .rank = static_cast<uint32_t>(seq_region.location),
-      .rank_offset = seq_region.start,
+void RankedAllocator::deallocate_ioctl(const SequentialRegion &seq_region) {
+  const pnm_allocation request{
+      .addr = seq_region.start,
       .size = seq_region.size,
+      .memory_pool = seq_region.location.value(),
+      .is_global = seq_region.is_global,
   };
 
   if (ioctl(device_->get_resource_fd(), DEALLOCATE_MEMORY, &request) < 0) {
@@ -112,20 +115,72 @@ void pnm::memory::RankedAllocator::deallocate_ioctl(
   }
 }
 
-pnm::memory::SequentialRegion
-pnm::memory::RankedAllocator::allocate_ioctl(uint64_t size,
-                                             std::optional<uint32_t> rank) {
-  sls_memory_alloc_request request{
-      .rank = rank.has_value() ? *rank : SLS_ALLOC_ANY_RANK,
-      .rank_offset = 0,
+SequentialRegion RankedAllocator::allocate_ioctl(uint64_t size,
+                                                 std::optional<uint8_t> cunit) {
+  pnm_allocation request{
+      .addr = 0,
       .size = size,
+      .memory_pool = cunit.value_or(SLS_ALLOC_ANY_CUNIT),
+      .is_global = 0,
   };
 
   if (ioctl(device_->get_resource_fd(), ALLOCATE_MEMORY, &request) < 0) {
     pnm::error::throw_from_errno(errno);
   }
 
-  return SequentialRegion{.start = request.rank_offset,
-                          .size = size,
-                          .location = static_cast<int32_t>(request.rank)};
+  return SequentialRegion{
+      .start = request.addr,
+      .size = size,
+      .location = request.memory_pool,
+      .is_global = request.is_global,
+  };
 }
+
+DeviceRegion RankedAllocator::share_region_impl(const DeviceRegion &region) {
+  return sharing_ioctl(region, MAKE_SHARED_ALLOC);
+}
+
+DeviceRegion
+RankedAllocator::get_shared_alloc_impl(const DeviceRegion &region) {
+  return sharing_ioctl(region, GET_SHARED_ALLOC);
+}
+
+DeviceRegion RankedAllocator::sharing_ioctl(const DeviceRegion &region,
+                                            uint64_t cmd) {
+  const auto &ranked_region = std::get<RegionType>(region);
+  const auto amount_of_regions = ranked_region.regions.size();
+
+  RegionType shared_region{
+      std::vector<SequentialRegion>(amount_of_regions, SequentialRegion{})};
+
+  for (size_t i = 0; i < amount_of_regions; ++i) {
+    const auto &seq_region = ranked_region.regions[i];
+
+    if (!seq_region.location.has_value()) {
+      continue;
+    }
+
+    pnm_allocation request{
+        .addr = seq_region.start,
+        .size = seq_region.size,
+        .memory_pool = *seq_region.location,
+        .is_global = seq_region.is_global,
+    };
+
+    if (ioctl(device_->get_resource_fd(), cmd, &request) < 0) {
+      pnm::error::throw_from_errno(errno);
+    }
+
+    const SequentialRegion seq_shared_region{
+        .start = request.addr,
+        .size = request.size,
+        .location = request.memory_pool,
+        .is_global = request.is_global,
+    };
+
+    shared_region.regions[i] = seq_shared_region;
+  }
+
+  return shared_region;
+}
+} // namespace pnm::memory

@@ -1,7 +1,7 @@
 From 0e181dd06f95407809088daa7bcef8c01ef6b23f Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Wed, 28 Sep 2022 12:51:31 +0300
-Subject: [PATCH 050/161] [drivers/dax/axdimm] Add AXDIMM_DBG and use
+Subject: [PATCH 050/225] [drivers/dax/axdimm] Add AXDIMM_DBG and use
  pr_<level>.
 
 `AXDIMM_PRINT(level, ...)` was originally implemented using `printk`.

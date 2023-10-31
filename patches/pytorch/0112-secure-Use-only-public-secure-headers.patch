@@ -1,7 +1,7 @@
 From 02629a70aa853fb0330980fa1e3e0ff84ce6b8a5 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Thu, 23 Mar 2023 14:47:59 +0300
-Subject: [PATCH 112/128] [secure] Use only public secure headers
+Subject: [PATCH 112/135] [secure] Use only public secure headers
 
 Before this we already used a very tiny subset of the available API.
 Here we just do the full switch and update to new header paths.

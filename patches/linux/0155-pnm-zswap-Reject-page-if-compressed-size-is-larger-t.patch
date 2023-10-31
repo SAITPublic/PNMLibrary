@@ -1,7 +1,7 @@
 From 08f05df9dfb7c5ad22cfa5897b66fbc89780f25e Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Tue, 1 Aug 2023 22:34:08 -0400
-Subject: [PATCH 155/161] [pnm][zswap] Reject page if compressed size is larger
+Subject: [PATCH 155/225] [pnm][zswap] Reject page if compressed size is larger
  than PAGE_SIZE
 
 Here we fix the bug when the page is not rejected from zswap if the

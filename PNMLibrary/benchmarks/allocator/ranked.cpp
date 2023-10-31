@@ -23,7 +23,7 @@
 
 void alloc_dealloc(benchmark::State &state) {
   const auto alloc_num = state.range(1);
-  auto ctx = pnm::make_context(pnm::Device::Type::SLS_CXL);
+  auto ctx = pnm::make_context(pnm::Device::Type::SLS);
   auto &alloc = ctx->allocator();
   std::vector<pnm::memory::DeviceRegion> dregion(alloc_num);
 

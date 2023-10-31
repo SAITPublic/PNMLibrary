@@ -1,7 +1,7 @@
 From 4646425d07d1b67b7aeadebf1eb61929336765ec Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 31 Aug 2022 14:25:05 +0900
-Subject: [PATCH 02/23] Add a script to run DLRM test
+Subject: [PATCH 02/24] Add a script to run DLRM test
 
 The configuration is similar to what we use for Caffe2 version.
 

@@ -28,7 +28,7 @@
 #include <limits>
 #include <random>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 /*! \brief Class with commont method for Ecryption and Verification engines */
 template <typename EncBackend, AES_KEY_SIZE KeySize> class CommonCryptoEngine {
@@ -76,7 +76,7 @@ inline void prepare_otp(T *begin, T *end, uint32_t prefix, uint32_t version,
  */
 template <typename T, unsigned N, typename Encoder>
 inline void generate_otp(uint32_t prefix, uint32_t version, uintptr_t address,
-                         Encoder &engine, FixedVector<T, N> &otp) {
+                         Encoder &engine, pnm::types::FixedVector<T, N> &otp) {
   static_assert(
       sizeof(version) + sizeof(address) + sizeof(prefix) <= N * sizeof(T),
       "Size of OTP should be greater or equal than 2 * sizeof(uint32_t) +"
@@ -100,27 +100,27 @@ inline void generate_otp(uint32_t prefix, uint32_t version, uintptr_t address,
  * */
 template <typename T, typename Encoder>
 inline void generate_otp_vec(uint32_t prefix, uint32_t version,
-                             pnm::common_view<uintptr_t> addresses,
+                             pnm::views::common<uintptr_t> addresses,
                              uint32_t otp_size, uint32_t otps_count,
-                             Encoder &engine, pnm::common_view<T> otps) {
-  auto otps_array_v =
-      pnm::make_rowwise_view(otps.begin(), otps.end(), otp_size * otps_count);
+                             Encoder &engine, pnm::views::common<T> otps) {
+  auto otps_array_v = pnm::views::make_rowwise_view(otps.begin(), otps.end(),
+                                                    otp_size * otps_count);
   auto *address = addresses.begin();
   for (auto otp_batch : otps_array_v) {
     uintptr_t otp_address = *address;
-    for (auto otp :
-         pnm::make_rowwise_view(otp_batch.begin(), otp_batch.end(), otp_size)) {
+    for (auto otp : pnm::views::make_rowwise_view(otp_batch.begin(),
+                                                  otp_batch.end(), otp_size)) {
       prepare_otp(otp.begin(), otp.end(), prefix, version, otp_address);
       otp_address += otp_size * sizeof(T);
     }
     std::advance(address, 1);
   }
 
-  auto casted_array = pnm::view_cast<uint8_t>(otps);
+  auto casted_array = pnm::views::view_cast<uint8_t>(otps);
   engine.encrypt(casted_array.begin(), casted_array.end(),
                  casted_array.begin());
 }
 
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif

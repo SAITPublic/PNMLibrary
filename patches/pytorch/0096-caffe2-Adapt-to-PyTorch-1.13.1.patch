@@ -1,7 +1,7 @@
 From dd1bad2b5a6172eaa831b910721c66ef7cbea214 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Mon, 5 Dec 2022 13:37:45 +0000
-Subject: [PATCH 096/128] [caffe2] Adapt to PyTorch 1.13.1
+Subject: [PATCH 096/135] [caffe2] Adapt to PyTorch 1.13.1
 
 Resolves AXDIMM-496
 

@@ -15,8 +15,8 @@
 
 #include "base.h"
 
-#include "core/device/sls/memory_map.h"
-#include "core/device/sls/simulator/axdimm.h"
+#include "core/device/sls/simulator_core/axdimm_core_sim.h"
+#include "core/device/sls/utils/memory_map.h"
 
 #include <linux/sls_resources.h>
 
@@ -27,7 +27,7 @@ namespace pnm::sls::device {
 
 class AxdimmSimulatorPsumReader {
 public:
-  explicit AxdimmSimulatorPsumReader(AxdimmSimulator &simulator)
+  explicit AxdimmSimulatorPsumReader(AxdimmSimulatorCore &simulator)
       : simulator_(&simulator) {}
 
   void operator()(const memAddr &mem_addr, uint8_t compute_unit,
@@ -35,12 +35,12 @@ public:
                   uint8_t *buf_out, size_t read_size);
 
 private:
-  AxdimmSimulator *simulator_;
+  AxdimmSimulatorCore *simulator_;
 };
 
 class AxdimmSimulatorTagsReader {
 public:
-  explicit AxdimmSimulatorTagsReader(AxdimmSimulator &simulator)
+  explicit AxdimmSimulatorTagsReader(AxdimmSimulatorCore &simulator)
       : simulator_(&simulator) {}
 
   void operator()(const memAddr &mem_addr, uint8_t compute_unit,
@@ -48,10 +48,10 @@ public:
                   uint8_t *buf_out, size_t read_size);
 
 private:
-  AxdimmSimulator *simulator_;
+  AxdimmSimulatorCore *simulator_;
 };
 
-class AxdimmSimulatorMemBlockHandler final
+class AxdimmSimulatorMemBlockHandler
     : public AxdimmMemBlockHandler<AxdimmSimulatorMemBlockHandler> {
 public:
   AxdimmSimulatorMemBlockHandler()
@@ -61,7 +61,7 @@ public:
   // [TODO: @a.korzun] this is a temporary hack to support simulator method
   // calls from the outside of the memblockhandler. Existing code should be
   // reworked and this method should then be removed from the public API.
-  AxdimmSimulator &simulator() noexcept { return simulator_; }
+  AxdimmSimulatorCore &simulator() noexcept { return simulator_; }
 
   auto psum_reader() const { return psum_reader_; }
   auto tags_reader() const { return tags_reader_; }
@@ -72,7 +72,7 @@ private:
   uint64_t get_mem_addr(uint8_t compute_unit, uint32_t type, uint64_t offset);
   void write_reg(uint8_t *reg_addr, uint32_t val);
 
-  AxdimmSimulator simulator_;
+  AxdimmSimulatorCore simulator_;
 
   AxdimmSimulatorPsumReader psum_reader_;
   AxdimmSimulatorTagsReader tags_reader_;

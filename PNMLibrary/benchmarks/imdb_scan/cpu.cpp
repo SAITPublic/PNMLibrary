@@ -27,7 +27,7 @@ using namespace pnm::imdb;
 
 template <typename Output> auto make_view(Output &output) {
   if constexpr (std::is_same_v<Output, index_vector>) {
-    return pnm::make_view(output);
+    return pnm::views::make_view(output);
   } else {
     return output.view();
   }
@@ -56,7 +56,7 @@ void scan_bench_impl(benchmark::State &state) {
       get_output_size<scan_output_type>(column_size, selectivity));
   const Engine eng;
 
-  auto iv = make_view(output);
+  auto iv = ::make_view(output);
 
   auto request_id = 0U;
   for ([[maybe_unused]] auto _ : state) {

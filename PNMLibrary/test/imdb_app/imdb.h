@@ -33,19 +33,20 @@ namespace test_app {
 
 using namespace pnm::imdb;
 using namespace pnm::imdb::runner;
-class IMDBRunner : public IRunner {
+class ImdbRunner : public IRunner {
 public:
-  IMDBRunner(compressed_vector column, pnm::ContextHandler &context)
+  ImdbRunner(compressed_vector column, pnm::ContextHandler &context)
       : IRunner(std::move(column)), context_(context),
-        column_buf_(pnm::make_view(column_.container()), context_) {}
+        column_buf_(pnm::views::make_view(column_.container()), context_) {}
 
 private:
   template <typename Output> auto make_result_buffer(Output &result) const {
     if constexpr (std::is_same_v<Output, index_vector>) {
-      return pnm::memory::Buffer<index_type>(pnm::make_view(result), context_);
-    } else {
-      return pnm::memory::Buffer<index_type>(pnm::make_view(result.container()),
+      return pnm::memory::Buffer<index_type>(pnm::views::make_view(result),
                                              context_);
+    } else {
+      return pnm::memory::Buffer<index_type>(
+          pnm::views::make_view(result.container()), context_);
     }
   }
 
@@ -63,7 +64,7 @@ private:
       return op.result_size();
     } else {
       const pnm::memory::Buffer predicate_buffer(
-          pnm::make_view(predicate.container()), context_);
+          pnm::views::make_view(predicate.container()), context_);
 
       pnm::operations::Scan op(
           Scan::Column{column_.value_bits(), column_.size(), &column_buf_},

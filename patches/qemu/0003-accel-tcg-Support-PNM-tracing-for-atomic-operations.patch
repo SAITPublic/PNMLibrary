@@ -1,7 +1,7 @@
 From c0ebff5c752227ae9eb74eac231b567499f574c3 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 7 Sep 2023 03:43:43 +0000
-Subject: [PATCH 3/3] [accel/tcg] Support PNM tracing for atomic operations
+Subject: [PATCH 3/4] [accel/tcg] Support PNM tracing for atomic operations
 
 In context of multithreaded TCG, atomic memory operations have their
 own handlers in 'atomic_template.h'. Add PNM TLB memory tracing code

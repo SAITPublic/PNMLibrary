@@ -1,7 +1,7 @@
 From 2ae44a426f54be0ffcab2cf107268f352b48c8dd Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Wed, 3 May 2023 15:33:31 +0300
-Subject: [PATCH 118/128] [refactor] Sync with driver refactoring
+Subject: [PATCH 118/135] [refactor] Sync with driver refactoring
 
 * update includes from PNM library
 * update namespaces

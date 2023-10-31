@@ -20,7 +20,7 @@
 #include <functional>
 #include <initializer_list>
 
-namespace sls {
+namespace pnm::types {
 template <typename T, unsigned N> class FixedVector {
 public:
   using value_type = T;
@@ -92,6 +92,6 @@ inline FixedVector<T, N> operator-(const FixedVector<T, N> &lhs,
                  std::minus<T>{});
   return output;
 }
-} // namespace sls
+} // namespace pnm::types
 
 #endif // SLS_SLS_TYPES_H

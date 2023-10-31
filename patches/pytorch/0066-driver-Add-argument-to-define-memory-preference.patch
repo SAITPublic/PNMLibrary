@@ -1,7 +1,7 @@
 From 9cf5428cefed9baabc44b76665666e5c13b5f87d Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Mon, 22 Aug 2022 16:40:56 +0300
-Subject: [PATCH 066/128] [driver] Add argument to define memory preference
+Subject: [PATCH 066/135] [driver] Add argument to define memory preference
 
 Add `mem_preference` argument to define memory allocation strategy
 in AXDIMM library.

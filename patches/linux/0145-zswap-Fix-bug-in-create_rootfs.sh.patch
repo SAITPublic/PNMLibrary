@@ -1,7 +1,7 @@
 From 99bb2aaa417b3a0c9f5c6d3620cb3735f5b1aa32 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Mon, 24 Jul 2023 01:37:54 -0400
-Subject: [PATCH 145/161] [zswap] Fix bug in create_rootfs.sh
+Subject: [PATCH 145/225] [zswap] Fix bug in create_rootfs.sh
 
 Fix mount path in create_rootfs.sh script.
 

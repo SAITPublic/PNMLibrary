@@ -1,0 +1,29 @@
+From fa5a3581ff7b9632170620faa7e304dec0afa5ec Mon Sep 17 00:00:00 2001
+From: Nikita Enin <n.enin@samsung.com>
+Date: Wed, 6 Sep 2023 16:16:15 +0300
+Subject: [PATCH 173/225] Add empty line after declaration
+
+Fix checkpatch warning
+
+Signed-off-by: Nikita Enin <n.enin@samsung.com>
+---
+ drivers/pnm/sls_resource/topo/params.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index fb8958a25..80b8165c7 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -150,8 +150,8 @@ const struct sls_params *sls_topo(void)
+ static int check_topo_consistent(const struct sls_params *params)
+ {
+ 	bool is_valid = true;
+-
+ 	const size_t buf_alignment = 64;
++
+ 	is_valid &= ((params->buf_sz % buf_alignment) == 0);
+ 	is_valid &= is_power_of_2(params->nr_cunits);
+ 	is_valid &= is_power_of_2(params->nr_ranks);
+-- 
+2.34.1
+

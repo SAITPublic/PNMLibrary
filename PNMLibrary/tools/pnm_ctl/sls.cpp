@@ -17,11 +17,10 @@
 
 #include "tools/pnm_ctl/command_interface.h"
 
+#include "pnmlib/sls/control.h"
+
 #include "pnmlib/core/device.h"
 #include "pnmlib/core/sls_cunit_info.h"
-#include "pnmlib/core/sls_device.h"
-
-#include "pnmlib/common/error.h"
 
 #include "CLI/App.hpp"
 #include "CLI/Option.hpp"
@@ -39,91 +38,192 @@
 #include <string>
 
 using namespace tools::ctl::sls;
+using pnm::sls::ComputeUnitInfo;
+using pnm::sls::device::Control;
+using pnm::sls::device::topo;
 
-const std::array<details::RankInfoDescription, cunit_info_length>
+// [TODO: MCS23-1505] rework this array
+const std::array<details::RankInfoDescription, pnm::sls::cunit_info_length>
     PrintInfo::descriptions_ = {
-        details::RankInfoDescription{"--state",
-                                     "Show state of rank (0 = free, 1 = busy)",
-                                     "STATE:", SlsComputeUnitInfo::State},
         details::RankInfoDescription{
-            "--acquisition-count", "Show acquisition count of rank",
-            "ACQUISITION COUNT:", SlsComputeUnitInfo::AcquisitionCount},
+            "--state",
+            "Show state of rank (0 = free, 1 = busy)",
+            "STATE:",
+            ComputeUnitInfo::State,
+        },
         details::RankInfoDescription{
-            "--free-size", "Show size of free rank memory in bytes",
-            "FREE SIZE:", SlsComputeUnitInfo::FreeSize},
+            "--acquisition-count",
+            "Show acquisition count of rank",
+            "ACQUISITION COUNT:",
+            ComputeUnitInfo::AcquisitionCount,
+        },
         details::RankInfoDescription{
-            "--base-size", "Show size of BASE region in bytes",
-            "BASE SIZE:", SlsComputeUnitInfo::RegionBaseSize},
+            "--free-size",
+            "Show size of free rank memory in bytes",
+            "FREE SIZE:",
+            ComputeUnitInfo::FreeSize,
+        },
         details::RankInfoDescription{
-            "--base-offset", "Show offset of BASE region in bytes",
-            "BASE OFFSET:", SlsComputeUnitInfo::RegionBaseOffset},
+            "--base-size",
+            "Show size of BASE region in bytes",
+            "BASE SIZE:",
+            ComputeUnitInfo::RegionBaseSize,
+        },
         details::RankInfoDescription{
-            "--inst-size", "Show size of INST region in bytes",
-            "INST SIZE:", SlsComputeUnitInfo::RegionInstSize},
+            "--base-offset",
+            "Show offset of BASE region in bytes",
+            "BASE OFFSET:",
+            ComputeUnitInfo::RegionBaseOffset,
+        },
         details::RankInfoDescription{
-            "--inst-offset", "Show offset of INST region in bytes",
-            "INST OFFSET:", SlsComputeUnitInfo::RegionInstOffset},
+            "--base-map-size",
+            "Show size of mapped BASE region in bytes",
+            "BASE MAP SIZE:",
+            ComputeUnitInfo::RegionBaseMapSize,
+        },
         details::RankInfoDescription{
-            "--cfgr-size", "Show size of CFGR region in bytes",
-            "CFGR SIZE:", SlsComputeUnitInfo::RegionCfgrSize},
+            "--base-map-offset",
+            "Show offset of mapped BASE region in bytes",
+            "BASE MAP OFFSET:",
+            ComputeUnitInfo::RegionBaseMapOffset,
+        },
         details::RankInfoDescription{
-            "--cfgr-offset", "Show offset of CFGR region in bytes",
-            "CFGR OFFSET:", SlsComputeUnitInfo::RegionCfgrOffset},
+            "--inst-size",
+            "Show size of INST region in bytes",
+            "INST SIZE:",
+            ComputeUnitInfo::RegionInstSize,
+        },
         details::RankInfoDescription{
-            "--tags-size", "Show size of TAGS region in bytes",
-            "TAGS SIZE:", SlsComputeUnitInfo::RegionTagsSize},
+            "--inst-offset",
+            "Show offset of INST region in bytes",
+            "INST OFFSET:",
+            ComputeUnitInfo::RegionInstOffset,
+        },
+
         details::RankInfoDescription{
-            "--tags-offset", "Show offset of TAGS region in bytes",
-            "TAGS OFFSET:", SlsComputeUnitInfo::RegionTagsOffset},
+            "--inst-map-size",
+            "Show size of mapped INST region in bytes",
+            "INST MAP SIZE:",
+            ComputeUnitInfo::RegionInstMapSize,
+        },
         details::RankInfoDescription{
-            "--psum-size", "Show size of PSUM region in bytes",
-            "PSUM SIZE:", SlsComputeUnitInfo::RegionPsumSize},
+            "--inst-map-offset",
+            "Show offset of mapped INST region in bytes",
+            "INST MAP OFFSET:",
+            ComputeUnitInfo::RegionInstMapOffset,
+        },
         details::RankInfoDescription{
-            "--psum-offset", "Show offset of PSUM region in bytes",
-            "PSUM OFFSET:", SlsComputeUnitInfo::RegionPsumOffset}};
+            "--cfgr-size",
+            "Show size of CFGR region in bytes",
+            "CFGR SIZE:",
+            ComputeUnitInfo::RegionCfgrSize,
+        },
+        details::RankInfoDescription{
+            "--cfgr-offset",
+            "Show offset of CFGR region in bytes",
+            "CFGR OFFSET:",
+            ComputeUnitInfo::RegionCfgrOffset,
+        },
+        details::RankInfoDescription{
+            "--cfgr-map-size",
+            "Show size of mapped CFGR region in bytes",
+            "CFGR MAP SIZE:",
+            ComputeUnitInfo::RegionCfgrMapSize,
+        },
+        details::RankInfoDescription{
+            "--cfgr-map-offset",
+            "Show offset of mapped CFGR region in bytes",
+            "CFGR MAP OFFSET:",
+            ComputeUnitInfo::RegionCfgrMapOffset,
+        },
+        details::RankInfoDescription{
+            "--tags-size",
+            "Show size of TAGS region in bytes",
+            "TAGS SIZE:",
+            ComputeUnitInfo::RegionTagsSize,
+        },
+        details::RankInfoDescription{
+            "--tags-offset",
+            "Show offset of TAGS region in bytes",
+            "TAGS OFFSET:",
+            ComputeUnitInfo::RegionTagsOffset,
+        },
+        details::RankInfoDescription{
+            "--tags-map-size",
+            "Show size of mapped TAGS region in bytes",
+            "TAGS MAP SIZE:",
+            ComputeUnitInfo::RegionTagsMapSize,
+        },
+        details::RankInfoDescription{
+            "--tags-map-offset",
+            "Show offset of mapped TAGS region in bytes",
+            "TAGS MAP OFFSET:",
+            ComputeUnitInfo::RegionTagsMapOffset,
+        },
+        details::RankInfoDescription{
+            "--psum-size",
+            "Show size of PSUM region in bytes",
+            "PSUM SIZE:",
+            ComputeUnitInfo::RegionPsumSize,
+        },
+        details::RankInfoDescription{
+            "--psum-offset",
+            "Show offset of PSUM region in bytes",
+            "PSUM OFFSET:",
+            ComputeUnitInfo::RegionPsumOffset,
+        },
+        details::RankInfoDescription{
+            "--psum-map-size",
+            "Show size of mapped PSUM region in bytes",
+            "PSUM MAP SIZE:",
+            ComputeUnitInfo::RegionPsumMapSize,
+        },
+        details::RankInfoDescription{
+            "--psum-map-offset",
+            "Show offset of mapped PSUM region in bytes",
+            "PSUM MAP OFFSET:",
+            ComputeUnitInfo::RegionPsumMapOffset,
+        },
+};
 
 void PrintInfo::add_subcommand(CLI::App &app) {
-  sub_ = app.add_subcommand("info", "Print information about SLS ranks");
-  is_hex_ = sub_->add_flag("--hex", "Print all numbers in hex");
-  sub_is_initialized_ = false;
+  CLI::App *sub =
+      app.add_subcommand("sls-info", "Print information about SLS ranks");
 
-  sub_->callback([this]() { execute(); });
+  is_hex_ = sub->add_flag("--hex", "Print all numbers in hex");
+
+  enabled_ranks_.assign(topo().NumOfCUnits, 0);
+  std::iota(enabled_ranks_.begin(), enabled_ranks_.end(), 0);
+
+  sub->add_option("-r,--ranks", enabled_ranks_, "Show info about these ranks")
+      ->delimiter(',')
+      ->expected(0, topo().NumOfCUnits)
+      ->check(CLI::Range(0U, topo().NumOfCUnits - 1))
+      ->default_val(enabled_ranks_);
+
+  auto *info_types = sub->add_option_group(
+      "info_types", "What kinds of information to show (default = all)");
+
+  for (const auto &description : descriptions_) {
+    rank_info_options_.push_back(info_types->add_flag(
+        description.option_name, description.option_description));
+  }
+
+  sub->callback([this]() { execute(); });
 }
 
 void PrintInfo::execute() {
-  if (!check_sls_available()) {
-    return;
-  }
-  enabled_ranks_.assign(pnm::device::topo().NumOfRanks, 0);
-  std::iota(enabled_ranks_.begin(), enabled_ranks_.end(), 0);
+  const Control control{};
 
-  if (!sub_is_initialized_) {
-    sub_is_initialized_ = true;
-    sub_->add_option("-r,--ranks", enabled_ranks_, "Show info about these ranks")
-        ->delimiter(',')
-        ->expected(0, pnm::device::topo().NumOfRanks)
-        ->check(CLI::Range(0U, pnm::device::topo().NumOfRanks - 1))
-        ->default_val(enabled_ranks_);
-
-    auto *info_types = sub_->add_option_group(
-        "info_types", "What kinds of information to show (default = all)");
-
-    for (const auto &description : descriptions_) {
-      rank_info_options_.push_back(info_types->add_flag(
-          description.option_name, description.option_description));
-    }
-  }
-
-  const auto device = SlsDevice::make(pnm::Device::Type::SLS_AXDIMM);
   const char *format_str = *is_hex_ ? "  {:<20}{:>20x}\n" : "  {:<20} {:>20}\n";
 
   std::string output;
   output.reserve(2048);
 
-  const auto print_param = [&](uint64_t rank, SlsComputeUnitInfo param,
+  const auto print_param = [&](uint64_t rank, ComputeUnitInfo param,
                                const std::string &name) {
     fmt::format_to(std::back_inserter(output), fmt::runtime(format_str), name,
-                   device.compute_unit_info(rank, param));
+                   control.get_compute_unit_info(rank, param));
   };
 
   for (uint64_t rank : enabled_ranks_) {
@@ -145,17 +245,14 @@ void PrintInfo::execute() {
 }
 
 void Reset::add_subcommand(CLI::App &app) {
-  CLI::App *sub = app.add_subcommand("reset-sls", "Reset SLS device");
+  CLI::App *sub = app.add_subcommand("sls-reset", "Reset SLS device");
 
   sub->callback([]() {
-    if (!check_sls_available()) {
-      return;
-    }
     check_privileges();
 
-    auto device = SlsDevice::make(pnm::Device::Type::SLS_AXDIMM);
+    auto device = pnm::Device::make_device(pnm::Device::Type::SLS);
 
-    device.reset();
+    device->reset();
 
     fmt::print("SLS device is reset\n");
   });
@@ -163,7 +260,7 @@ void Reset::add_subcommand(CLI::App &app) {
 
 void AcquisitionTimeout::add_subcommand(CLI::App &app) {
   CLI::App *sub = app.add_subcommand(
-      "timeout", "Get or set SLS device acquisition timeout property");
+      "sls-timeout", "Get or set SLS device acquisition timeout property");
 
   const std::map<std::string, uint64_t> mapping{
       {"ns", 1'000'000'000UL}, {"us", 1'000'000UL}, {"ms", 1'000UL}};
@@ -175,24 +272,22 @@ void AcquisitionTimeout::add_subcommand(CLI::App &app) {
           ->transform(time_transform);
 
   sub->callback([this, set]() {
-    if (!check_sls_available()) {
-      return;
-    }
-    auto device = SlsDevice::make(pnm::Device::Type::SLS_AXDIMM);
+    const Control control{};
 
     if (*set) {
       check_privileges();
-      device.set_acquisition_timeout(set_timeout_);
+      control.set_acquisition_timeout(set_timeout_);
       return;
     }
 
-    fmt::print("Acquisition time is: {} [ns]\n", device.acquisition_timeout());
+    fmt::print("Acquisition time is: {} [ns]\n",
+               control.get_acquisition_timeout());
   });
 }
 
 void ResourceCleanup::add_subcommand(CLI::App &app) {
   CLI::App *sub =
-      app.add_subcommand("cleanup", "Get or set SLS resource cleanup");
+      app.add_subcommand("sls-cleanup", "Get or set SLS resource cleanup");
 
   const std::map<std::string, bool> mapping{{OFF, false}, {ON, true}};
   CLI::CheckedTransformer on_off_transform(mapping, CLI::ignore_case);
@@ -204,51 +299,29 @@ void ResourceCleanup::add_subcommand(CLI::App &app) {
                          ->type_name("BOOL");
 
   sub->callback([this, set]() {
-    if (!check_sls_available()) {
-      return;
-    }
-    auto device = SlsDevice::make(pnm::Device::Type::SLS_AXDIMM);
+    const Control control{};
 
     if (*set) {
       check_privileges();
-      device.set_resource_cleanup(set_cleanup_);
+      control.set_resource_cleanup(set_cleanup_);
       return;
     }
 
     fmt::print("Resouce cleanup feature is {}\n",
-               device.resource_cleanup() ? ON : OFF);
+               control.get_resource_cleanup() ? ON : OFF);
   });
 }
 
 void LeakedInfo::add_subcommand(CLI::App &app) {
   CLI::App *sub = app.add_subcommand(
-      "leaked",
+      "sls-leaked",
       "Get number of processes that didn't free device resources properly");
 
   sub->callback([]() {
-    if (!check_sls_available()) {
-      return;
-    }
-    const auto device = SlsDevice::make(pnm::Device::Type::SLS_AXDIMM);
+    const Control control{};
 
-    uint64_t cnt = device.leaked_count();
+    uint64_t cnt = control.get_leaked();
 
     fmt::print("Leaked processes counter: {}\n", cnt);
   });
-}
-
-bool tools::ctl::sls::check_sls_available() {
-  static bool is_unavailable = false;
-  if (is_unavailable) {
-    return false;
-  }
-  try {
-    pnm::device::topo();
-    return true;
-  } catch (pnm::error::IO &) {
-    is_unavailable = true;
-    fmt::print("Warning: unable to find sls_resource module data. ");
-    fmt::print("Commands for working with SLS are disabled.\n");
-    return false;
-  }
 }

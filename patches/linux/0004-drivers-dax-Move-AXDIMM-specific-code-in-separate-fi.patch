@@ -1,7 +1,7 @@
 From 3b7440db82ba5b12330798be157973a5e3057bfb Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 17 Nov 2021 15:23:44 +0900
-Subject: [PATCH 004/161] [drivers/dax] Move AXDIMM specific code in separate
+Subject: [PATCH 004/225] [drivers/dax] Move AXDIMM specific code in separate
  file
 
 Separate AXDIMM logic from DAX as much as possible.

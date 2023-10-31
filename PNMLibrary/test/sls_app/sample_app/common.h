@@ -16,6 +16,7 @@
 #include "test/sls_app/api/constants.h"
 #include "test/sls_app/api/structs.h"
 #include "test/sls_app/api/utils.h"
+#include "test/utils/pnm_fmt.h"
 #include "tools/datagen/sls/utils.h"
 
 #include <fmt/core.h>
@@ -32,13 +33,13 @@
 
 namespace test_app {
 
-enum class OverflowType {
+enum class OverflowType : uint8_t {
   withoutOverflow,
   overflowInEach3rdTable,
   overflowInOneRandomTable
 };
 
-inline std::string overflow_type_to_string(OverflowType overflow_type) {
+inline std::string format_as(OverflowType overflow_type) {
   switch (overflow_type) {
   case (OverflowType::overflowInEach3rdTable):
     return "overflowInEach3rdTable";
@@ -65,9 +66,9 @@ struct TestAppRunParams {
     fmt::print("TestAppRunParams:\n");
     fmt::print("\tmin_num_lookup: {}\n", min_num_lookup);
     fmt::print("\tmax_num_lookup: {}\n", max_num_lookup);
-    fmt::print("\tpreference: {}\n", preference_to_str(preference));
+    fmt::print("\tpreference: {}\n", preference);
     fmt::print("\tlengths_generation_type: {}\n", lengths_generation_type);
-    fmt::print("\toverflow_type: {}\n", overflow_type_to_string(overflow_type));
+    fmt::print("\toverflow_type: {}\n", overflow_type);
   }
 
   const size_t min_num_lookup;
@@ -98,7 +99,7 @@ generate_indices_path(const HelperRunParams &helper_run_params,
       "Ml_{}_ml_{}_bs_{}_{}_{}", testapp_run_params.max_num_lookup,
       testapp_run_params.min_num_lookup, helper_run_params.mini_batch_size,
       testapp_run_params.lengths_generation_type,
-      overflow_type_to_string(testapp_run_params.overflow_type));
+      testapp_run_params.overflow_type);
 }
 
 template <typename T>
@@ -149,7 +150,7 @@ public:
         std::to_string(fill_params_.num_idx_values) + " " +
         std::to_string(model_params_.sparse_feature_size);
 
-    sls::tests::get_or_create_test_tables(
+    tools::gen::sls::get_or_create_test_tables(
         root, generator_name, generator_args, model_params_.sparse_feature_size,
         model_params_.num_tables(), model_params_.emb_table_len(), tables);
 

@@ -1,0 +1,29 @@
+From 72b9b15fd0ed61a8799f00aeaebf57ec27e4df3c Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Thu, 26 Oct 2023 01:08:57 +0000
+Subject: [PATCH 217/225] [PNM][ZSWAP] Fix copy-paste error in
+ cxl_pnm_sim_shutdown
+
+Related to: MCS23-1762.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index 002026d66..b04b655f0 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -496,7 +496,7 @@ static void cxl_pnm_sim_shutdown(void)
+ 	for (i = 0; i < pnm_ctrl->num_decompress; i++) {
+ 		kthread_stop(pnm_ctrl->decompress[i].task_unit);
+ 		/* relax decompress while loops with done */
+-		smp_store_release(&pnm_ctrl->compress[i].done, true);
++		smp_store_release(&pnm_ctrl->decompress[i].done, true);
+ 	}
+ 
+ 	release_procfs();
+-- 
+2.34.1
+

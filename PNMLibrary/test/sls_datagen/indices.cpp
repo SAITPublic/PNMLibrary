@@ -36,6 +36,9 @@
 #include <string>
 #include <vector>
 
+using namespace tools::gen::sls;
+using pnm::sls::device::topo;
+
 struct IndicesFixture : public ::testing::Test {
 protected:
   std::string root;
@@ -43,7 +46,7 @@ protected:
     root = (std::filesystem::temp_directory_path() / "embXXXXXX").string();
     ASSERT_TRUE(mkdtemp(root.data()));
 
-    fmt::print("The temporary embedded tables will be saved at {}\n", root);
+    fmt::print("The temporary embedding tables will be saved at {}\n", root);
   }
   void TearDown() override { std::filesystem::remove_all(root); }
 };
@@ -68,7 +71,7 @@ TEST_F(IndicesFixture, SequentialOk) {
   auto igen = IndicesGeneratorFactory::default_factory().create("sequential");
   ASSERT_NO_THROW(igen->create_and_store(root, "seq_ok", iinfo, tinfo));
 
-  auto indices = sls::tests::get_test_indices(root, "seq_ok");
+  auto indices = get_test_indices(root, "seq_ok");
   ASSERT_EQ(indices.info.minibatch_size(), 10);
   auto gvec = std::vector<size_t>{15, 20, 10, 50, 9};
   auto num_requests_ = gvec.size() * indices.info.minibatch_size();
@@ -104,7 +107,7 @@ TEST_F(IndicesFixture, Random) {
   auto igen = IndicesGeneratorFactory::default_factory().create("random");
   ASSERT_NO_THROW(igen->create_and_store(root, "seq_ok", iinfo, tinfo));
 
-  auto indices = sls::tests::get_test_indices(root, "seq_ok");
+  auto indices = get_test_indices(root, "seq_ok");
   ASSERT_EQ(indices.info.minibatch_size(), 10);
   auto gvec = std::vector<size_t>{15, 20, 10, 50, 9};
   auto num_requests_ = gvec.size() * indices.info.minibatch_size();
@@ -173,9 +176,7 @@ TEST_F(IndicesFixture, Random_Lengths_3) {
   ASSERT_EQ(lengths.size(), num_requests);
 
   const uint32_t single_batch_lookups_min =
-      (pnm::device::topo().InstBufSize / pnm::device::topo().InstructionSize /
-       minibatch_size) +
-      1;
+      (topo().InstBufSize / topo().InstructionSize / minibatch_size) + 1;
 
   for (size_t table_idx = 0; table_idx < tinfo.num_tables(); ++table_idx) {
     for (size_t row_idx = 0; row_idx < minibatch_size; ++row_idx) {
@@ -211,9 +212,7 @@ TEST_F(IndicesFixture, Random_Lengths_minus1) {
   ASSERT_EQ(lengths.size(), num_requests);
 
   const uint32_t single_overflowed_table_batch_lookups =
-      (pnm::device::topo().InstBufSize / pnm::device::topo().NumOfInstBuf /
-       pnm::device::topo().InstructionSize) -
-      1;
+      (topo().InstBufSize / topo().NumOfInstBuf / topo().InstructionSize) - 1;
 
   ASSERT_EQ(lengths.size(), num_requests);
 

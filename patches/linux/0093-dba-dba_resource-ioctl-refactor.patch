@@ -1,7 +1,7 @@
 From c22ef085a8cb3505c0ef3caa7803804a5e234cf1 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Wed, 5 Apr 2023 18:25:04 +0300
-Subject: [PATCH 093/161] [dba] dba_resource ioctl refactor
+Subject: [PATCH 093/225] [dba] dba_resource ioctl refactor
 
 Signed-off-by: Savelii Motov <s.motov@samsung.com>
 ---

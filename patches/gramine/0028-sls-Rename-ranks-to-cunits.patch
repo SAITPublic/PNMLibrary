@@ -1,0 +1,39 @@
+From 8de099fd3da520f92fc87d7cf5232503b46169a9 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Mon, 21 Aug 2023 11:30:36 +0300
+Subject: [PATCH 28/29] [sls] Rename ranks to cunits
+
+---
+ application/pytorch/conf.pytorch.manifest.template   | 2 +-
+ application/sls_secndp_test/secndp.manifest.template | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/application/pytorch/conf.pytorch.manifest.template b/application/pytorch/conf.pytorch.manifest.template
+index 2ab6a8e3..fea41a98 100644
+--- a/application/pytorch/conf.pytorch.manifest.template
++++ b/application/pytorch/conf.pytorch.manifest.template
+@@ -50,7 +50,7 @@ sgx.trusted_files = [
+ sgx.allowed_files = [
+   "file:/dev/shm/", # We need to allow sls device to enable write access to it
+   "file:./run_kaggle_pt/",
+-  "file:/sys/class/pnm/sls_resource/ranks/",
++  "file:/sys/class/pnm/sls_resource/cunits/",
+   "file:/sys/class/pnm/sls_resource/topology/",
+   "file:/dev/pnm/sls_resource",
+   "file:{{ dlrm_data_path }}",
+diff --git a/application/sls_secndp_test/secndp.manifest.template b/application/sls_secndp_test/secndp.manifest.template
+index 758252d0..b3b32040 100644
+--- a/application/sls_secndp_test/secndp.manifest.template
++++ b/application/sls_secndp_test/secndp.manifest.template
+@@ -34,7 +34,7 @@ sgx.max_threads = 512
+ sgx.debug = true
+ 
+ sgx.allowed_files = [
+-  "file:/sys/class/pnm/sls_resource/ranks/",
++  "file:/sys/class/pnm/sls_resource/cunits/",
+   "file:/sys/class/pnm/sls_resource/topology/",
+   "file:/dev/pnm/sls_resource"
+ ]
+-- 
+2.34.1
+

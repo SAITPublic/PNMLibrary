@@ -1,7 +1,7 @@
 From fb411117471adf6822b04b9115fb4c52da140f01 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 8 Sep 2022 16:10:08 +0300
-Subject: [PATCH 05/27] [device] Add device memory mapping for SGX mode
+Subject: [PATCH 05/29] [device] Add device memory mapping for SGX mode
 
 We introduce device memory mapping in the same way as for direct mode.
 

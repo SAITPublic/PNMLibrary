@@ -1,0 +1,27 @@
+From 718529a58f0a3222904130a578b4819b2b88067d Mon Sep 17 00:00:00 2001
+From: Alex Antonov <alex.antonov@samsung.com>
+Date: Tue, 10 Oct 2023 15:51:12 +0300
+Subject: [PATCH 205/225] [IMDB] Fix Makefile
+
+Remove sls_resource from IMDB Makefile
+
+Signed-off-by: Alex Antonov <alex.antonov@samsung.com>
+---
+ drivers/pnm/imdb_resource/Makefile | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/drivers/pnm/imdb_resource/Makefile b/drivers/pnm/imdb_resource/Makefile
+index 664758fa9..95f254f8f 100644
+--- a/drivers/pnm/imdb_resource/Makefile
++++ b/drivers/pnm/imdb_resource/Makefile
+@@ -13,6 +13,4 @@ imdb_resource-y += allocator.o
+ imdb_resource-y += thread_sched.o
+ imdb_resource-y += sysfs.o
+ imdb_resource-y += proc_mgr.o
+-imdb_resource-y += topo/params.o
+-imdb_resource-y += topo/export.o
+-sls_resource-y += $(topo-y)
++imdb_resource-y += $(topo-y)
+-- 
+2.34.1
+

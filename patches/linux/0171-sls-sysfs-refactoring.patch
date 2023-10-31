@@ -1,0 +1,1815 @@
+From ed7c27bcd09f64ccd4dd12f9fd169a0918be3549 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Tue, 29 Aug 2023 12:46:10 +0000
+Subject: [PATCH 171/225] [sls] sysfs refactoring
+
+- move all sysfs files to sysysfs directory
+- split monolith sysfs onto separete entries:
+ mappings and topology
+- unify namings of constructing sysfs functions
+- rework error handling
+
+Resolves: MCS23-1498
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/Makefile             |  10 +-
+ drivers/pnm/sls_resource/sls.c                |  10 +-
+ drivers/pnm/sls_resource/sysfs.c              | 724 ------------------
+ drivers/pnm/sls_resource/sysfs/cunits.c       | 387 ++++++++++
+ drivers/pnm/sls_resource/sysfs/mappings.c     | 228 ++++++
+ .../pnm/sls_resource/sysfs/sysfs-private.h    |  21 +
+ drivers/pnm/sls_resource/sysfs/sysfs.c        | 182 +++++
+ drivers/pnm/sls_resource/{ => sysfs}/sysfs.h  |   4 +-
+ .../{topo/export.c => sysfs/topology.c}       |  35 +-
+ drivers/pnm/sls_resource/topo/export.h        |  12 -
+ include/uapi/linux/sls_resources.h            |   8 +-
+ 11 files changed, 854 insertions(+), 767 deletions(-)
+ delete mode 100644 drivers/pnm/sls_resource/sysfs.c
+ create mode 100644 drivers/pnm/sls_resource/sysfs/cunits.c
+ create mode 100644 drivers/pnm/sls_resource/sysfs/mappings.c
+ create mode 100644 drivers/pnm/sls_resource/sysfs/sysfs-private.h
+ create mode 100644 drivers/pnm/sls_resource/sysfs/sysfs.c
+ rename drivers/pnm/sls_resource/{ => sysfs}/sysfs.h (74%)
+ rename drivers/pnm/sls_resource/{topo/export.c => sysfs/topology.c} (85%)
+ delete mode 100644 drivers/pnm/sls_resource/topo/export.h
+
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index 3defa63a3..cdbf479d0 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -3,14 +3,18 @@ obj-$(CONFIG_SLS_RESOURCE) += sls_resource.o
+ CFLAGS_sls.o += -DSLS_DRIVER_VERSION=\"$(shell git rev-parse --short HEAD)\"
+ subdir-ccflags-y += -I $(srctree)/$(src)/ -I $(srctree)/$(src)/..
+ 
+-topo-y := topo/export.o
+-topo-y += topo/params.o
++sysfs-y := sysfs/cunits.o
++sysfs-y += sysfs/mappings.o
++sysfs-y += sysfs/sysfs.o
++sysfs-y += sysfs/topology.o
++
++topo-y := topo/params.o
+ 
+ sls_resource-y := allocator.o
+ sls_resource-y += cunit_scheduler.o
+ sls_resource-y += mem_info.o
+ sls_resource-y += process_manager.o
+ sls_resource-y += sls.o
+-sls_resource-y += sysfs.o
++sls_resource-y += $(sysfs-y)
+ sls_resource-y += resource.o
+ sls_resource-y += $(topo-y)
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 06ce67512..5407406ec 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -5,7 +5,7 @@
+ #include "mem_info.h"
+ #include "private.h"
+ #include "process_manager.h"
+-#include "sysfs.h"
++#include "sysfs/sysfs.h"
+ #include "topo/params.h"
+ 
+ #include "device_resource.h"
+@@ -189,8 +189,8 @@ int init_sls_device(void)
+ 	if (err)
+ 		goto cunit_scheduler_fail;
+ 
+-	/* Create sysfs subsystem for the device */
+-	err = build_sls_sysfs(mem_cunit_info, mem_info, sls_resource_device);
++	/* Build sysfs for device */
++	err = sls_build_sysfs(mem_cunit_info, mem_info, sls_resource_device);
+ 	if (unlikely(err))
+ 		goto build_sysfs_fail;
+ 
+@@ -235,8 +235,8 @@ void cleanup_sls_device(void)
+ 	/* Reset state */
+ 	destroy_cunit_scheduler();
+ 
+-	/* Remove test attribute */
+-	destroy_sls_sysfs();
++	/* Destroy sysfs  */
++	sls_destroy_sysfs(sls_resource_device);
+ 
+ 	/* Destroy sls_resource chrdev */
+ 	sls_destroy_cdev();
+diff --git a/drivers/pnm/sls_resource/sysfs.c b/drivers/pnm/sls_resource/sysfs.c
+deleted file mode 100644
+index 37e40a094..000000000
+--- a/drivers/pnm/sls_resource/sysfs.c
++++ /dev/null
+@@ -1,724 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+-
+-#include "sysfs.h"
+-#include "allocator.h"
+-#include "cunit_scheduler.h"
+-#include "log.h"
+-#include "private.h"
+-#include "process_manager.h"
+-#include "topo/export.h"
+-#include "topo/params.h"
+-
+-#include <linux/device.h>
+-#include <linux/genalloc.h>
+-#include <linux/kernel.h>
+-#include <linux/sls_resources.h>
+-#include <linux/string.h>
+-#include <linux/types.h>
+-
+-/* [TODO: @p.bred] Refactor all sysfs inc. error handling within MCS23-1373 */
+-
+-#define CUNIT_ATTR_MAX 4
+-#define SYSFS_GROUPS_COUNT 1
+-#define REGION_SYSFS_ATTR_COUNT 4
+-#define RAW_REGION_SYSFS_ATTR_COUNT 3
+-#define WITH_NULL_TERM(var) (var + 1)
+-
+-static const struct sls_mem_cunit_info *mem_cunit_info;
+-static const struct sls_mem_info *mem_info;
+-static struct kobject *cunits_kobj;
+-static struct kobject *mappings_kobj;
+-
+-static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
+-			   char *buf)
+-{
+-	uint64_t leaked;
+-
+-	leaked = sls_proc_mgr_leaked();
+-	return sysfs_emit(buf, "%llu\n", leaked);
+-}
+-static DEVICE_ATTR_RO(leaked);
+-
+-static ssize_t cleanup_show(struct device *device,
+-			    struct device_attribute *attr, char *buf)
+-{
+-	bool cleanup;
+-
+-	cleanup = sls_proc_mgr_cleanup();
+-
+-	return sysfs_emit(buf, "%d\n", cleanup);
+-}
+-
+-static ssize_t cleanup_store(struct device *device,
+-			     struct device_attribute *attr, const char *buf,
+-			     size_t count)
+-{
+-	if (sysfs_streq(buf, "1")) {
+-		if (sls_proc_manager_cleanup_on())
+-			SLS_ERR("Failed to enable resource manager\n");
+-	} else if (sysfs_streq(buf, "0")) {
+-		sls_proc_manager_cleanup_off();
+-	} else {
+-		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
+-			buf);
+-	}
+-
+-	return count;
+-}
+-static DEVICE_ATTR_RW(cleanup);
+-
+-static ssize_t acq_timeout_show(struct device *device,
+-				struct device_attribute *attr, char *buf)
+-{
+-	uint64_t acquisition_count = cunit_scheduler_acquisition_timeout();
+-
+-	return sysfs_emit(buf, "%llu\n", acquisition_count);
+-}
+-
+-static ssize_t acq_timeout_store(struct device *device,
+-				 struct device_attribute *attr, const char *buf,
+-				 size_t count)
+-{
+-	uint64_t acq_timeout;
+-
+-	if (kstrtoull(buf, 10, &acq_timeout)) {
+-		SLS_ERR("Failed to convert cunit acquisition timeout string ('%s') to integer.\n",
+-			buf);
+-		return -EINVAL;
+-	}
+-	SLS_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
+-	cunit_scheduler_set_acquisition_timeout(acq_timeout);
+-	return count;
+-}
+-static DEVICE_ATTR_RW(acq_timeout);
+-
+-static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+-			   const char *buf, size_t count)
+-{
+-	if (sysfs_streq(buf, "1")) {
+-		SLS_DBG("Resetting SLS device via sysfs\n");
+-		if (sls_ioctl(NULL, DEVICE_IOCRESET, 0))
+-			SLS_ERR("Failed to reset device via sysfs.\n");
+-	} else {
+-		// Usual behavior is to silently ignore this, so there is no reason
+-		// to make it as SLS_WRN.
+-		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'reset' file\n",
+-			buf);
+-	}
+-
+-	return count;
+-}
+-static DEVICE_ATTR_WO(reset);
+-
+-static ssize_t size_show(struct device *device, struct device_attribute *attr,
+-			 char *buf)
+-{
+-	uint64_t value = SLS_MEMORY_SIZE;
+-
+-	return sysfs_emit(buf, "%llu\n", value);
+-}
+-static DEVICE_ATTR_RO(size);
+-
+-static struct attribute *dev_attrs[] = {
+-	&dev_attr_acq_timeout.attr, &dev_attr_reset.attr, &dev_attr_leaked.attr,
+-	&dev_attr_cleanup.attr,	    &dev_attr_size.attr,  NULL,
+-};
+-
+-static struct attribute_group dev_attr_group = {
+-	.attrs = dev_attrs,
+-};
+-
+-static const struct attribute_group *dev_attr_groups[] = {
+-	&dev_attr_group,
+-	NULL,
+-};
+-
+-struct cunit_attribute {
+-	struct attribute attr;
+-	ssize_t (*show)(struct cunit_attribute *attr, char *buf);
+-	uint8_t cunit;
+-};
+-
+-struct region_attribute {
+-	struct attribute attr;
+-	ssize_t (*show)(struct region_attribute *attr, char *buf);
+-	uint8_t cunit;
+-	uint8_t region;
+-};
+-
+-struct regions_sysfs {
+-	struct region_attribute region_attrs[SLS_BLOCK_MAX]
+-					    [REGION_SYSFS_ATTR_COUNT];
+-	struct attribute
+-		*attrs[SLS_BLOCK_MAX][WITH_NULL_TERM(REGION_SYSFS_ATTR_COUNT)];
+-	struct attribute_group group[SLS_BLOCK_MAX];
+-	const struct attribute_group *groups[WITH_NULL_TERM(SLS_BLOCK_MAX)];
+-	struct kobject regions_kobj;
+-};
+-
+-struct cunit_sysfs {
+-	struct cunit_attribute attrs[REGION_SYSFS_ATTR_COUNT];
+-	struct attribute *attributes[WITH_NULL_TERM(REGION_SYSFS_ATTR_COUNT)];
+-	struct attribute_group group;
+-	const struct attribute_group *groups[WITH_NULL_TERM(SYSFS_GROUPS_COUNT)];
+-	struct regions_sysfs regions_fs;
+-	struct kobject cunit_idx_kobj;
+-};
+-
+-struct raw_region_attribute {
+-	struct attribute attr;
+-	ssize_t (*show)(struct raw_region_attribute *attr, char *buf);
+-	uint8_t region;
+-};
+-
+-struct raw_region_sysfs {
+-	struct raw_region_attribute attrs[RAW_REGION_SYSFS_ATTR_COUNT];
+-	struct attribute
+-		*attributes[WITH_NULL_TERM(RAW_REGION_SYSFS_ATTR_COUNT)];
+-	struct attribute_group group;
+-	const struct attribute_group *groups[WITH_NULL_TERM(SYSFS_GROUPS_COUNT)];
+-	struct kobject idx_kobj;
+-};
+-
+-static struct cunit_sysfs *cunits_fs;
+-static struct raw_region_sysfs *raw_regions_fs;
+-
+-static const char *const cunit_attr_name[] = {
+-	"state",
+-	"size",
+-	"free_size",
+-	"acquisition_count",
+-};
+-
+-static ssize_t cunit_show(struct cunit_attribute *attr, char *buf)
+-{
+-	uint8_t state;
+-	uint64_t free_size, size, wr_acq_count;
+-
+-	if (strcmp(attr->attr.name, cunit_attr_name[0]) == 0) {
+-		state = cunit_scheduler_cunit_state(attr->cunit);
+-		return sysfs_emit(buf, "%u\n", state);
+-	}
+-
+-	if (strcmp(attr->attr.name, cunit_attr_name[1]) == 0) {
+-		size = get_total_size(attr->cunit);
+-		return sysfs_emit(buf, "%llu\n", size);
+-	}
+-
+-	if (strcmp(attr->attr.name, cunit_attr_name[2]) == 0) {
+-		free_size = get_free_size(attr->cunit);
+-		return sysfs_emit(buf, "%llu\n", free_size);
+-	}
+-
+-	if (strcmp(attr->attr.name, cunit_attr_name[3]) == 0) {
+-		wr_acq_count = cunit_scheduler_acquisition_count(attr->cunit);
+-		return sysfs_emit(buf, "%llu\n", wr_acq_count);
+-	}
+-
+-	return 0;
+-}
+-
+-static ssize_t cunit_attr_show(struct kobject *kobj, struct attribute *attr,
+-			       char *buf)
+-{
+-	struct cunit_attribute *cunit_attr =
+-		container_of(attr, struct cunit_attribute, attr);
+-
+-	if (!cunit_attr->show)
+-		return -EIO;
+-
+-	return cunit_attr->show(cunit_attr, buf);
+-}
+-
+-static const char *const region_group_name[] = {
+-	"base", "inst", "cfgr", "tags", "psum",
+-};
+-
+-static const char *const region_attr_name[] = {
+-	"size",
+-	"offset",
+-	"map_size",
+-	"map_offset",
+-};
+-
+-static ssize_t region_show(struct region_attribute *attr, char *buf)
+-{
+-	const size_t nr_cunits = mem_cunit_info->nr_cunits;
+-	const size_t nr_regions_per_cunit =
+-		mem_cunit_info->nr_regions / nr_cunits;
+-	const struct sls_mem_cunit_region *cunit_regions =
+-		&mem_cunit_info->regions[attr->cunit * nr_regions_per_cunit];
+-	const struct sls_mem_cunit_region *region = NULL;
+-	size_t idx;
+-
+-	for (idx = 0; idx < nr_regions_per_cunit; ++idx)
+-		if (cunit_regions[idx].type == attr->region)
+-			region = &cunit_regions[idx];
+-
+-	/* [TODO: @p.bred] Make logs here and in other places across the file */
+-	if (!region)
+-		return -EIO;
+-
+-	if (strcmp(attr->attr.name, region_attr_name[0]) == 0) {
+-		return sysfs_emit(buf, "%llu\n", range_len(&region->range));
+-	}
+-
+-	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+-		return sysfs_emit(buf, "%llu\n", region->range.start);
+-
+-	if (strcmp(attr->attr.name, region_attr_name[2]) == 0)
+-		return sysfs_emit(buf, "%llu\n", range_len(&region->map_range));
+-
+-	if (strcmp(attr->attr.name, region_attr_name[3]) == 0)
+-		return sysfs_emit(buf, "%llu\n", region->map_range.start);
+-
+-	return -EIO;
+-}
+-
+-static ssize_t region_attr_show(struct kobject *kobj, struct attribute *attr,
+-				char *buf)
+-{
+-	struct region_attribute *region_attr =
+-		container_of(attr, struct region_attribute, attr);
+-
+-	if (!region_attr->show)
+-		return -EIO;
+-
+-	return region_attr->show(region_attr, buf);
+-}
+-
+-static void fill_region_sysfs(struct regions_sysfs *regions_fs, uint8_t cunit,
+-			      uint8_t region)
+-{
+-	int attr_counter;
+-	struct region_attribute *reg_attr;
+-
+-	for (attr_counter = 0; attr_counter < REGION_SYSFS_ATTR_COUNT;
+-	     ++attr_counter) {
+-		reg_attr = &regions_fs->region_attrs[region][attr_counter];
+-		reg_attr->attr.name = region_attr_name[attr_counter];
+-		reg_attr->attr.mode = 0444;
+-		reg_attr->show = region_show;
+-		reg_attr->cunit = cunit;
+-		reg_attr->region = region;
+-
+-		regions_fs->attrs[region][attr_counter] =
+-			&regions_fs->region_attrs[region][attr_counter].attr;
+-	}
+-
+-	regions_fs->attrs[region][REGION_SYSFS_ATTR_COUNT] = NULL;
+-	regions_fs->group[region].name = region_group_name[region];
+-	regions_fs->group[region].attrs = &regions_fs->attrs[region][0];
+-
+-	regions_fs->groups[region] = &regions_fs->group[region];
+-}
+-
+-static void fill_regions_sysfs(struct regions_sysfs *regions_fs, uint8_t cunit)
+-{
+-	int region;
+-
+-	for (region = 0; region < SLS_BLOCK_MAX; region++)
+-		fill_region_sysfs(regions_fs, cunit, region);
+-
+-	regions_fs->groups[SLS_BLOCK_MAX] = NULL;
+-}
+-
+-static const struct sysfs_ops regions_sysfs_ops = {
+-	.show = region_attr_show,
+-};
+-
+-/* Operations on memory regions inside cunit */
+-static struct kobj_type regions_type = {
+-	.sysfs_ops = &regions_sysfs_ops,
+-};
+-
+-static int build_cunit_regions_sysfs(struct kobject *kobj,
+-				     struct regions_sysfs *regions_fs,
+-				     uint8_t cunit)
+-{
+-	int err;
+-
+-	kobject_init(&regions_fs->regions_kobj, &regions_type);
+-	err = kobject_add(&regions_fs->regions_kobj, kobj, "regions");
+-	if (err) {
+-		kobject_put(&regions_fs->regions_kobj);
+-		memset(&regions_fs->regions_kobj, 0,
+-		       sizeof(regions_fs->regions_kobj));
+-		goto cunit_regions_out;
+-	}
+-
+-	fill_regions_sysfs(regions_fs, cunit);
+-
+-	err = sysfs_create_groups(&regions_fs->regions_kobj,
+-				  regions_fs->groups);
+-	if (err)
+-		goto cunit_regions_out;
+-
+-cunit_regions_out:
+-	return err;
+-}
+-
+-static void fill_cunit_attrs(struct cunit_sysfs *cunit_fs, uint8_t cunit)
+-{
+-	int attr_idx;
+-
+-	for (attr_idx = 0; attr_idx < REGION_SYSFS_ATTR_COUNT; ++attr_idx) {
+-		cunit_fs->attrs[attr_idx].attr.name = cunit_attr_name[attr_idx];
+-		cunit_fs->attrs[attr_idx].attr.mode = 0444;
+-		cunit_fs->attrs[attr_idx].show = cunit_show;
+-		cunit_fs->attrs[attr_idx].cunit = cunit;
+-
+-		cunit_fs->attributes[attr_idx] =
+-			&cunit_fs->attrs[attr_idx].attr;
+-	}
+-
+-	cunit_fs->attributes[REGION_SYSFS_ATTR_COUNT] = NULL;
+-}
+-
+-static void fill_cunit_sysfs(struct cunit_sysfs *cunit_fs, uint8_t cunit)
+-{
+-	fill_cunit_attrs(cunit_fs, cunit);
+-	cunit_fs->group.attrs = cunit_fs->attributes;
+-	cunit_fs->groups[0] = &cunit_fs->group;
+-	cunit_fs->groups[1] = NULL;
+-}
+-
+-static const struct sysfs_ops cunit_sysfs_ops = {
+-	.show = cunit_attr_show,
+-};
+-
+-/* Operations on cunit stats */
+-static const struct kobj_type cunit_type = {
+-	.sysfs_ops = &cunit_sysfs_ops,
+-};
+-
+-static int build_cunit_sysfs(struct kobject *kobj, uint8_t cunit)
+-{
+-	char buf[4];
+-	int err;
+-
+-	SLS_DBG("Building SLS sysfs for cunit %hhu\n", cunit);
+-
+-	kobject_init(&cunits_fs[cunit].cunit_idx_kobj, &cunit_type);
+-	sprintf(buf, "%hhu", cunit);
+-	err = kobject_add(&cunits_fs[cunit].cunit_idx_kobj, kobj, buf);
+-	if (err) {
+-		kobject_put(&cunits_fs[cunit].cunit_idx_kobj);
+-		memset(&cunits_fs[cunit].cunit_idx_kobj, 0,
+-		       sizeof(struct kobject));
+-		goto build_cunit_out;
+-	}
+-
+-	fill_cunit_sysfs(&cunits_fs[cunit], cunit);
+-
+-	if (sysfs_create_groups(&cunits_fs[cunit].cunit_idx_kobj,
+-				cunits_fs[cunit].groups)) {
+-		err = -ENOMEM;
+-		goto build_cunit_out;
+-	}
+-
+-	err = build_cunit_regions_sysfs(&cunits_fs[cunit].cunit_idx_kobj,
+-					&cunits_fs[cunit].regions_fs, cunit);
+-
+-build_cunit_out:
+-	return err;
+-}
+-
+-static ssize_t nr_regions_show(struct device *device,
+-			       struct device_attribute *attr, char *buf)
+-{
+-	return sysfs_emit(buf, "%llu\n", mem_info->nr_regions);
+-}
+-static DEVICE_ATTR_RO(nr_regions);
+-
+-static struct attribute *mappings_attrs[] = {
+-	&dev_attr_nr_regions.attr,
+-	NULL,
+-};
+-
+-static struct attribute_group mappings_attr_group = {
+-	.attrs = mappings_attrs,
+-};
+-
+-static const struct attribute_group *mappings_attr_groups[] = {
+-	&mappings_attr_group,
+-	NULL,
+-};
+-
+-static const char *const raw_region_attr_name[] = {
+-	"offset",
+-	"size",
+-	"type",
+-};
+-
+-static ssize_t raw_region_show(struct raw_region_attribute *attr, char *buf)
+-{
+-	uint64_t offset, size;
+-	int type;
+-
+-	if (strcmp(attr->attr.name, raw_region_attr_name[0]) == 0) {
+-		offset = mem_info->regions[attr->region].range.start;
+-		return sysfs_emit(buf, "%llu\n", offset);
+-	}
+-
+-	if (strcmp(attr->attr.name, raw_region_attr_name[1]) == 0) {
+-		size = range_len(&mem_info->regions[attr->region].range);
+-		return sysfs_emit(buf, "%llu\n", size);
+-	}
+-
+-	if (strcmp(attr->attr.name, raw_region_attr_name[2]) == 0) {
+-		type = mem_info->regions[attr->region].type;
+-		return sysfs_emit(buf, "%d\n", type);
+-	}
+-
+-	return 0;
+-}
+-
+-static ssize_t raw_region_attr_show(struct kobject *kobj,
+-				    struct attribute *attr, char *buf)
+-{
+-	struct raw_region_attribute *raw_region_attr =
+-		container_of(attr, struct raw_region_attribute, attr);
+-
+-	if (!raw_region_attr->show)
+-		return -EIO;
+-
+-	return raw_region_attr->show(raw_region_attr, buf);
+-}
+-
+-static const struct sysfs_ops raw_region_sysfs_ops = {
+-	.show = raw_region_attr_show,
+-};
+-
+-static struct kobj_type raw_region_type = {
+-	.sysfs_ops = &raw_region_sysfs_ops,
+-};
+-
+-static void fill_raw_region_attrs(struct raw_region_sysfs *raw_region_fs,
+-				  uint8_t region)
+-{
+-	int attr_idx;
+-
+-	for (attr_idx = 0; attr_idx < RAW_REGION_SYSFS_ATTR_COUNT; ++attr_idx) {
+-		raw_region_fs->attrs[attr_idx].attr.name =
+-			raw_region_attr_name[attr_idx];
+-		raw_region_fs->attrs[attr_idx].attr.mode = 0444;
+-		raw_region_fs->attrs[attr_idx].show = raw_region_show;
+-		raw_region_fs->attrs[attr_idx].region = region;
+-
+-		raw_region_fs->attributes[attr_idx] =
+-			&raw_region_fs->attrs[attr_idx].attr;
+-	}
+-
+-	raw_region_fs->attributes[RAW_REGION_SYSFS_ATTR_COUNT] = NULL;
+-}
+-
+-static void fill_raw_region_sysfs(struct raw_region_sysfs *raw_region_fs,
+-				  uint8_t region)
+-{
+-	fill_raw_region_attrs(raw_region_fs, region);
+-	raw_region_fs->group.attrs = raw_region_fs->attributes;
+-	raw_region_fs->groups[0] = &raw_region_fs->group;
+-	raw_region_fs->groups[1] = NULL;
+-}
+-
+-static int build_raw_region_sysfs(struct kobject *kobj, uint8_t region)
+-{
+-	char buf[4];
+-	int err;
+-
+-	SLS_DBG("Building SLS sysfs for mappings region %hhu\n", region);
+-
+-	kobject_init(&raw_regions_fs[region].idx_kobj, &raw_region_type);
+-	sprintf(buf, "%hhu", region);
+-	err = kobject_add(&raw_regions_fs[region].idx_kobj, kobj, buf);
+-	if (err)
+-		goto build_raw_region_kobject_out;
+-
+-	fill_raw_region_sysfs(&raw_regions_fs[region], region);
+-
+-	err = sysfs_create_groups(&raw_regions_fs[region].idx_kobj,
+-				  raw_regions_fs[region].groups);
+-	if (err)
+-		goto build_raw_region_out;
+-
+-	return 0;
+-
+-build_raw_region_out:
+-	kobject_del(&raw_regions_fs[region].idx_kobj);
+-build_raw_region_kobject_out:
+-	kobject_put(&raw_regions_fs[region].idx_kobj);
+-	memset(&raw_regions_fs[region].idx_kobj, 0, sizeof(struct kobject));
+-	return err;
+-}
+-
+-static int sls_export_mappings(struct kobject *resource_kobj)
+-{
+-	uint8_t region;
+-	int err = 0;
+-
+-	SLS_DBG("Building SLS memory mappings sysfs\n");
+-
+-	mappings_kobj =
+-		kobject_create_and_add(DEVICE_MAPPINGS_PATH, resource_kobj);
+-
+-	if (!mappings_kobj) {
+-		SLS_ERR("Unable to create mappings sysfs kobject\n");
+-		return -ENOMEM;
+-	}
+-
+-	err = sysfs_create_groups(mappings_kobj, mappings_attr_groups);
+-	if (err) {
+-		SLS_ERR("Failed to create mappings sysfs groups\n");
+-		goto mappings_kobj_free;
+-	}
+-
+-	raw_regions_fs = kcalloc(mem_info->nr_regions,
+-				 sizeof(struct raw_region_sysfs), GFP_KERNEL);
+-	if (!raw_regions_fs) {
+-		SLS_ERR("No free memory for raw regions directories\n");
+-		goto mappings_groups_free;
+-	}
+-
+-	for (region = 0; region < mem_info->nr_regions; ++region) {
+-		err = build_raw_region_sysfs(mappings_kobj, region);
+-		if (err) {
+-			SLS_ERR("Failed to build sysfs for mappings region [%hhu]\n",
+-				region);
+-			while (--region >= 0) {
+-				sysfs_remove_groups(
+-					&raw_regions_fs[region].idx_kobj,
+-					raw_regions_fs[region].groups);
+-			}
+-			goto mappings_fs_free;
+-		}
+-	}
+-
+-	SLS_DBG("Built SLS mappings sysfs\n");
+-	return err;
+-
+-mappings_fs_free:
+-	kfree(raw_regions_fs);
+-mappings_groups_free:
+-	sysfs_remove_groups(mappings_kobj, mappings_attr_groups);
+-mappings_kobj_free:
+-	kobject_del(mappings_kobj);
+-	return err ? err : -ENOMEM;
+-}
+-
+-static void sls_destroy_mappings(void)
+-{
+-	SLS_DBG("Destroying SLS memory mappings sysfs\n");
+-
+-	if (!mappings_kobj) {
+-		SLS_ERR("Unexpected state of mappings sysfs kobject (%p).\n",
+-			mappings_kobj);
+-		return;
+-	}
+-
+-	sysfs_remove_groups(mappings_kobj, mappings_attr_groups);
+-	kobject_del(mappings_kobj);
+-
+-	SLS_DBG("Destroyed SLS memory mappings sysfs\n");
+-}
+-
+-int build_sls_sysfs(const struct sls_mem_cunit_info *mem_cunitinfo,
+-		    const struct sls_mem_info *meminfo,
+-		    struct device *resource_dev)
+-{
+-	int cunit;
+-	int err = 0;
+-
+-	mem_cunit_info = mem_cunitinfo;
+-	mem_info = meminfo;
+-
+-	SLS_DBG("Building SLS sysfs\n");
+-	cunits_kobj =
+-		kobject_create_and_add(DEVICE_CUNITS_PATH, &resource_dev->kobj);
+-
+-	if (!cunits_kobj) {
+-		SLS_ERR("Failed to create cunits kobject\n");
+-		return -ENOMEM;
+-	}
+-
+-	err = sysfs_create_groups(cunits_kobj, dev_attr_groups);
+-	if (err) {
+-		SLS_ERR("Failed to create sysfs groups\n");
+-		goto cunits_kobj_free;
+-	}
+-
+-	err = sls_export_mappings(&resource_dev->kobj);
+-	if (err) {
+-		SLS_ERR("Failed to build memory topology sysfs");
+-		goto groups_free;
+-	}
+-
+-	err = sls_export_topology_constants(&resource_dev->kobj);
+-	if (err) {
+-		SLS_ERR("Failed to build memory topology sysfs");
+-		goto mappings_free;
+-	}
+-
+-	cunits_fs = kcalloc(sls_topo()->nr_cunits, sizeof(struct cunit_sysfs),
+-			    GFP_KERNEL);
+-	if (!cunits_fs) {
+-		SLS_ERR("No free memory for cunits directories\n");
+-		goto topology_free;
+-	}
+-
+-	for (cunit = 0; cunit < sls_topo()->nr_cunits; ++cunit) {
+-		err = build_cunit_sysfs(cunits_kobj, cunit);
+-		if (err) {
+-			SLS_ERR("Failed to build sysfs for cunit [%d]\n",
+-				cunit);
+-			while (--cunit >= 0) {
+-				sysfs_remove_groups(
+-					&cunits_fs[cunit]
+-						 .regions_fs.regions_kobj,
+-					cunits_fs[cunit].regions_fs.groups);
+-				sysfs_remove_groups(
+-					&cunits_fs[cunit].cunit_idx_kobj,
+-					cunits_fs[cunit].groups);
+-			}
+-			goto fs_free;
+-		}
+-	}
+-
+-	SLS_DBG("Built SLS sysfs\n");
+-	return err;
+-
+-fs_free:
+-	kfree(cunits_fs);
+-topology_free:
+-	sls_destroy_topology_constants();
+-mappings_free:
+-	sls_destroy_mappings();
+-groups_free:
+-	sysfs_remove_groups(cunits_kobj, dev_attr_groups);
+-cunits_kobj_free:
+-	kobject_del(cunits_kobj);
+-	return err ? err : -ENOMEM;
+-}
+-
+-void destroy_sls_sysfs(void)
+-{
+-	int cunit;
+-
+-	SLS_DBG("Destroying SLS sysfs\n");
+-
+-	for (cunit = 0; cunit < sls_topo()->nr_cunits; ++cunit) {
+-		sysfs_remove_groups(&cunits_fs[cunit].regions_fs.regions_kobj,
+-				    cunits_fs[cunit].regions_fs.groups);
+-		kobject_del(&cunits_fs[cunit].regions_fs.regions_kobj);
+-		sysfs_remove_groups(cunits_kobj, cunits_fs[cunit].groups);
+-		kobject_del(&cunits_fs[cunit].cunit_idx_kobj);
+-	}
+-
+-	sls_destroy_topology_constants();
+-	sysfs_remove_groups(cunits_kobj, dev_attr_groups);
+-	kobject_del(cunits_kobj);
+-	kfree(cunits_fs);
+-
+-	SLS_DBG("Destroyed SLS sysfs\n");
+-}
+diff --git a/drivers/pnm/sls_resource/sysfs/cunits.c b/drivers/pnm/sls_resource/sysfs/cunits.c
+new file mode 100644
+index 000000000..9213bfd8b
+--- /dev/null
++++ b/drivers/pnm/sls_resource/sysfs/cunits.c
+@@ -0,0 +1,387 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#include "allocator.h"
++#include "cunit_scheduler.h"
++#include "log.h"
++#include "private.h"
++#include "sysfs-private.h"
++#include "topo/params.h"
++
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <linux/sls_resources.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++struct cunit_attribute {
++	struct attribute attr;
++	ssize_t (*show)(struct cunit_attribute *attr, char *buf);
++	uint8_t cunit;
++};
++
++struct region_attribute {
++	struct attribute attr;
++	ssize_t (*show)(struct region_attribute *attr, char *buf);
++	uint8_t cunit;
++	uint8_t region;
++};
++
++struct regions_sysfs {
++	struct region_attribute region_attrs[SLS_BLOCK_MAX]
++					    [REGION_SYSFS_ATTR_COUNT];
++	struct attribute
++		*attrs[SLS_BLOCK_MAX][WITH_NULL_TERM(REGION_SYSFS_ATTR_COUNT)];
++	struct attribute_group group[SLS_BLOCK_MAX];
++	const struct attribute_group *groups[WITH_NULL_TERM(SLS_BLOCK_MAX)];
++	struct kobject regions_kobj;
++};
++
++struct cunit_sysfs {
++	struct cunit_attribute attrs[REGION_SYSFS_ATTR_COUNT];
++	struct attribute *attributes[WITH_NULL_TERM(REGION_SYSFS_ATTR_COUNT)];
++	struct attribute_group group;
++	const struct attribute_group *groups[WITH_NULL_TERM(SYSFS_GROUPS_COUNT)];
++	struct regions_sysfs regions_fs;
++	struct kobject cunit_idx_kobj;
++};
++
++static struct cunit_sysfs *cunits_fs;
++static struct kobject *cunits_kobj;
++static const struct sls_mem_cunit_info *mem_cunit_info;
++
++static ssize_t nr_cunits_show(struct device *device,
++			      struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "%llu\n", mem_cunit_info->nr_cunits);
++}
++static DEVICE_ATTR_RO(nr_cunits);
++
++static struct attribute *cunits_attrs[] = {
++	&dev_attr_nr_cunits.attr,
++	NULL,
++};
++
++static struct attribute_group cunits_attr_group = {
++	.attrs = cunits_attrs,
++};
++
++static const struct attribute_group *cunits_attr_groups[] = {
++	&cunits_attr_group,
++	NULL,
++};
++
++static const char *const cunit_attr_name[] = {
++	"state",
++	"size",
++	"free_size",
++	"acquisition_count",
++};
++
++static const char *const region_group_name[] = {
++	"base", "inst", "cfgr", "tags", "psum",
++};
++
++static const char *const region_attr_name[] = {
++	"size",
++	"offset",
++	"map_size",
++	"map_offset",
++};
++
++static ssize_t cunit_show(struct cunit_attribute *attr, char *buf)
++{
++	uint8_t state;
++	uint64_t free_size, size, wr_acq_count;
++
++	if (strcmp(attr->attr.name, cunit_attr_name[0]) == 0) {
++		state = cunit_scheduler_cunit_state(attr->cunit);
++		return sysfs_emit(buf, "%u\n", state);
++	}
++
++	if (strcmp(attr->attr.name, cunit_attr_name[1]) == 0) {
++		size = get_total_size(attr->cunit);
++		return sysfs_emit(buf, "%llu\n", size);
++	}
++
++	if (strcmp(attr->attr.name, cunit_attr_name[2]) == 0) {
++		free_size = get_free_size(attr->cunit);
++		return sysfs_emit(buf, "%llu\n", free_size);
++	}
++
++	if (strcmp(attr->attr.name, cunit_attr_name[3]) == 0) {
++		wr_acq_count = cunit_scheduler_acquisition_count(attr->cunit);
++		return sysfs_emit(buf, "%llu\n", wr_acq_count);
++	}
++
++	return 0;
++}
++
++static ssize_t cunit_attr_show(struct kobject *kobj, struct attribute *attr,
++			       char *buf)
++{
++	struct cunit_attribute *cunit_attr =
++		container_of(attr, struct cunit_attribute, attr);
++
++	if (!cunit_attr->show)
++		return -EIO;
++
++	return cunit_attr->show(cunit_attr, buf);
++}
++
++static ssize_t region_show(struct region_attribute *attr, char *buf)
++{
++	const size_t nr_cunits = mem_cunit_info->nr_cunits;
++	const size_t nr_regions_per_cunit =
++		mem_cunit_info->nr_regions / nr_cunits;
++	const struct sls_mem_cunit_region *cunit_regions =
++		&mem_cunit_info->regions[attr->cunit * nr_regions_per_cunit];
++	const struct sls_mem_cunit_region *region = NULL;
++	size_t idx;
++
++	for (idx = 0; idx < nr_regions_per_cunit; ++idx)
++		if (cunit_regions[idx].type == attr->region)
++			region = &cunit_regions[idx];
++
++	/* [TODO: @p.bred] Make logs here and in other places across the file */
++	if (!region)
++		return -EIO;
++
++	if (strcmp(attr->attr.name, region_attr_name[0]) == 0)
++		return sysfs_emit(buf, "%llu\n", range_len(&region->range));
++
++	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
++		return sysfs_emit(buf, "%llu\n", region->range.start);
++
++	if (strcmp(attr->attr.name, region_attr_name[2]) == 0)
++		return sysfs_emit(buf, "%llu\n", range_len(&region->map_range));
++
++	if (strcmp(attr->attr.name, region_attr_name[3]) == 0)
++		return sysfs_emit(buf, "%llu\n", region->map_range.start);
++
++	return -EIO;
++}
++
++static ssize_t region_attr_show(struct kobject *kobj, struct attribute *attr,
++				char *buf)
++{
++	struct region_attribute *region_attr =
++		container_of(attr, struct region_attribute, attr);
++
++	if (!region_attr->show)
++		return -EIO;
++
++	return region_attr->show(region_attr, buf);
++}
++
++static void fill_region_sysfs(struct regions_sysfs *regions_fs, uint8_t cunit,
++			      uint8_t region)
++{
++	int attr_counter;
++	struct region_attribute *reg_attr;
++
++	for (attr_counter = 0; attr_counter < REGION_SYSFS_ATTR_COUNT;
++	     ++attr_counter) {
++		reg_attr = &regions_fs->region_attrs[region][attr_counter];
++		reg_attr->attr.name = region_attr_name[attr_counter];
++		reg_attr->attr.mode = 0444;
++		reg_attr->show = region_show;
++		reg_attr->cunit = cunit;
++		reg_attr->region = region;
++
++		regions_fs->attrs[region][attr_counter] =
++			&regions_fs->region_attrs[region][attr_counter].attr;
++	}
++
++	regions_fs->attrs[region][REGION_SYSFS_ATTR_COUNT] = NULL;
++	regions_fs->group[region].name = region_group_name[region];
++	regions_fs->group[region].attrs = &regions_fs->attrs[region][0];
++
++	regions_fs->groups[region] = &regions_fs->group[region];
++}
++
++static void fill_regions_sysfs(struct regions_sysfs *regions_fs, uint8_t cunit)
++{
++	int region;
++
++	for (region = 0; region < SLS_BLOCK_MAX; region++)
++		fill_region_sysfs(regions_fs, cunit, region);
++
++	regions_fs->groups[SLS_BLOCK_MAX] = NULL;
++}
++
++static const struct sysfs_ops regions_sysfs_ops = {
++	.show = region_attr_show,
++};
++
++/* Operations on memory regions inside cunit */
++static struct kobj_type regions_type = {
++	.sysfs_ops = &regions_sysfs_ops,
++};
++
++static int build_cunit_regions_sysfs(struct kobject *kobj,
++				     struct regions_sysfs *regions_fs,
++				     uint8_t cunit)
++{
++	int err;
++
++	kobject_init(&regions_fs->regions_kobj, &regions_type);
++	err = kobject_add(&regions_fs->regions_kobj, kobj, "regions");
++	if (err) {
++		kobject_put(&regions_fs->regions_kobj);
++		memset(&regions_fs->regions_kobj, 0,
++		       sizeof(regions_fs->regions_kobj));
++		goto cunit_regions_out;
++	}
++
++	fill_regions_sysfs(regions_fs, cunit);
++
++	err = sysfs_create_groups(&regions_fs->regions_kobj,
++				  regions_fs->groups);
++	if (err)
++		goto cunit_regions_out;
++
++cunit_regions_out:
++	return err;
++}
++
++static void fill_cunit_attrs(struct cunit_sysfs *cunit_fs, uint8_t cunit)
++{
++	int attr_idx;
++
++	for (attr_idx = 0; attr_idx < REGION_SYSFS_ATTR_COUNT; ++attr_idx) {
++		cunit_fs->attrs[attr_idx].attr.name = cunit_attr_name[attr_idx];
++		cunit_fs->attrs[attr_idx].attr.mode = 0444;
++		cunit_fs->attrs[attr_idx].show = cunit_show;
++		cunit_fs->attrs[attr_idx].cunit = cunit;
++
++		cunit_fs->attributes[attr_idx] =
++			&cunit_fs->attrs[attr_idx].attr;
++	}
++
++	cunit_fs->attributes[REGION_SYSFS_ATTR_COUNT] = NULL;
++}
++
++static void fill_cunit_sysfs(struct cunit_sysfs *cunit_fs, uint8_t cunit)
++{
++	fill_cunit_attrs(cunit_fs, cunit);
++	cunit_fs->group.attrs = cunit_fs->attributes;
++	cunit_fs->groups[0] = &cunit_fs->group;
++	cunit_fs->groups[1] = NULL;
++}
++
++static const struct sysfs_ops cunit_sysfs_ops = {
++	.show = cunit_attr_show,
++};
++
++/* Operations on cunit stats */
++static const struct kobj_type cunit_type = {
++	.sysfs_ops = &cunit_sysfs_ops,
++};
++
++static int build_cunit_sysfs(struct kobject *kobj, uint8_t cunit)
++{
++	char buf[4];
++	int err;
++
++	SLS_DBG("Building SLS sysfs for cunit %hhu\n", cunit);
++
++	kobject_init(&cunits_fs[cunit].cunit_idx_kobj, &cunit_type);
++	sprintf(buf, "%hhu", cunit);
++	err = kobject_add(&cunits_fs[cunit].cunit_idx_kobj, kobj, buf);
++	if (err) {
++		kobject_put(&cunits_fs[cunit].cunit_idx_kobj);
++		memset(&cunits_fs[cunit].cunit_idx_kobj, 0,
++		       sizeof(struct kobject));
++		goto build_cunit_out;
++	}
++
++	fill_cunit_sysfs(&cunits_fs[cunit], cunit);
++
++	if (sysfs_create_groups(&cunits_fs[cunit].cunit_idx_kobj,
++				cunits_fs[cunit].groups)) {
++		err = -ENOMEM;
++		goto build_cunit_out;
++	}
++
++	err = build_cunit_regions_sysfs(&cunits_fs[cunit].cunit_idx_kobj,
++					&cunits_fs[cunit].regions_fs, cunit);
++
++build_cunit_out:
++	return err;
++}
++
++int sls_build_cunits_sysfs(struct kobject *parent,
++			   const struct sls_mem_cunit_info *memcunit_info)
++{
++	int rc = 0;
++	uint8_t cunit;
++
++	SLS_DBG("Start building sls cunits sysfs\n");
++
++	mem_cunit_info = memcunit_info;
++
++	cunits_kobj = kobject_create_and_add(DEVICE_CUNITS_PATH, parent);
++
++	if (unlikely(!cunits_kobj)) {
++		SLS_ERR("Failed to create cunits kobject\n");
++		rc = -ENOMEM;
++		goto out;
++	}
++
++	rc = sysfs_create_groups(cunits_kobj, cunits_attr_groups);
++	if (unlikely(rc)) {
++		SLS_ERR("Failed to add attributes to cunits entry\n");
++		goto cunits_kobj_free;
++	}
++
++	cunits_fs = kcalloc(sls_topo()->nr_cunits, sizeof(struct cunit_sysfs),
++			    GFP_KERNEL);
++	if (unlikely(!cunits_fs)) {
++		SLS_ERR("No free memory for cunits directories\n");
++		goto cunits_groups_free;
++	}
++
++	for (cunit = 0; cunit < sls_topo()->nr_cunits; ++cunit) {
++		rc = build_cunit_sysfs(cunits_kobj, cunit);
++		if (likely(rc == 0))
++			continue;
++
++		SLS_ERR("Failed to build sysfs for cunit [%d]\n", cunit);
++		while (--cunit >= 0) {
++			sysfs_remove_groups(
++				&cunits_fs[cunit].regions_fs.regions_kobj,
++				cunits_fs[cunit].regions_fs.groups);
++			sysfs_remove_groups(&cunits_fs[cunit].cunit_idx_kobj,
++					    cunits_fs[cunit].groups);
++		}
++		goto cunits_free;
++	}
++
++	return rc;
++
++cunits_free:
++	kfree(cunits_fs);
++cunits_groups_free:
++	sysfs_remove_groups(cunits_kobj, cunits_attr_groups);
++cunits_kobj_free:
++	kobject_del(cunits_kobj);
++out:
++	return rc;
++}
++
++void sls_destroy_cunits_sysfs(void)
++{
++	uint8_t cunit;
++
++	for (cunit = 0; cunit < sls_topo()->nr_cunits; ++cunit) {
++		sysfs_remove_groups(&cunits_fs[cunit].regions_fs.regions_kobj,
++				    cunits_fs[cunit].regions_fs.groups);
++		kobject_del(&cunits_fs[cunit].regions_fs.regions_kobj);
++		sysfs_remove_groups(cunits_kobj, cunits_fs[cunit].groups);
++		kobject_del(&cunits_fs[cunit].cunit_idx_kobj);
++	}
++
++	kobject_del(cunits_kobj);
++	kfree(cunits_fs);
++}
+diff --git a/drivers/pnm/sls_resource/sysfs/mappings.c b/drivers/pnm/sls_resource/sysfs/mappings.c
+new file mode 100644
+index 000000000..485e08f59
+--- /dev/null
++++ b/drivers/pnm/sls_resource/sysfs/mappings.c
+@@ -0,0 +1,228 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#include "log.h"
++#include "private.h"
++#include "sysfs-private.h"
++#include "topo/params.h"
++
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <linux/sls_resources.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++struct raw_region_attribute {
++	struct attribute attr;
++	ssize_t (*show)(struct raw_region_attribute *attr, char *buf);
++	uint8_t region;
++};
++
++struct raw_region_sysfs {
++	struct raw_region_attribute attrs[RAW_REGION_SYSFS_ATTR_COUNT];
++	struct attribute
++		*attributes[WITH_NULL_TERM(RAW_REGION_SYSFS_ATTR_COUNT)];
++	struct attribute_group group;
++	const struct attribute_group *groups[WITH_NULL_TERM(SYSFS_GROUPS_COUNT)];
++	struct kobject idx_kobj;
++};
++
++static struct kobject *mappings_kobj;
++static struct raw_region_sysfs *raw_regions_fs;
++static const struct sls_mem_info *mem_info;
++
++static ssize_t nr_regions_show(struct device *device,
++			       struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "%llu\n", mem_info->nr_regions);
++}
++static DEVICE_ATTR_RO(nr_regions);
++
++static struct attribute *mappings_attrs[] = {
++	&dev_attr_nr_regions.attr,
++	NULL,
++};
++
++static struct attribute_group mappings_attr_group = {
++	.attrs = mappings_attrs,
++};
++
++static const struct attribute_group *mappings_attr_groups[] = {
++	&mappings_attr_group,
++	NULL,
++};
++
++static const char *const raw_region_attr_name[] = {
++	"offset",
++	"size",
++	"type",
++};
++
++static ssize_t raw_region_show(struct raw_region_attribute *attr, char *buf)
++{
++	uint64_t offset, size;
++	int type;
++
++	if (strcmp(attr->attr.name, raw_region_attr_name[0]) == 0) {
++		offset = mem_info->regions[attr->region].range.start;
++		return sysfs_emit(buf, "%llu\n", offset);
++	}
++
++	if (strcmp(attr->attr.name, raw_region_attr_name[1]) == 0) {
++		size = range_len(&mem_info->regions[attr->region].range);
++		return sysfs_emit(buf, "%llu\n", size);
++	}
++
++	if (strcmp(attr->attr.name, raw_region_attr_name[2]) == 0) {
++		type = mem_info->regions[attr->region].type;
++		return sysfs_emit(buf, "%d\n", type);
++	}
++
++	return 0;
++}
++
++static ssize_t raw_region_attr_show(struct kobject *kobj,
++				    struct attribute *attr, char *buf)
++{
++	struct raw_region_attribute *raw_region_attr =
++		container_of(attr, struct raw_region_attribute, attr);
++
++	if (!raw_region_attr->show)
++		return -EIO;
++
++	return raw_region_attr->show(raw_region_attr, buf);
++}
++
++static const struct sysfs_ops raw_region_sysfs_ops = {
++	.show = raw_region_attr_show,
++};
++
++static struct kobj_type raw_region_type = {
++	.sysfs_ops = &raw_region_sysfs_ops,
++};
++
++static void fill_raw_region_attrs(struct raw_region_sysfs *raw_region_fs,
++				  uint8_t region)
++{
++	int attr_idx;
++
++	for (attr_idx = 0; attr_idx < RAW_REGION_SYSFS_ATTR_COUNT; ++attr_idx) {
++		raw_region_fs->attrs[attr_idx].attr.name =
++			raw_region_attr_name[attr_idx];
++		raw_region_fs->attrs[attr_idx].attr.mode = 0444;
++		raw_region_fs->attrs[attr_idx].show = raw_region_show;
++		raw_region_fs->attrs[attr_idx].region = region;
++
++		raw_region_fs->attributes[attr_idx] =
++			&raw_region_fs->attrs[attr_idx].attr;
++	}
++
++	raw_region_fs->attributes[RAW_REGION_SYSFS_ATTR_COUNT] = NULL;
++}
++
++static void fill_raw_region_sysfs(struct raw_region_sysfs *raw_region_fs,
++				  uint8_t region)
++{
++	fill_raw_region_attrs(raw_region_fs, region);
++	raw_region_fs->group.attrs = raw_region_fs->attributes;
++	raw_region_fs->groups[0] = &raw_region_fs->group;
++	raw_region_fs->groups[1] = NULL;
++}
++
++static int build_raw_region_sysfs(struct kobject *kobj, uint8_t region)
++{
++	char buf[4];
++	int err;
++
++	SLS_DBG("Building SLS sysfs for mappings region %hhu\n", region);
++
++	kobject_init(&raw_regions_fs[region].idx_kobj, &raw_region_type);
++	sprintf(buf, "%hhu", region);
++	err = kobject_add(&raw_regions_fs[region].idx_kobj, kobj, buf);
++	if (err)
++		goto build_raw_region_kobject_out;
++
++	fill_raw_region_sysfs(&raw_regions_fs[region], region);
++
++	err = sysfs_create_groups(&raw_regions_fs[region].idx_kobj,
++				  raw_regions_fs[region].groups);
++	if (err)
++		goto build_raw_region_out;
++
++	return 0;
++
++build_raw_region_out:
++	kobject_del(&raw_regions_fs[region].idx_kobj);
++build_raw_region_kobject_out:
++	kobject_put(&raw_regions_fs[region].idx_kobj);
++	memset(&raw_regions_fs[region].idx_kobj, 0, sizeof(struct kobject));
++	return err;
++}
++
++int sls_build_mappings_sysfs(struct kobject *parent,
++			     const struct sls_mem_info *meminfo)
++{
++	int err = 0;
++	uint8_t region;
++
++	SLS_DBG("Building SLS memory mappings sysfs\n");
++
++	mem_info = meminfo;
++
++	mappings_kobj = kobject_create_and_add(DEVICE_MAPPINGS_PATH, parent);
++
++	if (!mappings_kobj) {
++		SLS_ERR("Unable to create mappings sysfs kobject\n");
++		err = -ENOMEM;
++		goto out;
++	}
++
++	err = sysfs_create_groups(mappings_kobj, mappings_attr_groups);
++	if (err) {
++		SLS_ERR("Failed to create mappings sysfs groups\n");
++		goto mappings_kobj_free;
++	}
++
++	raw_regions_fs = kcalloc(mem_info->nr_regions,
++				 sizeof(struct raw_region_sysfs), GFP_KERNEL);
++	if (!raw_regions_fs) {
++		SLS_ERR("No free memory for raw regions directories\n");
++		goto mappings_groups_free;
++	}
++
++	for (region = 0; region < mem_info->nr_regions; ++region) {
++		err = build_raw_region_sysfs(mappings_kobj, region);
++		if (err == 0)
++			continue;
++
++		SLS_ERR("Failed to build sysfs for mappings region [%hhu]\n",
++			region);
++		while (--region >= 0) {
++			sysfs_remove_groups(&raw_regions_fs[region].idx_kobj,
++					    raw_regions_fs[region].groups);
++		}
++		goto mappings_fs_free;
++	}
++
++	SLS_DBG("Built SLS mappings sysfs\n");
++	return err;
++
++mappings_fs_free:
++	kfree(raw_regions_fs);
++mappings_groups_free:
++	sysfs_remove_groups(mappings_kobj, mappings_attr_groups);
++mappings_kobj_free:
++	kobject_del(mappings_kobj);
++out:
++	return err;
++}
++
++void sls_destroy_mappings_sysfs(void)
++{
++	SLS_DBG("Destroying SLS memory mappings sysfs\n");
++
++	sysfs_remove_groups(mappings_kobj, mappings_attr_groups);
++	kobject_del(mappings_kobj);
++
++	SLS_DBG("Destroyed SLS memory mappings sysfs\n");
++}
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs-private.h b/drivers/pnm/sls_resource/sysfs/sysfs-private.h
+new file mode 100644
+index 000000000..8ebde0601
+--- /dev/null
++++ b/drivers/pnm/sls_resource/sysfs/sysfs-private.h
+@@ -0,0 +1,21 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#include <linux/kobject.h>
++#include <linux/sls_common.h>
++
++#define SYSFS_GROUPS_COUNT 1
++#define REGION_SYSFS_ATTR_COUNT 4
++#define RAW_REGION_SYSFS_ATTR_COUNT 3
++#define WITH_NULL_TERM(var) (var + 1)
++
++int sls_build_cunits_sysfs(struct kobject *parent,
++			   const struct sls_mem_cunit_info *mem_cunit_info);
++void sls_destroy_cunits_sysfs(void);
++
++int sls_build_mappings_sysfs(struct kobject *parent,
++			     const struct sls_mem_info *mem_info);
++void sls_destroy_mappings_sysfs(void);
++
++int sls_build_topology_sysfs(struct kobject *parent);
++void sls_destroy_topology_sysfs(void);
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs.c b/drivers/pnm/sls_resource/sysfs/sysfs.c
+new file mode 100644
+index 000000000..8f92d5525
+--- /dev/null
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.c
+@@ -0,0 +1,182 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#include "sysfs.h"
++#include "allocator.h"
++#include "cunit_scheduler.h"
++#include "log.h"
++#include "private.h"
++#include "process_manager.h"
++#include "sysfs-private.h"
++#include "topo/params.h"
++
++#include <linux/kernel.h>
++#include <linux/sls_resources.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++static ssize_t leaked_show(struct device *device, struct device_attribute *attr,
++			   char *buf)
++{
++	uint64_t leaked = sls_proc_mgr_leaked();
++
++	return sysfs_emit(buf, "%llu\n", leaked);
++}
++static DEVICE_ATTR_RO(leaked);
++
++static ssize_t cleanup_show(struct device *device,
++			    struct device_attribute *attr, char *buf)
++{
++	bool cleanup = sls_proc_mgr_cleanup();
++
++	return sysfs_emit(buf, "%d\n", cleanup);
++}
++
++static ssize_t cleanup_store(struct device *device,
++			     struct device_attribute *attr, const char *buf,
++			     size_t count)
++{
++	if (sysfs_streq(buf, "1")) {
++		if (sls_proc_manager_cleanup_on())
++			SLS_ERR("Failed to enable resource manager\n");
++	} else if (sysfs_streq(buf, "0")) {
++		sls_proc_manager_cleanup_off();
++	} else {
++		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
++			buf);
++	}
++
++	return count;
++}
++static DEVICE_ATTR_RW(cleanup);
++
++static ssize_t acq_timeout_show(struct device *device,
++				struct device_attribute *attr, char *buf)
++{
++	uint64_t acquisition_count = cunit_scheduler_acquisition_timeout();
++
++	return sysfs_emit(buf, "%llu\n", acquisition_count);
++}
++
++static ssize_t acq_timeout_store(struct device *device,
++				 struct device_attribute *attr, const char *buf,
++				 size_t count)
++{
++	uint64_t acq_timeout;
++
++	if (kstrtoull(buf, 10, &acq_timeout)) {
++		SLS_ERR("Failed to convert cunit acquisition timeout string ('%s') to integer.\n",
++			buf);
++		return -EINVAL;
++	}
++	SLS_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
++	cunit_scheduler_set_acquisition_timeout(acq_timeout);
++	return count;
++}
++static DEVICE_ATTR_RW(acq_timeout);
++
++static ssize_t reset_store(struct device *device, struct device_attribute *attr,
++			   const char *buf, size_t count)
++{
++	if (sysfs_streq(buf, "1")) {
++		SLS_DBG("Resetting SLS device via sysfs\n");
++		if (sls_ioctl(NULL, DEVICE_IOCRESET, 0))
++			SLS_ERR("Failed to reset device via sysfs.\n");
++	} else {
++		// Usual behavior is to silently ignore this, so there is no reason
++		// to make it as SLS_WRN.
++		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'reset' file\n",
++			buf);
++	}
++
++	return count;
++}
++static DEVICE_ATTR_WO(reset);
++
++static ssize_t size_show(struct device *device, struct device_attribute *attr,
++			 char *buf)
++{
++	uint64_t value = SLS_MEMORY_SIZE;
++
++	return sysfs_emit(buf, "%llu\n", value);
++}
++static DEVICE_ATTR_RO(size);
++
++static struct attribute *dev_attrs[] = {
++	&dev_attr_acq_timeout.attr, &dev_attr_reset.attr, &dev_attr_leaked.attr,
++	&dev_attr_cleanup.attr,	    &dev_attr_size.attr,  NULL,
++};
++
++static struct attribute_group dev_attr_group = {
++	.attrs = dev_attrs,
++};
++
++static const struct attribute_group *dev_attr_groups[] = {
++	&dev_attr_group,
++	NULL,
++};
++
++int sls_build_sysfs(const struct sls_mem_cunit_info *mem_cunit_info,
++		    const struct sls_mem_info *mem_info,
++		    struct device *resource_dev)
++{
++	struct kobject *const parent = &resource_dev->kobj;
++	int rc = 0;
++
++	SLS_DBG("Building SLS sysfs\n");
++
++	/* create statistics files */
++	rc = sysfs_create_groups(parent, dev_attr_groups);
++	if (unlikely(rc)) {
++		SLS_ERR("Failed to create sysfs groups\n");
++		goto out;
++	}
++
++	/* create cunits entry */
++	rc = sls_build_cunits_sysfs(parent, mem_cunit_info);
++	if (unlikely(rc)) {
++		SLS_ERR("Failed to build cunits sysfs\n");
++		goto group_cleanup;
++	}
++
++	/* create mappings */
++	rc = sls_build_mappings_sysfs(parent, mem_info);
++	if (unlikely(rc)) {
++		SLS_ERR("Failed to build mappings sysfs\n");
++		goto cunits_cleanup;
++	}
++
++	/* create topology entry */
++	rc = sls_build_topology_sysfs(parent);
++	if (unlikely(rc)) {
++		SLS_ERR("Failed to build topology sysfs\n");
++		goto mappings_free;
++	}
++
++	SLS_DBG("SLS sysfs is built\n");
++	return rc;
++
++mappings_free:
++	sls_destroy_mappings_sysfs();
++cunits_cleanup:
++	sls_destroy_cunits_sysfs();
++group_cleanup:
++	sysfs_remove_groups(parent, dev_attr_groups);
++out:
++	return rc;
++}
++
++void sls_destroy_sysfs(struct device *dev)
++{
++	SLS_DBG("Destroying SLS sysfs\n");
++
++	sysfs_remove_groups(&dev->kobj, dev_attr_groups);
++
++	sls_destroy_cunits_sysfs();
++
++	sls_destroy_mappings_sysfs();
++
++	sls_destroy_topology_sysfs();
++
++	SLS_DBG("SLS sysfs is destroyed\n");
++}
+diff --git a/drivers/pnm/sls_resource/sysfs.h b/drivers/pnm/sls_resource/sysfs/sysfs.h
+similarity index 74%
+rename from drivers/pnm/sls_resource/sysfs.h
+rename to drivers/pnm/sls_resource/sysfs/sysfs.h
+index cf09ecc03..271d99faf 100644
+--- a/drivers/pnm/sls_resource/sysfs.h
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.h
+@@ -7,9 +7,9 @@
+ #include <linux/device.h>
+ #include <linux/sls_common.h>
+ 
+-int build_sls_sysfs(const struct sls_mem_cunit_info *mem_cunit_info,
++int sls_build_sysfs(const struct sls_mem_cunit_info *mem_cunit_info,
+ 		    const struct sls_mem_info *mem_info,
+ 		    struct device *resource_dev);
+-void destroy_sls_sysfs(void);
++void sls_destroy_sysfs(struct device *dev);
+ 
+ #endif /* __SLS_SYSFS__ */
+diff --git a/drivers/pnm/sls_resource/topo/export.c b/drivers/pnm/sls_resource/sysfs/topology.c
+similarity index 85%
+rename from drivers/pnm/sls_resource/topo/export.c
+rename to drivers/pnm/sls_resource/sysfs/topology.c
+index 8386f5112..6c75fb592 100644
+--- a/drivers/pnm/sls_resource/topo/export.c
++++ b/drivers/pnm/sls_resource/sysfs/topology.c
+@@ -1,10 +1,9 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "export.h"
+ #include "log.h"
+-#include "params.h"
+-#include "private.h"
++#include "sysfs-private.h"
++#include "topo/params.h"
+ 
+ #include <linux/sls_resources.h>
+ 
+@@ -76,39 +75,41 @@ static const struct attribute_group *mem_topo_attr_groups[] = {
+ 	NULL,
+ };
+ 
+-int sls_export_topology_constants(struct kobject *resource_kobj)
++int sls_build_topology_sysfs(struct kobject *resource_kobj)
+ {
++	int rc = 0;
++
+ 	SLS_DBG("Building SLS memory topology sysfs\n");
+ 
+ 	mem_topo_kobj =
+ 		kobject_create_and_add(DEVICE_TOPOLOGY_PATH, resource_kobj);
+ 
+-	if (!mem_topo_kobj) {
++	if (unlikely(!mem_topo_kobj)) {
+ 		SLS_ERR("Unable to create topology sysfs kobject\n");
+-		return -ENOMEM;
++		rc = -ENOMEM;
++		goto out;
+ 	}
+ 
+-	if (sysfs_create_groups(mem_topo_kobj, mem_topo_attr_groups)) {
++	rc = sysfs_create_groups(mem_topo_kobj, mem_topo_attr_groups);
++	if (unlikely(rc)) {
+ 		SLS_ERR("Unable to create topology sysfs groups\n");
+-		kobject_del(mem_topo_kobj);
+-		return -ENOMEM;
++		goto sysfs_group_free;
+ 	}
+ 
+ 	SLS_DBG("Built SLS memory topology sysfs\n");
+ 
+-	return 0;
++	return rc;
++
++sysfs_group_free:
++	kobject_del(mem_topo_kobj);
++out:
++	return rc;
+ }
+ 
+-void sls_destroy_topology_constants(void)
++void sls_destroy_topology_sysfs(void)
+ {
+ 	SLS_DBG("Destroying SLS memory topology sysfs\n");
+ 
+-	if (!mem_topo_kobj) {
+-		SLS_ERR("Unexpected state of topology sysfs kobject (%p).\n",
+-			mem_topo_kobj);
+-		return;
+-	}
+-
+ 	sysfs_remove_groups(mem_topo_kobj, mem_topo_attr_groups);
+ 	kobject_del(mem_topo_kobj);
+ 
+diff --git a/drivers/pnm/sls_resource/topo/export.h b/drivers/pnm/sls_resource/topo/export.h
+deleted file mode 100644
+index d79dfc2ae..000000000
+--- a/drivers/pnm/sls_resource/topo/export.h
++++ /dev/null
+@@ -1,12 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __SLS_TOPOLOGY_EXPORT__
+-#define __SLS_TOPOLOGY_EXPORT__
+-
+-#include <linux/kobject.h>
+-
+-int sls_export_topology_constants(struct kobject *resource_kobj);
+-void sls_destroy_topology_constants(void);
+-
+-#endif /* __SLS_TOPOLOGY_EXPORT__ */
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 555afabcb..c123d11c9 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -39,14 +39,11 @@
+ /* Path to sls_resource sysfs root */
+ #define SLS_SYSFS_ROOT "/sys/class/" SLS_RESOURCE_PATH_INTERNAL
+ 
+-/* Path for cunits info */
+-#define DEVICE_CUNITS_PATH "cunits"
+ /* Path for mappings info */
+ #define DEVICE_MAPPINGS_PATH "mappings"
+ 
+ // Block of sysfs paths for device manipulation and statistics
+-// SLS_RESOURCE_PATH/cunits/
+-// [TODO: MCS23-1498] Move this paths to upper directory
++// SLS_RESOURCE_PATH/
+ 
+ /* O_WRONLY Path to reset device, write "1" for reset */
+ #define DEVICE_RESET_PATH "reset"
+@@ -113,6 +110,9 @@
+ // Block of sysfs paths for cunits info, all O_RDONLY
+ // SLS_RESOURCE_PATH/cunit/%d
+ 
++/* Path for cunits info */
++#define DEVICE_CUNITS_PATH "cunits"
++
+ /* O_RDONLY Rank state, 0 = free, 1 = busy */
+ #define CUNIT_STATE_PATH "state"
+ /* O_RDWR Rank acquisitions count */
+-- 
+2.34.1
+

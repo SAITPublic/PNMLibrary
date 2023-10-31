@@ -1,7 +1,7 @@
 From 5461d16d802ba59c180eb31b69c341883024aacf Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Tue, 25 Jul 2023 09:41:37 +0000
-Subject: [PATCH 26/27] [curl] Fix build
+Subject: [PATCH 26/29] [curl] Fix build
 
 Workaround for gramineproject/gramine#1459.
 

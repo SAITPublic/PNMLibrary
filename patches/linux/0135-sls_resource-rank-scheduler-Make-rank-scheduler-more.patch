@@ -1,7 +1,7 @@
 From b4027227cc11fda9fa96809ccf30cae65c452769 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Mon, 10 Jul 2023 23:36:57 -0400
-Subject: [PATCH 135/161] [sls_resource][rank scheduler] Make rank scheduler
+Subject: [PATCH 135/225] [sls_resource][rank scheduler] Make rank scheduler
  more independent
 
 Related-to: MCS23-1300

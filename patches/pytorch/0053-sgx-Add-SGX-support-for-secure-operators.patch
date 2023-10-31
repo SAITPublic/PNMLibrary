@@ -1,7 +1,7 @@
 From d9bf2c57432d3ae5dfb2507b1ef38a739fa254ed Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Wed, 29 Jun 2022 18:16:27 +0300
-Subject: [PATCH 053/128] [sgx] Add SGX support for secure operators
+Subject: [PATCH 053/135] [sgx] Add SGX support for secure operators
 
 Make USE_AXDIMM_SGX a dependent option and forward it through
 setup.py.

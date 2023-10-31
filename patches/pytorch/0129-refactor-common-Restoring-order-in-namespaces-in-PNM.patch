@@ -1,0 +1,348 @@
+From 22fd2cf3b851dc5d41cb6b0ed69e2bba9a56db42 Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Thu, 7 Sep 2023 19:17:59 +0300
+Subject: [PATCH 129/135] [refactor][common] Restoring order in namespaces in
+ PNMLibrary
+
+Refers to MCS23-1358
+
+Signed-off-by: Nataliia Cherepanova nataly.cher@partner.samsung.com
+---
+ aten/src/ATen/native/pnm/PNMSecureTensor.cpp  |  4 +-
+ aten/src/ATen/native/pnm/PNMSecureTensor.h    |  2 +-
+ aten/src/ATen/native/pnm/PNMTensor.cpp        |  2 +-
+ aten/src/ATen/native/pnm/PNMTypeHelpers.h     |  8 ++--
+ aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp | 26 ++++++-------
+ caffe2/operators/lengths_reducer_ops_pnm.cc   | 14 +++----
+ .../operators/lengths_reducer_ops_sec_pnm.h   | 38 +++++++++----------
+ caffe2/python/pybind_state_pnm.cc             |  2 +-
+ 8 files changed, 48 insertions(+), 48 deletions(-)
+
+diff --git a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+index 0b0081fe..5272b371 100644
+--- a/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMSecureTensor.cpp
+@@ -93,7 +93,7 @@ void PnmSecureTensor::load(const void* weights_data) {
+     }
+   }
+ 
+-  const auto& rows_view = ::pnm::make_view(std::cref(tables_rows_num_).get());
++  const auto& rows_view = ::pnm::views::make_view(std::cref(tables_rows_num_).get());
+ 
+   ::sls::secure::DeviceArguments args(::sls::secure::UntrustedDeviceParams{
+       .rows = rows_view,
+@@ -105,7 +105,7 @@ void PnmSecureTensor::load(const void* weights_data) {
+   if (scalar_type_ == torch::kFloat32) {
+     auto tensor_data_ptr = static_cast<const float*>(weights_data);
+     const auto& weights_view =
+-        ::pnm::make_view(tensor_data_ptr, tensor_data_ptr + tables_size_);
++        ::pnm::views::make_view(tensor_data_ptr, tensor_data_ptr + tables_size_);
+     const auto& scaled_data = apply_scale<float>(weights_view);
+     runner_->load_tables(
+         scaled_data.data(), rows_view, sparse_feature_size_, with_tag_);
+diff --git a/aten/src/ATen/native/pnm/PNMSecureTensor.h b/aten/src/ATen/native/pnm/PNMSecureTensor.h
+index 1c84cb2c..3f281a0e 100644
+--- a/aten/src/ATen/native/pnm/PNMSecureTensor.h
++++ b/aten/src/ATen/native/pnm/PNMSecureTensor.h
+@@ -52,7 +52,7 @@ class PnmSecureTensor : public PnmBaseTensor {
+ 
+  private:
+   template <typename T>
+-  auto apply_scale(::pnm::common_view<const T> src) {
++  auto apply_scale(::pnm::views::common<const T> src) {
+     using secure_core_value_type =
+         typename SecureTypeTraits<T>::secure_engine_value_t;
+     std::vector<secure_core_value_type> output;
+diff --git a/aten/src/ATen/native/pnm/PNMTensor.cpp b/aten/src/ATen/native/pnm/PNMTensor.cpp
+index 68f71e2e..a61b9998 100644
+--- a/aten/src/ATen/native/pnm/PNMTensor.cpp
++++ b/aten/src/ATen/native/pnm/PNMTensor.cpp
+@@ -86,7 +86,7 @@ void PnmTensor::load(const void* weights_data) {
+       sparse_feature_size_ * c10::scalarTypeToTypeMeta(scalar_type_).itemsize();
+ 
+   tables_ = ::pnm::memory::EmbeddedTables::create(
+-      ::pnm::make_view(static_cast<const uint8_t*>(weights_data), tables_size),
++      ::pnm::views::make_view(static_cast<const uint8_t*>(weights_data), tables_size),
+       tables_rows_num_,
+       sparse_feature_size_ * c10::scalarTypeToTypeMeta(scalar_type_).itemsize(),
+       get_pnm_context(),
+diff --git a/aten/src/ATen/native/pnm/PNMTypeHelpers.h b/aten/src/ATen/native/pnm/PNMTypeHelpers.h
+index bbf0939e..9cb2b9ee 100644
+--- a/aten/src/ATen/native/pnm/PNMTypeHelpers.h
++++ b/aten/src/ATen/native/pnm/PNMTypeHelpers.h
+@@ -41,8 +41,8 @@ struct SecureScale {
+   using scaled_t = typename SecureTypeTraits<T>::secure_engine_value_t;
+ 
+   static void apply(
+-      ::pnm::common_view<const initial_t> src,
+-      ::pnm::common_view<scaled_t> dst) {
++      ::pnm::views::common<const initial_t> src,
++      ::pnm::views::common<scaled_t> dst) {
+     std::transform(src.begin(), src.end(), dst.begin(), [](const auto v) {
+       return static_cast<scaled_t>(
+           v * SecureTypeTraits<initial_t>::SCALE_FACTOR);
+@@ -50,8 +50,8 @@ struct SecureScale {
+   }
+ 
+   static void reverse(
+-      ::pnm::common_view<const scaled_t> src,
+-      ::pnm::common_view<initial_t> dst) {
++      ::pnm::views::common<const scaled_t> src,
++      ::pnm::views::common<initial_t> dst) {
+     std::transform(src.begin(), src.end(), dst.begin(), [](const auto v) {
+       return static_cast<initial_t>(v) /
+           SecureTypeTraits<initial_t>::SCALE_FACTOR;
+diff --git a/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp b/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp
+index c99eaaaa..79aa6934 100644
+--- a/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp
++++ b/aten/src/ATen/native/pnm/ops/EmbeddingBag.cpp
+@@ -32,19 +32,19 @@ namespace pnm {
+ at::Tensor embedding_bag_forward_simple_impl(
+     const at::Tensor& weights,
+     const at::Tensor& indices,
+-    ::pnm::common_view<const uint32_t> lengths_view,
+-    ::pnm::common_view<uint8_t> output_view,
++    ::pnm::views::common<const uint32_t> lengths_view,
++    ::pnm::views::common<uint8_t> output_view,
+     uint32_t minibatch_size) {
+   const PnmTensor& ten = convert<PnmTensor>(weights);
+   const auto& tables_rows_num = ten.get_tables_rows_num();
+ 
+   PNMSLSOperation sls_op{
+       ten.get_sparse_feature_size(),
+-      ::pnm::make_view(tables_rows_num),
++      ::pnm::views::make_view(tables_rows_num),
+       ten.get_tables_layout(),
+       ten.get_sls_type()};
+ 
+-  auto indices_view = ::pnm::view_cast<const uint32_t>(::pnm::make_view(
++  auto indices_view = ::pnm::views::view_cast<const uint32_t>(::pnm::views::make_view(
+       static_cast<const uint8_t*>(indices.data_ptr()), indices.nbytes()));
+ 
+   sls_op.set_run_params(
+@@ -66,22 +66,22 @@ at::Tensor embedding_bag_forward_simple_impl(
+ at::Tensor embedding_bag_forward_secure_impl(
+     const at::Tensor& weights,
+     const at::Tensor& indices,
+-    ::pnm::common_view<const uint32_t> lengths_view,
+-    ::pnm::common_view<uint8_t> output_view,
++    ::pnm::views::common<const uint32_t> lengths_view,
++    ::pnm::views::common<uint8_t> output_view,
+     uint32_t minibatch_size) {
+   const PnmSecureTensor& sec_ten = convert<PnmSecureTensor>(weights);
+ 
+-  ::pnm::common_view<uint8_t> checks{};
++  ::pnm::views::common<uint8_t> checks{};
+   std::vector<uint8_t> tag_checks_;
+   if (sec_ten.with_tag()) {
+     tag_checks_.resize(minibatch_size * sec_ten.get_num_tables());
+-    checks = ::pnm::make_view(tag_checks_);
++    checks = ::pnm::views::make_view(tag_checks_);
+   }
+ 
+   auto status = sec_ten.get_runner().run(
+       minibatch_size,
+       lengths_view,
+-      ::pnm::make_view(
++      ::pnm::views::make_view(
+           static_cast<const uint32_t*>(indices.data_ptr()),
+           static_cast<const uint32_t*>(indices.data_ptr()) +
+               indices.sizes()[0]),
+@@ -90,11 +90,11 @@ at::Tensor embedding_bag_forward_secure_impl(
+ 
+   TORCH_CHECK(status, "Pnm secure embeddings calculation failed");
+ 
+-  auto output_int_v = ::pnm::view_cast<const uint32_t>(output_view);
++  auto output_int_v = ::pnm::views::view_cast<const uint32_t>(output_view);
+ 
+   if (weights.dtype() == torch::kFloat32) {
+     SecureScale<float>::reverse(
+-        output_int_v, ::pnm::view_cast<float>(output_view));
++        output_int_v, ::pnm::views::view_cast<float>(output_view));
+   }
+ 
+   return torch::from_blob(
+@@ -138,11 +138,11 @@ at::Tensor embedding_bag_forward_only_pnm(
+   const auto psum_buf_size_bytes = base_ten.get_num_tables() * minibatch_size *
+       base_ten.get_sparse_feature_size() * weights.dtype().itemsize();
+   uint8_t* psum_buf = new uint8_t[psum_buf_size_bytes];
+-  auto output_view = ::pnm::make_view(psum_buf, psum_buf + psum_buf_size_bytes);
++  auto output_view = ::pnm::views::make_view(psum_buf, psum_buf + psum_buf_size_bytes);
+ 
+   std::vector<uint32_t> pnm_lengths;
+   transform_offsets(offsets, pnm_lengths);
+-  auto lengths_view = ::pnm::make_view(std::cref(pnm_lengths).get());
++  auto lengths_view = ::pnm::views::make_view(std::cref(pnm_lengths).get());
+ 
+   if (base_ten.get_tensor_type() == PnmTensorType::PNM_SECURE) {
+     return embedding_bag_forward_secure_impl(
+diff --git a/caffe2/operators/lengths_reducer_ops_pnm.cc b/caffe2/operators/lengths_reducer_ops_pnm.cc
+index 7af4d8b6..9fbd5ed9 100644
+--- a/caffe2/operators/lengths_reducer_ops_pnm.cc
++++ b/caffe2/operators/lengths_reducer_ops_pnm.cc
+@@ -302,21 +302,21 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+ 
+     PNMSLSOperation sls_op{
+         sparse_feature_size,
+-        pnm::make_const_view(tables_sizes_),
++        pnm::views::make_const_view(tables_sizes_),
+         tables_.get(),
+         SLSType::Float};
+ 
+     // NOTE: After the procedure above the _offset_ variables contain the actual
+     // full sizes
+-    auto lengths_view = pnm::view_cast<const uint32_t>(
+-        pnm::make_view(lengths_blocked_, lengths_offset_in_bytes));
+-    auto indices_view = pnm::view_cast<const uint32_t>(
+-        pnm::make_view(indices_blocked_, indices_offset_in_bytes));
++    auto lengths_view = pnm::views::view_cast<const uint32_t>(
++        pnm::views::make_view(lengths_blocked_, lengths_offset_in_bytes));
++    auto indices_view = pnm::views::view_cast<const uint32_t>(
++        pnm::views::make_view(indices_blocked_, indices_offset_in_bytes));
+     // NOTE: Even though this method is marked as deprecated, it's successor
+     // `data_ptr` for some reason is not available in this file...
+     // NOTE: We can only call .data<T> with the exact T, otherwise this will
+     // throw an error. And so we cast this ourselves after getting a pointer
+-    auto psum_view = pnm::make_view(
++    auto psum_view = pnm::views::make_view(
+         reinterpret_cast<uint8_t*>(output->template data<T>()),
+         output->nbytes());
+ 
+@@ -376,7 +376,7 @@ class PNMSparseLengthsReductionOpVec : public Operator<PNMContext> {
+             "mem_preference", SLS_ALLOC_AUTO));
+ 
+     tables_ = pnm::memory::EmbeddedTables::create(
+-        pnm::make_view<const uint8_t>(
++        pnm::views::make_view<const uint8_t>(
+             static_cast<const uint8_t*>(data), tables_size * sizeof(T)),
+         rows,
+         sparse_feature_size * sizeof(T),
+diff --git a/caffe2/operators/lengths_reducer_ops_sec_pnm.h b/caffe2/operators/lengths_reducer_ops_sec_pnm.h
+index 66ca2572..7fa3821f 100644
+--- a/caffe2/operators/lengths_reducer_ops_sec_pnm.h
++++ b/caffe2/operators/lengths_reducer_ops_sec_pnm.h
+@@ -84,9 +84,9 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+       auto& indicesInput = Input(indices_vec_start_idx + i);
+       auto& lengthsInput = Input(lengths_vec_start_idx + i);
+ 
+-      auto indices = pnm::make_view(
++      auto indices = pnm::views::make_view(
+           indicesInput.template data<IndexType>(), indicesInput.numel());
+-      auto lengths = pnm::make_view(
++      auto lengths = pnm::views::make_view(
+           lengthsInput.template data<int>(), lengthsInput.numel());
+ 
+       CAFFE_ENFORCE_GT(indices.size(), 0, "indicesInput can't be empty");
+@@ -116,21 +116,21 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+         at::dtype<T>());
+ 
+     T* output_buf = output->template data<T>();
+-    auto output_view = pnm::make_view(
++    auto output_view = pnm::views::make_view(
+         output_buf,
+         output_buf + minibatch_size * block_size_ * sparse_feature_size_);
+ 
+-    pnm::common_view<uint8_t> checks{};
++    ::pnm::views::common<uint8_t> checks{};
+     if (with_tag_) {
+       tag_checks_.resize(minibatch_size * block_size_);
+-      checks = pnm::make_view(tag_checks_);
++      checks = pnm::views::make_view(tag_checks_);
+     }
+ 
+     auto status = runner_->run(
+         minibatch_size,
+-        pnm::make_view(std::cref(lengths_blocked_).get()),
+-        pnm::make_view(std::cref(indices_blocked_).get()),
+-        pnm::view_cast<uint8_t>(output_view),
++        pnm::views::make_view(std::cref(lengths_blocked_).get()),
++        pnm::views::make_view(std::cref(indices_blocked_).get()),
++        pnm::views::view_cast<uint8_t>(output_view),
+         checks);
+ 
+     if (!status) {
+@@ -140,7 +140,7 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+           LOG(ERROR) << "\t" << i;
+     }
+ 
+-    auto output_int_v = pnm::view_cast<secure_core_value_type>(output_view);
++    auto output_int_v = pnm::views::view_cast<secure_core_value_type>(output_view);
+ 
+     if constexpr (::at::native::pnm::SecureTypeTraits<T>::APPLY_SCALE) {
+       std::transform(
+@@ -165,12 +165,12 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+ 
+   void init_secure_runner(
+       uint64_t sparse_feature_size,
+-      pnm::common_view<const uint32_t> rows,
+-      pnm::common_view<const secure_core_value_type> data) {
++      ::pnm::views::common<const uint32_t> rows,
++      ::pnm::views::common<const secure_core_value_type> data) {
+     size_t tables_size_bytes = tables_size_ * sizeof(T);
+     if (with_tag_) {
+       tables_size_bytes +=
+-          (tables_size_ / sparse_feature_size_) * sizeof(pnm::uint128_t);
++          (tables_size_ / sparse_feature_size_) * sizeof(pnm::types::uint128_t);
+     }
+     LOG(INFO) << "Operator PNMSecureSparseLengthsReductionOpVec: "
+               << " Tables size in bytes: " << tables_size_bytes;
+@@ -201,7 +201,7 @@ class PNMSecureSparseLengthsReductionOpVec : public Operator<PNMContext> {
+                                // "block_size_" of them).
+ 
+   static constexpr auto tag_size =
+-      sizeof(pnm::uint128_t) / sizeof(secure_core_value_type);
++      sizeof(pnm::types::uint128_t) / sizeof(secure_core_value_type);
+   int64_t sparse_feature_size_{};
+   size_t tables_size_{};
+   std::vector<uint32_t> rows_;
+@@ -243,7 +243,7 @@ void PNMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+       mmap(nullptr, tables_size_ * sizeof(T), PROT_READ, MAP_PRIVATE, fd, 0);
+   CAFFE_ENFORCE_NE(data, MAP_FAILED, "Fail to map embedded tables file");
+ 
+-  auto data_v = pnm::make_view(
++  auto data_v = pnm::views::make_view(
+       static_cast<const T*>(data), static_cast<const T*>(data) + tables_size_);
+ 
+   if constexpr (::at::native::pnm::SecureTypeTraits<T>::APPLY_SCALE) {
+@@ -258,11 +258,11 @@ void PNMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+         });
+     init_secure_runner(
+         sparse_feature_size_,
+-        pnm::make_view(std::cref(rows_).get()),
+-        pnm::make_view(std::cref(qdata).get()));
++        pnm::views::make_view(std::cref(rows_).get()),
++        pnm::views::make_view(std::cref(qdata).get()));
+   } else {
+     init_secure_runner(
+-        sparse_feature_size_, pnm::make_view(std::cref(rows_).get()), data_v);
++        sparse_feature_size_, pnm::views::make_view(std::cref(rows_).get()), data_v);
+   }
+ 
+   CAFFE_ENFORCE_EQ(
+@@ -305,8 +305,8 @@ void PNMSecureSparseLengthsReductionOpVec<T, InputTypes, runner_type>::
+ 
+   init_secure_runner(
+       sparse_feature_size_,
+-      pnm::make_view(std::cref(rows_).get()),
+-      pnm::make_view(std::cref(qdata).get()));
++      pnm::views::make_view(std::cref(rows_).get()),
++      pnm::views::make_view(std::cref(qdata).get()));
+ }
+ } // namespace caffe2
+ 
+diff --git a/caffe2/python/pybind_state_pnm.cc b/caffe2/python/pybind_state_pnm.cc
+index 71150d61..ef3d49bc 100644
+--- a/caffe2/python/pybind_state_pnm.cc
++++ b/caffe2/python/pybind_state_pnm.cc
+@@ -82,7 +82,7 @@ void addPNMGlobalMethods(py::module& m) {
+           }
+ 
+           tables = pnm::memory::EmbeddedTables::create(
+-              pnm::make_view(addr, file_size),
++              pnm::views::make_view(addr, file_size),
+               table_entry,
+               row_size_in_bytes,
+               pnm_ctx,
+-- 
+2.34.1
+

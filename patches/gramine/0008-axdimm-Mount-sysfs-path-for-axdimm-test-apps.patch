@@ -1,7 +1,7 @@
 From c010cc07401b372cd51d6623cfe18cbc43848af6 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Tue, 11 Oct 2022 16:21:07 +0300
-Subject: [PATCH 08/27] [axdimm] Mount sysfs path for axdimm test apps
+Subject: [PATCH 08/29] [axdimm] Mount sysfs path for axdimm test apps
 
 Add sysfs mount commant to secndp manifest. This allows to handle latest
 changes in axdimm library.

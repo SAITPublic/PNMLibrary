@@ -13,11 +13,13 @@
 
 #include "sls_suppl.h"
 
-#include "core/device/sls/rank_address.h"
+#include "core/device/sls/utils/rank_address.h"
 #include "core/memory/imdb/accessor.h"
 #include "core/memory/sls/cxl/channel_accessor.h"
 
 #include "common/topology_constants.h"
+
+#include "test/utils/pnm_fmt.h"
 
 #include "pnmlib/core/accessor.h"
 #include "pnmlib/core/allocator.h"
@@ -44,14 +46,16 @@
 #include <numeric>
 #include <vector>
 
+using pnm::sls::device::topo;
+
 TEST(Accessor, WorkWithAllocator) {
-  auto context = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  auto context = pnm::make_context(pnm::Device::Type::IMDB);
 
   static constexpr auto NVALUE = 16;
   auto region = context->allocator()->allocate(NVALUE * sizeof(uint64_t));
 
   auto acc =
-      pnm::memory::Accessor<uint64_t>::create<pnm::memory::IMDBAccessorCore>(
+      pnm::memory::Accessor<uint64_t>::create<pnm::memory::ImdbAccessorCore>(
           region, context->device());
 
   EXPECT_EQ(acc.size(), NVALUE);
@@ -70,7 +74,7 @@ TEST(Accessor, WorkWithAllocator) {
   context->allocator()->deallocate(region);
 }
 
-class SLSAccessorConstruction : public SLSFixture<uint64_t> {
+class SlsAccessorConstruction : public SlsFixture<uint64_t> {
 protected:
   template <typename A> auto print_accessor_vndrange(A &accessor) {
     pnm::memory::VirtualRankedRegion vr =
@@ -97,25 +101,25 @@ protected:
   };
 };
 
-TEST_F(SLSAccessorConstruction, Replicate) {
+TEST_F(SlsAccessorConstruction, Replicate) {
   auto replicate_region = ctx_->allocator()->allocate(
       TEST_DATASET_SIZE,
       pnm::memory::property::AllocPolicy(SLS_ALLOC_REPLICATE_ALL));
   auto accessor_replicate =
-      pnm::memory::Accessor<uint64_t>::create<pnm::memory::SLSAccessorCore>(
+      pnm::memory::Accessor<uint64_t>::create<pnm::memory::SlsAccessorCore>(
           replicate_region, ctx_->device());
   check_base(accessor_replicate);
   print_accessor_vndrange(accessor_replicate);
-  EXPECT_EQ(active_range(accessor_replicate), pnm::device::topo().NumOfRanks);
+  EXPECT_EQ(active_range(accessor_replicate), topo().NumOfCUnits);
 
   EXPECT_NO_THROW(ctx_->allocator()->deallocate(replicate_region));
 }
 
-TEST_F(SLSAccessorConstruction, Single) {
+TEST_F(SlsAccessorConstruction, Single) {
   auto distribute_region = ctx_->allocator()->allocate(
       TEST_DATASET_SIZE, pnm::memory::property::AllocPolicy(SLS_ALLOC_SINGLE));
   auto accessor_distribute =
-      pnm::memory::Accessor<uint64_t>::create<pnm::memory::SLSAccessorCore>(
+      pnm::memory::Accessor<uint64_t>::create<pnm::memory::SlsAccessorCore>(
           distribute_region, ctx_->device());
   check_base(accessor_distribute);
   print_accessor_vndrange(accessor_distribute);
@@ -124,7 +128,7 @@ TEST_F(SLSAccessorConstruction, Single) {
   EXPECT_NO_THROW(ctx_->allocator()->deallocate(distribute_region));
 }
 
-TEST_F(SLSAccessorConstruction, FromBuffer) {
+TEST_F(SlsAccessorConstruction, FromBuffer) {
   pnm::memory::Buffer<uint64_t> buffer_single(VALUES_COUNT, ctx_);
   auto buffer_accessor_distr = buffer_single.direct_access();
   check_base(buffer_accessor_distr);
@@ -137,21 +141,21 @@ TEST_F(SLSAccessorConstruction, FromBuffer) {
   auto buffer_accessor_repl = buffer_repl.direct_access();
   check_base(buffer_accessor_repl);
   print_accessor_vndrange(buffer_accessor_repl);
-  EXPECT_EQ(active_range(buffer_accessor_repl), pnm::device::topo().NumOfRanks);
+  EXPECT_EQ(active_range(buffer_accessor_repl), topo().NumOfCUnits);
 }
 
-template <typename T> class SLSAccessorOperation : public SLSFixture<T> {
+template <typename T> class SlsAccessorOperation : public SlsFixture<T> {
 protected:
-  void SetUp() override { SLSFixture<T>::SetUp(); }
+  void SetUp() override { SlsFixture<T>::SetUp(); }
 
-  void TearDown() override { SLSFixture<T>::TearDown(); }
+  void TearDown() override { SlsFixture<T>::TearDown(); }
 
   void ReadTest(const pnm::memory::RankedRegion &region) {
     for (const auto &r : region.regions) {
-      if (r.location != -1) {
+      if (r.location.has_value()) {
         auto iptr = pnm::sls::device::InterleavedPointer(
-                        this->rank_mem_[r.location].data(),
-                        pnm::sls::device::rank_to_ha(r.location)) +
+                        this->rank_mem_[*r.location].data(),
+                        pnm::sls::device::cunit_to_ha(*r.location)) +
                     r.start;
 
         std::for_each(this->data_.begin(), this->data_.end(), [&iptr](auto e) {
@@ -161,8 +165,8 @@ protected:
       }
     }
 
-    auto accessor = pnm::memory::Accessor<typename SLSFixture<T>::value_type>::
-        template create<pnm::memory::SLSAccessorCore>(region,
+    auto accessor = pnm::memory::Accessor<typename SlsFixture<T>::value_type>::
+        template create<pnm::memory::SlsAccessorCore>(region,
                                                       this->ctx_->device());
     for (auto i = 0UL; i < this->data_.size(); ++i) {
       ASSERT_EQ(accessor[i], this->data_[i]);
@@ -173,20 +177,20 @@ protected:
   }
 
   void WriteTest(const pnm::memory::RankedRegion &region) {
-    auto accessor = pnm::memory::Accessor<typename SLSFixture<T>::value_type>::
-        template create<pnm::memory::SLSAccessorCore>(region,
+    auto accessor = pnm::memory::Accessor<typename SlsFixture<T>::value_type>::
+        template create<pnm::memory::SlsAccessorCore>(region,
                                                       this->ctx_->device());
 
     std::copy(this->data_.begin(), this->data_.end(), accessor.begin());
 
     for (const auto &r : region.regions) {
-      if (r.location != -1) {
+      if (r.location.has_value()) {
         auto iptr = pnm::sls::device::InterleavedPointer(
-                        this->rank_mem_[r.location].data(),
-                        pnm::sls::device::rank_to_ha(r.location)) +
+                        this->rank_mem_[*r.location].data(),
+                        pnm::sls::device::cunit_to_ha(*r.location)) +
                     r.start;
         for (auto e : this->data_) {
-          using vtype = typename SLSFixture<T>::value_type;
+          using vtype = typename SlsFixture<T>::value_type;
           ASSERT_EQ(*iptr.as<vtype>(), e);
           iptr += sizeof(vtype);
         }
@@ -213,31 +217,31 @@ protected:
 using TestedTypes =
     ::testing::Types<uint16_t, uint32_t, uint64_t, unsigned __int128>;
 
-TYPED_TEST_SUITE(SLSAccessorOperation, TestedTypes);
+TYPED_TEST_SUITE(SlsAccessorOperation, TestedTypes);
 
-TYPED_TEST(SLSAccessorOperation, ReadReplicate) {
+TYPED_TEST(SlsAccessorOperation, ReadReplicate) {
   this->single_test_run(
       [this](auto &r) { this->ReadTest(r); },
       pnm::memory::property::AllocPolicy(SLS_ALLOC_REPLICATE_ALL));
 }
 
-TYPED_TEST(SLSAccessorOperation, ReadSingle) {
+TYPED_TEST(SlsAccessorOperation, ReadSingle) {
   this->single_test_run([this](auto &r) { this->ReadTest(r); },
                         pnm::memory::property::AllocPolicy(SLS_ALLOC_SINGLE));
 }
 
-TYPED_TEST(SLSAccessorOperation, WriteReplicate) {
+TYPED_TEST(SlsAccessorOperation, WriteReplicate) {
   this->single_test_run(
       [this](auto &r) { this->WriteTest(r); },
       pnm::memory::property::AllocPolicy(SLS_ALLOC_REPLICATE_ALL));
 }
 
-TYPED_TEST(SLSAccessorOperation, WriteSingle) {
+TYPED_TEST(SlsAccessorOperation, WriteSingle) {
   this->single_test_run([this](auto &r) { this->WriteTest(r); },
                         pnm::memory::property::AllocPolicy(SLS_ALLOC_SINGLE));
 }
 
-TYPED_TEST(SLSAccessorOperation, MultipleReadWrite) {
+TYPED_TEST(SlsAccessorOperation, MultipleReadWrite) {
   static constexpr auto NALLOC = 10;
   std::vector<pnm::memory::DeviceRegion> mem_alloc(NALLOC);
   for (auto i = 0; i < NALLOC; ++i) {
@@ -255,7 +259,7 @@ TYPED_TEST(SLSAccessorOperation, MultipleReadWrite) {
 
 class ChannelAccessorCore : public ::testing::Test {
 protected:
-  pnm::ContextHandler context_ = pnm::make_context(pnm::Device::Type::SLS_CXL);
+  pnm::ContextHandler context_ = pnm::make_context(pnm::Device::Type::SLS);
 
   using T = uint64_t;
 
@@ -281,7 +285,7 @@ TEST_F(ChannelAccessorCore, CreateFromReplicateAll) {
     ASSERT_NE(vr.begin(), nullptr);
     ASSERT_NE(vr.end(), nullptr);
 
-    auto casted = pnm::view_cast<uint64_t>(vr);
+    auto casted = pnm::views::view_cast<uint64_t>(vr);
     std::copy(goldens.begin(), goldens.end(), casted.begin());
   }
 
@@ -294,7 +298,7 @@ TEST_F(ChannelAccessorCore, CreateFromReplicateAll) {
     ASSERT_EQ(acc[i], i);
 
     for (auto vr : virtual_region) {
-      auto casted = pnm::view_cast<uint64_t>(vr);
+      auto casted = pnm::views::view_cast<uint64_t>(vr);
       ASSERT_EQ(casted[i], i);
     }
   }
@@ -303,10 +307,9 @@ TEST_F(ChannelAccessorCore, CreateFromReplicateAll) {
 }
 
 TEST_F(ChannelAccessorCore, CreateFromSingleChannel) {
-  for (auto channel = 0U; channel < pnm::device::topo().NumOfChannels;
-       ++channel) {
+  for (auto cunit = 0U; cunit < topo().NumOfCUnits; ++cunit) {
     auto addr = context_->allocator()->allocate(
-        elements_count * sizeof(T), pnm::memory::property::CURegion(channel));
+        elements_count * sizeof(T), pnm::memory::property::CURegion(cunit));
 
     auto acc =
         pnm::memory::Accessor<T>::create<pnm::memory::ChannelAccessorCore>(
@@ -317,7 +320,7 @@ TEST_F(ChannelAccessorCore, CreateFromSingleChannel) {
     auto virtual_region =
         std::get<pnm::memory::VirtualRankedRegion>(acc.virtual_range());
 
-    auto predicate = [](pnm::common_view<uint8_t> vr) {
+    auto predicate = [](pnm::views::common<uint8_t> vr) {
       return vr.begin() != nullptr && vr.end() != nullptr;
     };
 
@@ -328,7 +331,7 @@ TEST_F(ChannelAccessorCore, CreateFromSingleChannel) {
         std::find_if(virtual_region.begin(), virtual_region.end(), predicate);
 
     static constexpr std::array goldens = {1, 2, 3, 4, 5};
-    auto casted = pnm::view_cast<uint64_t>(*active_vr);
+    auto casted = pnm::views::view_cast<uint64_t>(*active_vr);
     std::copy(goldens.begin(), goldens.end(), casted.begin());
 
     for (auto i = 0U; i < goldens.size(); ++i) {

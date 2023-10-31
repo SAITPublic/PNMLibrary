@@ -1,7 +1,7 @@
 From e90491b47a2e49e7fc5ceb2ca6bb13d41995700b Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 24 Jun 2022 14:46:21 +0900
-Subject: [PATCH 050/128] [lengths_reducer_ops_axdimm.cc] Use updated API to
+Subject: [PATCH 050/135] [lengths_reducer_ops_axdimm.cc] Use updated API to
  call AXDIMM lib
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>

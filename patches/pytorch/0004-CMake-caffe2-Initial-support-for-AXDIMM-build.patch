@@ -1,7 +1,7 @@
 From 6672fd0c5d0caf42a586c8003b6b92ef4f566355 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 1 Nov 2021 12:52:34 +0900
-Subject: [PATCH 004/128] [CMake/caffe2] Initial support for AXDIMM build
+Subject: [PATCH 004/135] [CMake/caffe2] Initial support for AXDIMM build
 
 Add initial support for 'libtorch_axdimm.so' target that's enabled by adding
 '-DUSE_AXDIMM=ON' flag to cmake. The cumulative 'libtorch.so' library gets

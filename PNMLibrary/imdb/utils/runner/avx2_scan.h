@@ -38,7 +38,7 @@ private:
 
     auto make_output_view = [](auto &output) {
       if constexpr (std::is_same_v<output_etype, pnm::imdb::index_vector>) {
-        return pnm::make_view(output);
+        return pnm::views::make_view(output);
       } else {
         return output.view();
       }

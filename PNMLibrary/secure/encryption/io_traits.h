@@ -17,7 +17,7 @@
 
 #include <cstdint>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 // Here we use traits structure to define device-specific method for io.
 // The traits are used because we try to keep original writers/readers unchanged
 // and keep interface of io-system is similar to conventional streams
@@ -26,10 +26,10 @@ template <typename T, typename TT> struct io_traits_base {
   template <typename TData> static constexpr auto data_size = sizeof(TData);
 
   // Size of an extra data (like verification tag, or other) for each row in
-  // embedded table.
-  static constexpr auto meta_size = sizeof(pnm::uint128_t);
+  // embedding table.
+  static constexpr auto meta_size = sizeof(pnm::types::uint128_t);
 
-  // Write extra data for row in embedded tables.
+  // Write extra data for row in embedding tables.
   static void write_meta(T &out, const char *data, uint64_t size) {
     out.write(data, size);
   }
@@ -45,6 +45,6 @@ template <typename T, typename TT> struct io_traits_base {
 
 template <typename T>
 struct io_traits : public io_traits_base<T, io_traits<T>> {};
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif //_SLS_IO_TRAITS_H_

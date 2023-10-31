@@ -1,7 +1,7 @@
 From 5067a6a56e86207d85c04fb385f4b9f535a50cd2 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Fri, 5 May 2023 11:37:09 +0300
-Subject: [PATCH 18/27] [secndp, pytorch] Use build/installation directory
+Subject: [PATCH 18/29] [secndp, pytorch] Use build/installation directory
 
 Reflect changes from SAIT/axdimm_pytorch#61 and use
 build directory of PNMLib in SecNDP test and installation

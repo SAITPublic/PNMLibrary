@@ -13,7 +13,7 @@
 #ifndef _SLS_TEST_CONSTANTS_H
 #define _SLS_TEST_CONSTANTS_H
 
-#include "pnmlib/sls/type.h"
+#include "pnmlib/sls/operation.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -30,7 +30,7 @@ inline constexpr auto ksparse_feature_size = 16;
 inline constexpr auto kmini_batch_size = 16;
 inline constexpr auto knum_idx_value = 32;
 inline constexpr auto knum_indices_per_lookup_fix = 40;
-inline constexpr auto kdata_type = SLSType::Float;
+inline constexpr auto kdata_type = pnm::operations::SlsOperation::Type::Float;
 
 struct PathToTables {
   static inline const std::filesystem::path value{

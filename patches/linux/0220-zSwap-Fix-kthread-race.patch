@@ -1,0 +1,32 @@
+From 2c49ec9391f8d1ebbbcb1719f8f9b025f0d4f96a Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Mon, 23 Oct 2023 10:29:19 +0300
+Subject: [PATCH 220/225] [zSwap] Fix kthread race
+
+* Use kthread_stop mechanism properly.
+Seems we're ending the kthread on a different condition
+before its usual stop by kthread_stop.
+
+Resolve: MCS23-1789
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/zswap/sim.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index b04b655f0..4008d95df 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -341,7 +341,7 @@ int pnm_unit(void *p)
+ 	if (ccore == NULL)
+ 		return -EINVAL;
+ 
+-	while (!kthread_should_stop() && READ_ONCE(sim_is_active)) {
++	while (!kthread_should_stop()) {
+ 		if (!(READ_ONCE(unit->state) & RUNNING))
+ 			continue;
+ 
+-- 
+2.34.1
+

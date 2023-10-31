@@ -1,7 +1,7 @@
 From e25edf65b5204c55306191e7adf617195871fef9 Mon Sep 17 00:00:00 2001
 From: "p.bred" <p.bred@samsung.com>
 Date: Thu, 16 Jun 2022 11:25:36 +0300
-Subject: [PATCH 025/161] [drivers/dax/axdimm] Add memory scale option (#4)
+Subject: [PATCH 025/225] [drivers/dax/axdimm] Add memory scale option (#4)
 
 * add AXDIMM memory range scaling option in DAX driver.
   This is actual for the simulator, the default value reduces

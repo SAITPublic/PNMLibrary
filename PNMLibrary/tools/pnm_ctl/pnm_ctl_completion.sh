@@ -1,10 +1,26 @@
 _pnm_ctl_completion() {
+    SLS_RESOURCE=/sys/class/pnm/sls_resource
+    IMDB_RESOURCE=/sys/class/pnm/imdb_resource
+
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
-    subcommands_1="-h --help setup-shm destroy-shm reset-imdb setup-dax setup-dax-device destroy-dax-device destroy-dax reset-sls info timeout cleanup leaked"
+
+    subcommands_sls="sls-reset sls-info sls-timeout sls-cleanup sls-leaked"
+    subcommands_imdb="imdb-reset imdb-info imdb-cleanup imdb-leaked"
+    subcommands_total="-h --help setup-shm destroy-shm setup-dax setup-dax-device destroy-dax destroy-dax-device"
+
+    shm_args="-h --help -s --sls -i --imdb"
+
+    if test -d "$SLS_RESOURCE"; then
+        subcommands_total+=" $subcommands_sls"
+    fi
+
+    if test -d "$IMDB_RESOURCE"; then
+        subcommands_total+=" $subcommands_imdb"
+    fi
 
     if [[ ${COMP_CWORD} == 1 ]] ; then
-        COMPREPLY=( $(compgen -W "${subcommands_1}" -- ${cur}) )
+        COMPREPLY=( $(compgen -W "${subcommands_total}" -- ${cur}) )
         return 0
     fi
 
@@ -12,7 +28,7 @@ _pnm_ctl_completion() {
     case "${subcmd_1}" in
     setup-shm)
         if [[ ${COMP_CWORD} == 2 ]] ; then
-            COMPREPLY=( $(compgen -W "-s --sls -i --imdb -h --help" -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${shm_args}" -- ${cur}) )
             return 0
         fi
 
@@ -21,23 +37,23 @@ _pnm_ctl_completion() {
     ;;
     destroy-shm)
         if [[ ${COMP_CWORD} == 2 ]] ; then
-            COMPREPLY=( $(compgen -W "-s --sls -i --imdb -h --help" -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${shm_args}" -- ${cur}) )
             return 0
         fi
 
         COMPREPLY=( $(compgen -W "-h --help" -- ${cur}) )
         return 0
     ;;
-    info)
+    sls-info)
         info_subcommands="-h --help --hex -r --ranks --state --acquisition-count --free-size --base-size --base-offset --inst-size --inst-offset --cfgr-size --cfgr-offset --tags-size --tags-offset --psum-size --psum-offset"
         COMPREPLY=( $(compgen -W "${info_subcommands}" -- ${cur}) )
         return 0
     ;;
-    timeout | cleanup)
+    sls-timeout | sls-cleanup | imdb-cleanup)
         COMPREPLY=( $(compgen -W "-h --help --set" -- ${cur}) )
         return 0
     ;;
-    reset-imdb)
+    imdb-reset)
         COMPREPLY=( $(compgen -W "-h --help -H --hardware" -- ${cur}) )
         return 0
     ;;

@@ -25,10 +25,10 @@
 #include <cstdint>
 #include <vector>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
-struct TrivialCPUArgs {
-  pnm::common_view<const uint32_t> rows;
+struct TrivialCpuArgs {
+  pnm::views::common<const uint32_t> rows;
   uint64_t sparse_feature_size;
   bool with_tag;
 };
@@ -45,22 +45,24 @@ public:
   using MemoryReader = TrivialMemoryReader;
   using MemoryWriter = TrivialMemoryWriter;
 
-  void run(size_t minibatch_size, pnm::common_view<const uint32_t> lengths,
-           pnm::common_view<const uint32_t> indices, pnm::common_view<T> psum);
+  void run(size_t minibatch_size, pnm::views::common<const uint32_t> lengths,
+           pnm::views::common<const uint32_t> indices,
+           pnm::views::common<T> psum);
 
 protected:
-  void run_sls(size_t minibatch_size, pnm::common_view<const uint32_t> lengths,
-               pnm::common_view<const uint32_t> indices,
-               pnm::common_view<T> psum);
+  void run_sls(size_t minibatch_size,
+               pnm::views::common<const uint32_t> lengths,
+               pnm::views::common<const uint32_t> indices,
+               pnm::views::common<T> psum);
 
   void run_sls_with_tag(size_t minibatch_size,
-                        pnm::common_view<const uint32_t> lengths,
-                        pnm::common_view<const uint32_t> indices,
-                        pnm::common_view<T> psum);
+                        pnm::views::common<const uint32_t> lengths,
+                        pnm::views::common<const uint32_t> indices,
+                        pnm::views::common<T> psum);
 
 private:
   void init_impl(const DeviceArguments *args) override {
-    const auto &typed_args = args->get<TrivialCPUArgs>();
+    const auto &typed_args = args->get<TrivialCpuArgs>();
     rows_.insert(rows_.end(), typed_args.rows.begin(), typed_args.rows.end());
     sparse_feature_size_ = typed_args.sparse_feature_size;
     with_tag_ = typed_args.with_tag;
@@ -73,10 +75,10 @@ private:
   }
 
   void run_impl(uint64_t minibatch_size,
-                pnm::common_view<const uint32_t> lengths,
-                pnm::common_view<const uint32_t> indices,
-                pnm::common_view<uint8_t> psum) override {
-    run(minibatch_size, lengths, indices, pnm::view_cast<T>(psum));
+                pnm::views::common<const uint32_t> lengths,
+                pnm::views::common<const uint32_t> indices,
+                pnm::views::common<uint8_t> psum) override {
+    run(minibatch_size, lengths, indices, pnm::views::view_cast<T>(psum));
   }
 
   std::vector<uint32_t> rows_;
@@ -88,9 +90,9 @@ private:
 
 template <typename T>
 void TrivialCPU<T>::run(size_t minibatch_size,
-                        pnm::common_view<const uint32_t> lengths,
-                        pnm::common_view<const uint32_t> indices,
-                        pnm::common_view<T> psum) {
+                        pnm::views::common<const uint32_t> lengths,
+                        pnm::views::common<const uint32_t> indices,
+                        pnm::views::common<T> psum) {
   if (!with_tag_) {
     run_sls(minibatch_size, lengths, indices, psum);
   } else {
@@ -100,23 +102,25 @@ void TrivialCPU<T>::run(size_t minibatch_size,
 
 template <typename T>
 void TrivialCPU<T>::run_sls(size_t minibatch_size,
-                            pnm::common_view<const uint32_t> lengths,
-                            pnm::common_view<const uint32_t> indices,
-                            pnm::common_view<T> psum) {
+                            pnm::views::common<const uint32_t> lengths,
+                            pnm::views::common<const uint32_t> indices,
+                            pnm::views::common<T> psum) {
 
-  SLS<T>::compute(data_.data(), rows_, indices.data(), lengths.data(),
-                  sparse_feature_size_, minibatch_size, psum.data());
+  pnm::sls::internal::cpu::Reduction<T>::compute(
+      data_.data(), rows_, indices.data(), lengths.data(), sparse_feature_size_,
+      minibatch_size, psum.data());
 }
 
 template <typename T>
 void TrivialCPU<T>::run_sls_with_tag(size_t minibatch_size,
-                                     pnm::common_view<const uint32_t> lengths,
-                                     pnm::common_view<const uint32_t> indices,
-                                     pnm::common_view<T> psum) {
-  SLS<T>::compute_with_tag(data_.data(), rows_, indices.data(), lengths.data(),
-                           sparse_feature_size_, minibatch_size, psum.data());
+                                     pnm::views::common<const uint32_t> lengths,
+                                     pnm::views::common<const uint32_t> indices,
+                                     pnm::views::common<T> psum) {
+  pnm::sls::internal::cpu::Reduction<T>::compute_with_tag(
+      data_.data(), rows_, indices.data(), lengths.data(), sparse_feature_size_,
+      minibatch_size, psum.data());
 }
 
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // _TRIVIAL_CPU_H

@@ -29,7 +29,7 @@
 #include <utility>
 #include <vector>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 /*! \brief Class that handle information about tables that was involved in
  * encryption process. The main aim of this class is perform decryption and
@@ -38,8 +38,8 @@ namespace sls::secure {
  * */
 template <typename T> class DLRMPostprocessor : public IPostprocessor<T> {
 public:
-  using EEngine = sls::secure::EncryptionEngine<T>;
-  using VEngine = sls::secure::VerificationEngine<>;
+  using EEngine = pnm::sls::secure::EncryptionEngine<T>;
+  using VEngine = pnm::sls::secure::VerificationEngine<>;
 
   DLRMPostprocessor(EEngine e_engine, VEngine v_engine,
                     std::vector<uintptr_t> table_offsets, uintptr_t cols_count)
@@ -47,7 +47,7 @@ public:
         offsets_(std::move(table_offsets)), cols_count_{cols_count} {}
 
 private:
-  void fill_offsets(size_t table_id, pnm::common_view<const uint32_t> indices,
+  void fill_offsets(size_t table_id, pnm::views::common<const uint32_t> indices,
                     std::vector<uintptr_t> &selected_offsets) const {
     auto table_offset = offsets_[table_id];
     selected_offsets.resize(indices.size());
@@ -57,7 +57,7 @@ private:
                    });
   }
 
-  void perform_sls_impl(pnm::common_view<const requests_view> indices,
+  void perform_sls_impl(pnm::views::common<const requests_view> indices,
                         psums_view<T> psum, tags_view<T> tags) const override {
     // SLS for TAG
     auto sls_op =
@@ -84,14 +84,15 @@ private:
         auto current_psum = *(psum.begin() + psum_index);
         std::fill(current_psum.begin(), current_psum.end(), T{});
 
-        auto offset_view = pnm::make_view(sls_offset);
+        auto offset_view = pnm::views::make_view(sls_offset);
         e_engine_.offset_transform_reduce_vec(
             offset_view.begin(), offset_view.end(), current_psum, sls_op_psum);
 
         if (tags.size()) {
           auto etag = v_engine_.offset_transform_reduce_vec(
-              offset_view.begin(), offset_view.end(), pnm::uint128_t{}, sls_op);
-          *reinterpret_cast<pnm::uint128_t *>(
+              offset_view.begin(), offset_view.end(), pnm::types::uint128_t{},
+              sls_op);
+          *reinterpret_cast<pnm::types::uint128_t *>(
               (tags.begin() + psum_index)->begin()) = etag;
         }
 
@@ -103,7 +104,7 @@ private:
   bool
   decrypt_psum_impl(psums_view<T> psums, psums_view<T> epsums,
                     tags_view<T> ctags, tags_view<T> etags,
-                    pnm::common_view<uint8_t> check_result) const override {
+                    pnm::views::common<uint8_t> check_result) const override {
     auto ctag_it = ctags.begin();
     auto etag_it = etags.begin();
     auto *check_it = check_result.begin();
@@ -112,8 +113,8 @@ private:
       e_engine_.decrypt_psum(cres.begin(), cres.end(), eres.begin(),
                              cres.begin());
       if (ctags.size() && etags.size()) {
-        auto ET = *reinterpret_cast<pnm::uint128_t *>(ctag_it->begin());
-        auto CT = *reinterpret_cast<pnm::uint128_t *>(etag_it->begin());
+        auto ET = *reinterpret_cast<pnm::types::uint128_t *>(ctag_it->begin());
+        auto CT = *reinterpret_cast<pnm::types::uint128_t *>(etag_it->begin());
         *check_it = v_engine_.validate_psum(cres.begin(), cres.end(), ET, CT);
         ++ctag_it, ++etag_it;
         return *(check_it++);
@@ -130,6 +131,6 @@ private:
   std::vector<uintptr_t> offsets_;
   uint64_t cols_count_;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // SLS_DLRM_POSTPROCESSOR_H

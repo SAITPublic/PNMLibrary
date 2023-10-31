@@ -1,7 +1,7 @@
 From a178eb5474b605ca6e919cafd7aa97310548451c Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Fri, 10 Mar 2023 20:08:31 +0300
-Subject: [PATCH 106/128] [refactor] Use wrapper class for axdimm device
+Subject: [PATCH 106/135] [refactor] Use wrapper class for axdimm device
 
 After getting rid of `axdimm_create_base_device` and
 `axdimm_destroy_base_device` and instead adding a RAII-friendly class

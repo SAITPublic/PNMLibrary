@@ -1,7 +1,7 @@
 From 2720857061f2efec0fdd1fff761bed7057dee4f8 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@partner.samsung.com>
 Date: Fri, 26 Aug 2022 16:34:28 +0300
-Subject: [PATCH 036/161] [drivers/dax/axdimm] move path of devices into
+Subject: [PATCH 036/225] [drivers/dax/axdimm] move path of devices into
  libaxdimm.h
 
 Resolves: AXDIMM-363

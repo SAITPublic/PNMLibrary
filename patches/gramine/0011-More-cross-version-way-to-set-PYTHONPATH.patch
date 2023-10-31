@@ -1,7 +1,7 @@
 From 3b06efdff4bf319f7b431470ee34248b35017d22 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Tue, 8 Nov 2022 14:02:23 +0000
-Subject: [PATCH 11/27] More cross-version way to set PYTHONPATH
+Subject: [PATCH 11/29] More cross-version way to set PYTHONPATH
 
 ---
  CI-Scripts/env.sh | 2 +-

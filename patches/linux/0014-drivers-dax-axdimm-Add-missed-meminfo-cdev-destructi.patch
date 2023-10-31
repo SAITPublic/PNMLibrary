@@ -1,7 +1,7 @@
 From 27440b420d0ea1a18c9219527364851fbedb9863 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 16 Dec 2021 10:10:46 +0900
-Subject: [PATCH 014/161] [drivers/dax/axdimm] Add missed meminfo cdev
+Subject: [PATCH 014/225] [drivers/dax/axdimm] Add missed meminfo cdev
  destruction
 
 Add .remove handler for devdax (dev_dax_remove) which performs

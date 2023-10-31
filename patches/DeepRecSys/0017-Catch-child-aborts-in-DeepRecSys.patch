@@ -1,7 +1,7 @@
 From b29ec06944aa06c3248a9f09251d9f766abda32b Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Tue, 13 Sep 2022 13:30:40 +0300
-Subject: [PATCH 17/33] Catch child aborts in DeepRecSys.
+Subject: [PATCH 17/34] Catch child aborts in DeepRecSys.
 
 This commit fixes the bug in the DeepRecSys application when the main
 process hangs forever if an inference engine running in a child process

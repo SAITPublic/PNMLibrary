@@ -18,6 +18,8 @@
 #include <memory>
 #include <sstream>
 
+namespace tools::gen::sls {
+
 LengthsGeneratorFactory &LengthsGeneratorFactory::default_factory() {
   static LengthsGeneratorFactory factory;
 
@@ -35,3 +37,5 @@ LengthsGeneratorFactory &LengthsGeneratorFactory::default_factory() {
 
   return factory;
 }
+
+} // namespace tools::gen::sls

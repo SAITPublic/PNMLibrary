@@ -1,0 +1,92 @@
+From c88536c0e3f593860b84be1b84a7ec5a29812f1d Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Wed, 11 Oct 2023 14:29:07 +0000
+Subject: [PATCH 34/34] [SLS] Align with sls device type mergeing
+
+Resolves: MCS23-1641, MCS23-1293
+
+Signed-off by: Savelii Motov <s.motov@samsung.com>
+---
+ DeepRecSys.py           | 1 -
+ models/dlrm_s_caffe2.py | 3 +--
+ run_DeepRecSys_pnm.sh   | 6 +-----
+ utils/utils.py          | 6 ------
+ 4 files changed, 2 insertions(+), 14 deletions(-)
+
+diff --git a/DeepRecSys.py b/DeepRecSys.py
+index e0f9c0a..f0d5bfa 100644
+--- a/DeepRecSys.py
++++ b/DeepRecSys.py
+@@ -166,7 +166,6 @@ def DeepRecSys():
+         tables_descriptor = workspace.PnmStarter(args.table_weight_path, ln_emb,
+                                                  args.arch_sparse_feature_size * dtype_in_bytes,
+                                                  args.mem_preference,
+-                                                 args.sls_device_interface,
+                                                  args.share_tables)
+       else:
+         tables_descriptor = None
+diff --git a/models/dlrm_s_caffe2.py b/models/dlrm_s_caffe2.py
+index cadc74d..e94f442 100644
+--- a/models/dlrm_s_caffe2.py
++++ b/models/dlrm_s_caffe2.py
+@@ -369,8 +369,7 @@ class DLRM_Net(object):
+                                                        [sls_s_combined],
+                                                        tables_layout_descriptor=self.tables_descriptor,
+                                                        path=self.args.table_weight_path,
+-                                                       mem_preference=self.args.mem_preference,
+-                                                       device_type=self.args.sls_device_interface)
++                                                       mem_preference=self.args.mem_preference)
+                 emb_l.append(EE)
+ 
+         return emb_l, weights_l
+diff --git a/run_DeepRecSys_pnm.sh b/run_DeepRecSys_pnm.sh
+index e07ff6d..3bc6001 100755
+--- a/run_DeepRecSys_pnm.sh
++++ b/run_DeepRecSys_pnm.sh
+@@ -108,10 +108,6 @@ do
+           shift
+           SLS_DTYPE=$1
+           ;;
+-  "--sls_device_interface")
+-          shift
+-          SLS_DINTERFACE=$1
+-          ;;
+   "--num_engines")
+           shift
+           inference_engines=$1
+@@ -136,7 +132,7 @@ done
+ 
+ engine_args="--inference_engines $inference_engines --caffe2_net_type $caffe2_net_type"
+ 
+-pnm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION $USE_PNM --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY --sls_device_interface $SLS_DINTERFACE"
++pnm_args="--table_weight_path $table_weight_path $USE_SECURE_ALGO $TAG_VERIFICATION $USE_PNM --sls_dtype $SLS_DTYPE $TABLES_SHARING_STRATEGY"
+ 
+ avg_arrival_rate=1
+ avg_arrival_args="--avg_arrival_rate $avg_arrival_rate"
+diff --git a/utils/utils.py b/utils/utils.py
+index c19c3d7..4848ac3 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -150,9 +150,6 @@ def cli():
+     parser.add_argument("--sls_dtype", type=str, choices=["float32", "int32"], default="float32")
+     parser.add_argument("--private_tables", dest='share_tables', action="store_false", default=True)
+ 
+-    sls_dev_interfaces = {"AXDIMM" : 0, "CXL" : 1}
+-    parser.add_argument("--sls_device_interface", action="store", type=str, choices=sls_dev_interfaces.keys(), default="AXDIMM")
+-
+     args = parser.parse_args()
+ 
+     # Memory preference wasn't set, so get it from number of inference engines
+@@ -162,9 +159,6 @@ def cli():
+     # Convert memory preference to id
+     args.mem_preference = mem_pref_id[args.mem_preference_str]
+ 
+-    # Convert device interface to id
+-    args.sls_device_interface = sls_dev_interfaces[args.sls_device_interface]
+-
+     if args.model_type == "din":
+       table_sizes = list(np.fromstring(args.arch_embedding_size, dtype=int, sep="-"))
+       user_profile_table = table_sizes[0]
+-- 
+2.34.1
+

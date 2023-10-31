@@ -20,7 +20,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 // [TODO: @a-korzun] use `std::any` instead of this class, since SGX
 // support is no longer a concern.
@@ -93,9 +93,9 @@ public:
   }
 
   void operator()(uint64_t minibatch_size,
-                  pnm::common_view<const uint32_t> lengths,
-                  pnm::common_view<const uint32_t> indices,
-                  pnm::common_view<uint8_t> psum) {
+                  pnm::views::common<const uint32_t> lengths,
+                  pnm::views::common<const uint32_t> indices,
+                  pnm::views::common<uint8_t> psum) {
     run_impl(minibatch_size, lengths, indices, psum);
   }
 
@@ -106,11 +106,11 @@ private:
   virtual void load_impl(const void *src, uint64_t size_bytes) = 0;
 
   virtual void run_impl(uint64_t minibatch_size,
-                        pnm::common_view<const uint32_t> lengths,
-                        pnm::common_view<const uint32_t> indices,
-                        pnm::common_view<uint8_t> psum) = 0;
+                        pnm::views::common<const uint32_t> lengths,
+                        pnm::views::common<const uint32_t> indices,
+                        pnm::views::common<uint8_t> psum) = 0;
 };
 
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif //_SLS_SECURE_BASE_DEVICE_H_

@@ -1,0 +1,33 @@
+From 302e1e38eec6dd155fd4068f11fe1cd653a1bdf7 Mon Sep 17 00:00:00 2001
+From: Savelii Motov <s.motov@samsung.com>
+Date: Thu, 26 Oct 2023 13:04:39 +0000
+Subject: [PATCH 219/225] [SLS][AXDIMM] Fix wrong polling register address
+
+POLLING_REGISTER offset was a system offset wich include interleaving.
+But currently in userspace we are using RA for all AXDIMM addresses, so
+this patch change system offset to RA offset for POLLING_REGISTER
+
+Resolves: MCS23-1795
+
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/pnm/sls_resource/topo/axdimm.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/pnm/sls_resource/topo/axdimm.h b/drivers/pnm/sls_resource/topo/axdimm.h
+index ea497d1a4..8512b84c4 100644
+--- a/drivers/pnm/sls_resource/topo/axdimm.h
++++ b/drivers/pnm/sls_resource/topo/axdimm.h
+@@ -25,7 +25,8 @@ static const struct sls_topology axdimm_default_sls_topology = {
+ 	.nr_tag_buf = 2,
+ 	.reg_en = 0x0,
+ 	.reg_exec = 0x40,
+-	.reg_poll = 0x840,
++	.reg_poll =
++		0x440, // This offset is RA offset, system offset equal to 0x840.
+ 	.alignment_sz = PAGE_SIZE,
+ 	.mem_size_gb = SLS_AXDIMM_HW_MEM_SZ_GB,
+ 	.block_sz = {},
+-- 
+2.34.1
+

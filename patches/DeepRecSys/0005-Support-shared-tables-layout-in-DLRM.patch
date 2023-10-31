@@ -1,7 +1,7 @@
 From 02a7fae8c206093ef0b4ee8dfad392e94080c3b1 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 2 Jun 2022 16:57:02 +0900
-Subject: [PATCH 05/33] Support shared tables layout in DLRM
+Subject: [PATCH 05/34] Support shared tables layout in DLRM
 
 With shared tables layout one need to:
 

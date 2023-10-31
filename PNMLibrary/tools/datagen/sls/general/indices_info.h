@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Basic information about indices structure. Assume that tables has
  * minibatch_size[i] lookups per table. Each lookup set contains num_lookup
  * indices.
@@ -64,12 +66,12 @@ private:
   size_t num_requests_;
 };
 
-namespace sls::tests {
 /*! \brief Simple struct that store istream to indices file */
 struct Indices {
   std::ifstream in;
   IndicesInfo info;
 };
-} // namespace sls::tests
+
+} // namespace tools::gen::sls
 
 #endif // SLS_INDICES_INFO_H

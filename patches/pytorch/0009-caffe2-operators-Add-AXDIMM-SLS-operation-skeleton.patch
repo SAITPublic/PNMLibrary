@@ -1,7 +1,7 @@
 From 3db7eb7c395308c309a7756d4ce8ee1989a6abed Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 1 Nov 2021 16:58:14 +0900
-Subject: [PATCH 009/128] [caffe2/operators] Add AXDIMM SLS operation skeleton
+Subject: [PATCH 009/135] [caffe2/operators] Add AXDIMM SLS operation skeleton
 
 Add necessary cmake support + add necessary dispatching skeleton for AXDIMM
 mapped SparseLengthsSum operation. The implementation is still incomplete but

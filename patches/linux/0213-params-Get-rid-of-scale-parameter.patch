@@ -1,0 +1,158 @@
+From 516d7ef32f0e2e20ab2a5510272b9f57129eef83 Mon Sep 17 00:00:00 2001
+From: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+Date: Wed, 4 Oct 2023 15:47:22 +0300
+Subject: [PATCH 213/225] [params] Get rid of `scale` parameter
+
+Introduse `memory_size` parameter
+
+Resolves: MCS23-1649
+
+Signed-off-by: Nataliia Cherepanova <nataly.cher@partner.samsung.com>
+---
+ PNM_README.md                          |  8 ++++----
+ drivers/pnm/sls_resource/topo/params.c | 27 ++++++++++++++++++++++----
+ drivers/pnm/sls_resource/topo/params.h |  2 +-
+ include/linux/sls_common.h             |  3 +++
+ 4 files changed, 31 insertions(+), 9 deletions(-)
+
+diff --git a/PNM_README.md b/PNM_README.md
+index 48b869b20..771ccbc42 100644
+--- a/PNM_README.md
++++ b/PNM_README.md
+@@ -138,7 +138,7 @@ There are 13 parameters for `sls_resource`. Here is a table with the parameter l
+ | ----------------------- | --------------------------- | ------------------------ |--------------------------------------------------------------------------------------------------------------| ------------------------------------------------------ |
+ | `dev_type`              | "AXDIMM"                    | "CXL"                    | The device type                                                                                              |                                                        |
+ | `base_addr`             | 66                          | 66                       | The physical offset (in GB) of device memory                                                                 |                                                        |
+-| `scale`                 | 0                           | 0                        | The scale of device memory. The overall memory size is `64GB >> scale` for AXDIMM or `32GB >> scale` for CXL | Should be lower or equal to 4                          |
++| `mem_size_gb`           | 64                          | 32                       | Device memory size in gigabytes. The maximum memory size is `64GB` for AXDIMM or `32GB` for CXL. Minimum - `4GB`          | Should be a power of 2                                 |
+ | `nr_cunits`             | 4                           | 2                        | The number of compute units                                                                                  | Should be a power of 2                                 |
+ | `buf_sz`                | 262144                      | 262080                   | Size of internal buffers (`INST`, `PSUM`, `TAGS`)                                                            | Should be aligned by 64 bytes                          |
+ | `nr_inst_buf`           | 1                           | 1                        | The number of instruction buffers                                                                            |                                                        |
+@@ -179,7 +179,7 @@ sudo modprobe sls_resource [parameter_name=parameter_value] [parameter_name=para
+ ```
+ Example:
+ ```bash
+-sudo modprobe sls_resource dev_type=CXL scale=1 base_addr=4 #Use defaults for CXL column, set scale to 1 and base addr to 4GB
++sudo modprobe sls_resource dev_type=CXL mem_size_gb=16 base_addr=4 #Use defaults for CXL column, set mem_size_gb to 16 and base addr to 4GB
+ ```
+ 
+ The default values can be defined in two ways. First of all, if the `dev_type` is specified, then the default values will be selected for the respective device type.
+@@ -197,7 +197,7 @@ the `dev_type` will be `AXDIMM` and other parameters will be from second table r
+ 2. The parameters can be added to kernel command line arguments by editing `/etc/default/grub` and adding required parameters to `GRUB_CMDLINE_LINUX_DEFAULT` like:
+ 
+ ```bash
+-GRUB_CMDLINE_LINUX_DEFAULT="sls_resource.dev_type=CXL sls_resource.base_addr=4 sls_resource.scale=1"
++GRUB_CMDLINE_LINUX_DEFAULT="sls_resource.dev_type=CXL sls_resource.base_addr=4 sls_resource.mem_size_gb=16"
+ ```
+ 
+ This approach is useful if you don't want to redefine defaults for specific parameters or you need to reconfigure the environment for new HW.
+@@ -222,7 +222,7 @@ The output should be the next:
+ /sys/module/sls_resource/parameters/nr_tag_buf:0
+ /sys/module/sls_resource/parameters/base_addr:4
+ /sys/module/sls_resource/parameters/nr_cunits:2
+-/sys/module/sls_resource/parameters/scale:2
++/sys/module/sls_resource/parameters/mem_size_gb:16
+ /sys/module/sls_resource/parameters/buf_sz:262080
+ /sys/module/sls_resource/parameters/data_sz:4
+ /sys/module/sls_resource/parameters/dev_type:CXL
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index fae00866a..9d76844e2 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -7,6 +7,7 @@
+ #include "device_resource.h"
+ 
+ #include <linux/bitfield.h>
++#include <linux/log2.h>
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
+ #include <linux/pnm/log.h>
+@@ -109,16 +110,22 @@ static void set_mem_blocks_sizes(u64 *block_sz, int scale)
+ 
+ int init_topology(void)
+ {
+-	const int scale = sls_params.scale.is_set ? sls_params.scale.value : 0;
++	int scale = 0;
+ 
+ 	APPLY_PARAMETER(dev_type);
+ 
+ 	switch ((enum sls_device_type)sls_topology.dev_type) {
+ 	case SLS_AXDIMM:
+ 		sls_topology = axdimm_default_sls_topology;
++		if (sls_params.mem_size_gb.value != SLS_AXDIMM_HW_MEM_SZ_GB)
++			scale = ilog2(SLS_AXDIMM_HW_MEM_SZ_GB /
++				      sls_params.mem_size_gb.value);
+ 		break;
+ 	case SLS_CXL:
+ 		sls_topology = cxl_default_sls_topology;
++		if (sls_params.mem_size_gb.value != SLS_CXL_HW_MEM_SZ_GB)
++			scale = ilog2(SLS_CXL_HW_MEM_SZ_GB /
++				      sls_params.mem_size_gb.value);
+ 		break;
+ 	case SLS_UNDEFINED:
+ 	case SLS_MAX:
+@@ -165,13 +172,25 @@ static int validate_parameters(void)
+ {
+ 	bool is_valid = true;
+ 	const size_t buf_alignment = 64;
++	// A minimal memory size is defined by size of control blocks
++	// (CFGR, INSTR, TAGS, PSUMS) that do not scale and have overall
++	// size 512MB per single compute unit.
++	const int64_t min_memory_size =
++		roundup(sls_params.nr_cunits.value, 2) / 2;
++	const int64_t max_memory_size = sls_params.dev_type.value ==
++							SLS_AXDIMM ?
++						SLS_AXDIMM_HW_MEM_SZ_GB :
++						SLS_CXL_HW_MEM_SZ_GB;
+ 
+ 	CHECK_PARAMETER(is_valid, buf_sz, % buf_alignment == 0);
+ 	CHECK_PARAMETER(is_valid, nr_cunits, != 0);
+ 	CHECK_PARAMETER(is_valid, nr_cunits, % 2 == 0);
+ 	CHECK_PARAMETER(is_valid, aligned_tag_sz, == SZ_64);
+-	CHECK_PARAMETER(is_valid, scale, >= 0);
+-	CHECK_PARAMETER(is_valid, scale, <= 4);
++	CHECK_PARAMETER(is_valid, mem_size_gb, >= min_memory_size);
++	CHECK_PARAMETER(is_valid, mem_size_gb, <= max_memory_size);
++
++	if (sls_params.mem_size_gb.is_set)
++		is_valid &= is_power_of_2(sls_params.mem_size_gb.value);
+ 
+ 	return is_valid ? 0 : -EINVAL;
+ }
+@@ -308,4 +327,4 @@ NAMED_PARAM(buf_sz);
+ NAMED_PARAM(nr_inst_buf);
+ NAMED_PARAM(nr_psum_buf);
+ NAMED_PARAM(nr_tag_buf);
+-NAMED_PARAM(scale);
++NAMED_PARAM(mem_size_gb);
+diff --git a/drivers/pnm/sls_resource/topo/params.h b/drivers/pnm/sls_resource/topo/params.h
+index 7db0f078e..376c946b7 100644
+--- a/drivers/pnm/sls_resource/topo/params.h
++++ b/drivers/pnm/sls_resource/topo/params.h
+@@ -24,7 +24,7 @@ struct sls_params {
+ 	struct sls_param reg_en;
+ 	struct sls_param reg_exec;
+ 	struct sls_param reg_poll;
+-	struct sls_param scale; //[TODO: @s-motov] Replace onto mem_size
++	struct sls_param mem_size_gb;
+ 	struct sls_param base_addr;
+ };
+ 
+diff --git a/include/linux/sls_common.h b/include/linux/sls_common.h
+index 863e123e0..293fb7f43 100644
+--- a/include/linux/sls_common.h
++++ b/include/linux/sls_common.h
+@@ -17,7 +17,10 @@
+ /* [TODO: @p.bred] Get rid of whole file, export necessary for DAX API */
+ 
+ #define DEV_TYPE_SLS_AXDIMM 1
++#define SLS_AXDIMM_HW_MEM_SZ_GB 64
++
+ #define DEV_TYPE_SLS_CXL 2
++#define SLS_CXL_HW_MEM_SZ_GB 32
+ 
+ enum sls_device_type {
+ 	SLS_UNDEFINED = 0,
+-- 
+2.34.1
+

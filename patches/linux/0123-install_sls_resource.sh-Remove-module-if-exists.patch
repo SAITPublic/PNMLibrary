@@ -1,7 +1,7 @@
 From 4ef9228928fe4507a4b7da2974991c8abde335bc Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Wed, 28 Jun 2023 15:46:13 +0000
-Subject: [PATCH 123/161] [install_sls_resource.sh] Remove module if exists
+Subject: [PATCH 123/225] [install_sls_resource.sh] Remove module if exists
 
 * Just like in `install_dba_resource.sh`, we should remove the module if
   it is already present

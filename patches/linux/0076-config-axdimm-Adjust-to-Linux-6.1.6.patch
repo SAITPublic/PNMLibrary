@@ -1,7 +1,7 @@
 From 8b20f3f37942d7ba383f13816e86f7460ede0d2c Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Mon, 16 Jan 2023 18:57:16 +0000
-Subject: [PATCH 076/161] [config-axdimm] Adjust to Linux 6.1.6
+Subject: [PATCH 076/225] [config-axdimm] Adjust to Linux 6.1.6
 
 Signed-off-by: Sergei Makarov <serg.makarov@samsung.com>
 ---

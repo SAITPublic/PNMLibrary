@@ -1,7 +1,7 @@
 From 99879ae0879562397ea87df3ac37061196662443 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Tue, 5 Jul 2022 15:49:39 +0300
-Subject: [PATCH 058/128] [secure] Fix secure api call to fit AXDIMM-278
+Subject: [PATCH 058/135] [secure] Fix secure api call to fit AXDIMM-278
 
 Remove tags from output psum buffers. Now, we need allocate memory
 only for SLS psum to properly call SecureRunner::run(...) method.

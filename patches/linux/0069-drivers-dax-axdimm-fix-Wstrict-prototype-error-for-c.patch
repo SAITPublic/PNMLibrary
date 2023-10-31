@@ -1,7 +1,7 @@
 From 0d52ecd903026d06ed67d5c6e8ad9948d09062e9 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Tue, 29 Nov 2022 16:03:20 +0300
-Subject: [PATCH 069/161] [drivers/dax/axdimm] fix -Wstrict-prototype error for
+Subject: [PATCH 069/225] [drivers/dax/axdimm] fix -Wstrict-prototype error for
  clang
 
 ---

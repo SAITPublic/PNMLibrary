@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <iterator>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 /*! \brief Common iterface for data encryption with AES.
  * The encryption are implemented in EncryptionBackend that
@@ -32,7 +32,7 @@ public:
   constexpr static unsigned aes_key_bits = static_cast<unsigned>(KeySize);
   constexpr static unsigned aes_key_bytes = aes_key_bits / __CHAR_BIT__;
 
-  using AES_Key_type = FixedVector<uint8_t, aes_key_bytes>;
+  using AES_Key_type = pnm::types::FixedVector<uint8_t, aes_key_bytes>;
 
   explicit AES_Engine(const AES_Key_type &key)
       : aes_key_{key}, backend_{KeySize, aes_key_.data()} {}
@@ -48,5 +48,5 @@ private:
   AES_Key_type aes_key_;
   EncryptionBackend backend_;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 #endif

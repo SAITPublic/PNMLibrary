@@ -48,7 +48,7 @@
 #include <vector>
 
 struct Request {
-  IndicesInfo info{};
+  tools::gen::sls::IndicesInfo info{};
   size_t sparse_feature_size{};
   std::vector<uint32_t> array{};
 };
@@ -58,16 +58,17 @@ std::queue<Request> request_queue;
 class RequestGen {
 public:
   explicit RequestGen(const std::filesystem::path &emb_path) {
-    auto emb = sls::tests::get_test_tables_mmap(emb_path);
+    auto emb = tools::gen::sls::get_test_tables_mmap(emb_path);
     info_ = std::move(emb.info);
-    igen_ = IndicesGeneratorFactory::default_factory().create("random");
+    igen_ = tools::gen::sls::IndicesGeneratorFactory::default_factory().create(
+        "random");
   }
 
   void run(size_t requests_count) {
     while (requests_count > 0) {
       const std::vector<size_t> num_lookup(info_.rows().size(), num_lookup_);
 
-      IndicesInfo indices(num_lookup, minibatch_size_);
+      tools::gen::sls::IndicesInfo indices(num_lookup, minibatch_size_);
 
       auto array = igen_->create(indices, info_);
 
@@ -81,8 +82,8 @@ public:
   }
 
 private:
-  TablesInfo info_;
-  std::unique_ptr<IIndicesGenerator> igen_;
+  tools::gen::sls::TablesInfo info_;
+  std::unique_ptr<tools::gen::sls::IIndicesGenerator> igen_;
   static constexpr auto minibatch_size_ = 256;
   static constexpr auto num_lookup_ = 40;
 };
@@ -91,16 +92,18 @@ class Worker {
 public:
   explicit Worker(const std::filesystem::path &emb_path) {
     static constexpr auto with_tag = false;
-    auto emb = sls::tests::get_test_tables_mmap(emb_path);
+    auto emb = tools::gen::sls::get_test_tables_mmap(emb_path);
     num_tables_ = emb.info.num_tables();
-    const sls::secure::DeviceArguments args{
-        sls::secure::TrivialCPUArgs{.rows = pnm::make_view(emb.info.rows()),
-                                    .sparse_feature_size = emb.info.cols(),
-                                    .with_tag = with_tag}};
+    const pnm::sls::secure::DeviceArguments args{
+        pnm::sls::secure::TrivialCpuArgs{
+            .rows = pnm::views::make_view(emb.info.rows()),
+            .sparse_feature_size = emb.info.cols(),
+            .with_tag = with_tag}};
     runner_.init(&args);
 
-    runner_.load_tables(emb.mapped_file.data(), pnm::make_view(emb.info.rows()),
-                        emb.info.cols(), with_tag);
+    runner_.load_tables(emb.mapped_file.data(),
+                        pnm::views::make_view(emb.info.rows()), emb.info.cols(),
+                        with_tag);
   } // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks) DeviceArguments handle
     // live time of his argument
 
@@ -126,9 +129,10 @@ public:
 
       pnm::profile::TimerUsT run_timer;
       run_timer.tick();
-      runner_.run(req.info.minibatch_size(), pnm::make_view(req.info.lengths()),
-                  pnm::make_view(std::cref(req.array).get()),
-                  pnm::make_view(psum), pnm::make_view(checks));
+      runner_.run(req.info.minibatch_size(),
+                  pnm::views::make_view(req.info.lengths()),
+                  pnm::views::make_view(std::cref(req.array).get()),
+                  pnm::views::make_view(psum), pnm::views::make_view(checks));
       run_timer.tock();
       wtime_100 += run_timer.duration().count();
 
@@ -154,9 +158,9 @@ public:
   }
 
 private:
-  sls::secure::Runner<sls::secure::OperationExecutor<
-      uint32_t, sls::secure::DummyCPU<uint32_t>,
-      sls::secure::SLSProducerConsumer<pnm::threads::Manager>>>
+  pnm::sls::secure::Runner<pnm::sls::secure::OperationExecutor<
+      uint32_t, DummyCPU<uint32_t>,
+      pnm::sls::secure::SlsProducerConsumer<pnm::threads::Manager>>>
       runner_;
   size_t num_tables_;
 };
@@ -167,7 +171,7 @@ int main(int argc, char **argv) {
   std::filesystem::path tables_root;
 
   app.add_option("tables_root", tables_root,
-                 "Path to folder containing embedded tables data")
+                 "Path to folder containing embedding tables data")
       ->required()
       ->check(CLI::ExistingDirectory);
 

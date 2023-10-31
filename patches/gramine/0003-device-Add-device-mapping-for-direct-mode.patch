@@ -1,7 +1,7 @@
 From 227566de28b387bc003a339aee5ce44c2c486c63 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 8 Sep 2022 11:01:57 +0300
-Subject: [PATCH 03/27] [device] Add device mapping for direct mode
+Subject: [PATCH 03/29] [device] Add device mapping for direct mode
 
 Add mmap callback for device memory mapping. As the first approach we do not split address by trusted and shared. This division should be implemented in PR:
 https://github.com/gramineproject/gramine/pull/827

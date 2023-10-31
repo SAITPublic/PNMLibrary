@@ -1,7 +1,7 @@
 From 1eaa2bb5ae129d8e73a19e1c6896145f44c70d95 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Sun, 9 Jul 2023 21:34:57 -0400
-Subject: [PATCH 126/161] [common][debug] Allow force unload module
+Subject: [PATCH 126/225] [common][debug] Allow force unload module
 
 This patch allow us to unload module when it dead by
 rmmod -f <module_name>

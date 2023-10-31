@@ -27,7 +27,7 @@ void check_sparse_feature_size(uint32_t sparse_feature_size);
 void check_device_memory_limits(const device::BaseDevice &device,
                                 size_t objects_size_in_bytes,
                                 sls_user_preferences preference);
-void check_run_params(const PNMSLSOperation &op);
+void check_run_params(const pnm::operations::SlsOperation &op);
 
 } // namespace pnm::sls
 #endif

@@ -26,27 +26,27 @@
 #include <vector>
 
 struct UntrustedDev : public ::testing::Test,
-                      public sls::secure::TrivialCPU<uint32_t> {
+                      public pnm::sls::secure::TrivialCPU<uint32_t> {
   const std::vector<uint32_t> rows{5, 10, 5};
 };
-using sls::secure::DeviceArguments;
-using sls::secure::TrivialCPUArgs;
+using pnm::sls::secure::DeviceArguments;
+using pnm::sls::secure::TrivialCpuArgs;
 
 TEST(DeviceArguments, CreateRead) {
   const std::vector<uint32_t> rows{4, 5, 6};
   static constexpr auto sparse_feature_size = 18;
   DeviceArguments args(
-      TrivialCPUArgs{pnm::make_view(rows), sparse_feature_size, false});
+      TrivialCpuArgs{pnm::views::make_view(rows), sparse_feature_size, false});
 
-  ASSERT_EQ(args.get<const TrivialCPUArgs>().sparse_feature_size,
+  ASSERT_EQ(args.get<const TrivialCpuArgs>().sparse_feature_size,
             sparse_feature_size);
 
-  ASSERT_EQ(args.get<const TrivialCPUArgs>().rows.size(), rows.size());
+  ASSERT_EQ(args.get<const TrivialCpuArgs>().rows.size(), rows.size());
 }
 
 TEST_F(UntrustedDev, CreateLoad) {
   static constexpr auto sparse_feature_size = 8;
-  const DeviceArguments args(TrivialCPUArgs{{}, sparse_feature_size, false});
+  const DeviceArguments args(TrivialCpuArgs{{}, sparse_feature_size, false});
   init(&args);
 
   std::vector<uint32_t> data(10, 0);
@@ -55,7 +55,7 @@ TEST_F(UntrustedDev, CreateLoad) {
        pnm::utils::byte_size_of_container(data));
 }
 
-TEST_F(UntrustedDev, SLSNoTag) {
+TEST_F(UntrustedDev, SlsNoTag) {
   std::vector data{1,   2,   3,   4,   -1,  -2,  -3,  -4,  5,   6,   7,   8,
                    -5,  -6,  -7,  -8,  6,   8,   11,  13,  10,  20,  30,  40,
                    -10, -20, -30, -40, 50,  60,  70,  80,  -50, -60, -70, -80,
@@ -64,7 +64,8 @@ TEST_F(UntrustedDev, SLSNoTag) {
                    0,   0,   0,   0,   0,   1,   0,   0,   0,   0,   1,   0,
                    1,   0,   0,   0,   1,   1,   1,   1};
 
-  const DeviceArguments args(TrivialCPUArgs{pnm::make_view(rows), 4, false});
+  const DeviceArguments args(
+      TrivialCpuArgs{pnm::views::make_view(rows), 4, false});
   init(&args);
 
   load(reinterpret_cast<const char *>(data.data()),
@@ -82,8 +83,8 @@ TEST_F(UntrustedDev, SLSNoTag) {
   std::vector<uint32_t> psum(minibatch_size * num_tables * sparse_feature_size,
                              0);
 
-  run_sls(minibatch_size, pnm::make_const_view(lengths),
-          pnm::make_const_view(indices), pnm::make_view(psum));
+  run_sls(minibatch_size, pnm::views::make_const_view(lengths),
+          pnm::views::make_const_view(indices), pnm::views::make_view(psum));
 
   const std::vector<uint32_t> golden{0,   0,   1,   1,   6,   8,   11,  13, 5,
                                      6,   7,   8,   60,  80,  110, 130, 60, 80,
@@ -92,7 +93,7 @@ TEST_F(UntrustedDev, SLSNoTag) {
   ASSERT_EQ(psum, golden);
 }
 
-TEST_F(UntrustedDev, SLSWithTag) {
+TEST_F(UntrustedDev, SlsWithTag) {
   std::vector data{
       1,   2,   3,   4,   0, 0, 0, 1,   -1,  -2,  -3,  -4,  0, 0, 0, 2,
       5,   6,   7,   8,   0, 0, 0, 3,   -5,  -6,  -7,  -8,  0, 0, 0, 4,
@@ -105,7 +106,8 @@ TEST_F(UntrustedDev, SLSWithTag) {
       0,   1,   0,   0,   0, 0, 0, 101, 0,   0,   1,   0,   0, 0, 0, 102,
       1,   0,   0,   0,   0, 0, 0, 103, 1,   1,   1,   1,   0, 0, 0, 104};
 
-  const DeviceArguments args(TrivialCPUArgs{pnm::make_view(rows), 4, true});
+  const DeviceArguments args(
+      TrivialCpuArgs{pnm::views::make_view(rows), 4, true});
   init(&args);
 
   load(reinterpret_cast<const char *>(data.data()),
@@ -124,8 +126,9 @@ TEST_F(UntrustedDev, SLSWithTag) {
   std::vector<uint32_t> psum(minibatch_size * num_tables * sparse_feature_size,
                              0);
 
-  run_sls_with_tag(minibatch_size, pnm::make_const_view(lengths),
-                   pnm::make_const_view(indices), pnm::make_view(psum));
+  run_sls_with_tag(minibatch_size, pnm::views::make_const_view(lengths),
+                   pnm::views::make_const_view(indices),
+                   pnm::views::make_view(psum));
 
   const std::vector<uint32_t> golden{
       0, 0, 1, 1, 6, 8, 11, 13, 5, 6, 7, 8, 60, 80, 110, 130, 60, 80, 110, 130,
@@ -136,7 +139,7 @@ TEST_F(UntrustedDev, SLSWithTag) {
   ASSERT_EQ(psum, golden);
 }
 
-TEST(UntrustedDevApiCall, SLSNoTag) {
+TEST(UntrustedDevApiCall, SlsNoTag) {
   std::vector data{1,   2,   3,   4,   -1,  -2,  -3,  -4,  5,   6,   7,   8,
                    -5,  -6,  -7,  -8,  6,   8,   11,  13,  10,  20,  30,  40,
                    -10, -20, -30, -40, 50,  60,  70,  80,  -50, -60, -70, -80,
@@ -144,10 +147,10 @@ TEST(UntrustedDevApiCall, SLSNoTag) {
                    50,  60,  70,  80,  -50, -60, -70, -80, 60,  80,  110, 130,
                    0,   0,   0,   0,   0,   1,   0,   0,   0,   0,   1,   0,
                    1,   0,   0,   0,   1,   1,   1,   1};
-  sls::secure::TrivialCPU<uint32_t> dev;
+  pnm::sls::secure::TrivialCPU<uint32_t> dev;
   const std::vector<uint32_t> rows_long{5, 10, 5};
   const DeviceArguments args(
-      TrivialCPUArgs{pnm::make_view(rows_long), 4, false});
+      TrivialCpuArgs{pnm::views::make_view(rows_long), 4, false});
   dev.init(&args);
 
   dev.load(reinterpret_cast<const char *>(data.data()),
@@ -166,8 +169,8 @@ TEST(UntrustedDevApiCall, SLSNoTag) {
         minibatch_size * num_tables * sparse_feature_size, 0);
     const std::vector<uint32_t> rows{5, 10, 5};
 
-    dev.run(minibatch_size, pnm::make_const_view(lengths),
-            pnm::make_const_view(indices), pnm::make_view(psum));
+    dev.run(minibatch_size, pnm::views::make_const_view(lengths),
+            pnm::views::make_const_view(indices), pnm::views::make_view(psum));
 
     const std::vector<uint32_t> golden{
         0,  0,  1,   1,   6,  8,  11,  13,  5,   6,   7,   8,
@@ -183,8 +186,8 @@ TEST(UntrustedDevApiCall, SLSNoTag) {
         minibatch_size * num_tables * sparse_feature_size, 0);
     const std::vector<uint32_t> rows{5, 10, 5};
 
-    dev.run(minibatch_size, pnm::make_const_view(lengths),
-            pnm::make_const_view(indices), pnm::make_view(psum));
+    dev.run(minibatch_size, pnm::views::make_const_view(lengths),
+            pnm::views::make_const_view(indices), pnm::views::make_view(psum));
 
     const std::vector<uint32_t> golden{
         1,  2,  4,   5,   7,  10, 14,  17,  6,   8,   10,  12,
@@ -194,7 +197,7 @@ TEST(UntrustedDevApiCall, SLSNoTag) {
   }
 }
 
-TEST(UntrustedDevApiCall, SLSWithTag) {
+TEST(UntrustedDevApiCall, SlsWithTag) {
   std::vector data{
       1,   2,   3,   4,   0, 0, 0, 1,   -1,  -2,  -3,  -4,  0, 0, 0, 2,
       5,   6,   7,   8,   0, 0, 0, 3,   -5,  -6,  -7,  -8,  0, 0, 0, 4,
@@ -207,10 +210,10 @@ TEST(UntrustedDevApiCall, SLSWithTag) {
       0,   1,   0,   0,   0, 0, 0, 101, 0,   0,   1,   0,   0, 0, 0, 102,
       1,   0,   0,   0,   0, 0, 0, 103, 1,   1,   1,   1,   0, 0, 0, 104};
 
-  sls::secure::TrivialCPU<uint32_t> dev;
+  pnm::sls::secure::TrivialCPU<uint32_t> dev;
   const std::vector<uint32_t> rows_long{5, 10, 5};
   const DeviceArguments args(
-      TrivialCPUArgs{pnm::make_view(rows_long), 4, true});
+      TrivialCpuArgs{pnm::views::make_view(rows_long), 4, true});
   dev.init(&args);
 
   dev.load(reinterpret_cast<const char *>(data.data()),
@@ -228,8 +231,8 @@ TEST(UntrustedDevApiCall, SLSWithTag) {
         minibatch_size * num_tables * sparse_feature_size, 0);
     const std::vector<uint32_t> rows{5, 10, 5};
 
-    dev.run(minibatch_size, pnm::make_const_view(lengths),
-            pnm::make_const_view(indices), pnm::make_view(psum));
+    dev.run(minibatch_size, pnm::views::make_const_view(lengths),
+            pnm::views::make_const_view(indices), pnm::views::make_view(psum));
 
     const std::vector<uint32_t> golden{
         0, 0, 1, 1, 6, 8, 11, 13, 5, 6, 7, 8, 60, 80, 110, 130, 60, 80, 110,
@@ -247,8 +250,8 @@ TEST(UntrustedDevApiCall, SLSWithTag) {
         minibatch_size * num_tables * sparse_feature_size, 0);
     const std::vector<uint32_t> rows{5, 10, 5};
 
-    dev.run(minibatch_size, pnm::make_const_view(lengths),
-            pnm::make_const_view(indices), pnm::make_view(psum));
+    dev.run(minibatch_size, pnm::views::make_const_view(lengths),
+            pnm::views::make_const_view(indices), pnm::views::make_view(psum));
 
     const std::vector<uint32_t> golden{
         1, 2, 4, 5, 7, 10, 14, 17, 6, 8, 10, 12, 60, 80, 110, 130, 60, 80, 110,
@@ -267,9 +270,9 @@ TEST(SLS, CommonCheck) {
   const std::vector golden{1 + 1 + 4, 2 + 2 + 3, 3 + 3 + 2, 4 + 4 + 1};
   std::vector<int> psum(golden.size(), 0);
 
-  SLS<int>::common(
-      pnm::make_rowwise_view(data.data(), data.data() + data.size(), 4),
-      pnm::make_view(indices), pnm::make_view(psum));
+  pnm::sls::internal::cpu::Reduction<int>::common(
+      pnm::views::make_rowwise_view(data.data(), data.data() + data.size(), 4),
+      pnm::views::make_view(indices), pnm::views::make_view(psum));
   ASSERT_EQ(psum, golden);
 }
 
@@ -281,13 +284,16 @@ TEST(SLS, TagCheck) {
                            0,         0,         0,         8};
   std::vector<int> psum(golden.size(), 0);
 
-  SLS<int>::common(
-      pnm::make_rowwise_view(data.data(), data.data() + data.size(), 8, 0, 4),
-      pnm::make_view(indices), pnm::make_view(psum.data(), psum.data() + 4));
+  pnm::sls::internal::cpu::Reduction<int>::common(
+      pnm::views::make_rowwise_view(data.data(), data.data() + data.size(), 8,
+                                    0, 4),
+      pnm::views::make_view(indices),
+      pnm::views::make_view(psum.data(), psum.data() + 4));
 
-  SLS<int>::on_tag(
-      pnm::make_rowwise_view(data.data(), data.data() + data.size(), 8, 4, 0),
-      pnm::make_view(indices),
-      pnm::make_view(psum.data() + 4, psum.data() + 8));
+  pnm::sls::internal::cpu::Reduction<int>::on_tag(
+      pnm::views::make_rowwise_view(data.data(), data.data() + data.size(), 8,
+                                    4, 0),
+      pnm::views::make_view(indices),
+      pnm::views::make_view(psum.data() + 4, psum.data() + 8));
   EXPECT_EQ(psum, golden);
 }

@@ -18,6 +18,8 @@
 #include "common/make_error.h"
 #include "common/profile.h"
 
+#include "test/utils/pnm_fmt.h"
+
 #include "pnmlib/core/buffer.h"
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/device.h"
@@ -25,13 +27,12 @@
 #include "pnmlib/common/error.h"
 
 #include <gtest/gtest.h>
-#include <gtest/internal/gtest-param-util.h>
 
 #include <fmt/core.h>
 
-#include <sched.h>
 #include <signal.h> // NOLINT(modernize-deprecated-headers)
 #include <stdlib.h> // NOLINT(modernize-deprecated-headers)
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -43,25 +44,8 @@
 #include <cstdint>
 #include <iterator>
 #include <optional>
-#include <string>
 #include <thread>
 #include <vector>
-
-template <typename Test>
-inline std::string generate_param_name(
-    const testing::TestParamInfo<typename Test::ParamType> &info) {
-  switch (info.param) {
-  case pnm::Device::Type::SLS_AXDIMM:
-    return "SLS_AXDIMM";
-  case pnm::Device::Type::SLS_CXL:
-    return "SLS_CXL";
-  case pnm::Device::Type::IMDB_CXL:
-    return "IMDB_CXL";
-  }
-
-  throw pnm::error::make_inval("Unknown device type {}.",
-                               static_cast<int>(info.param));
-}
 
 inline bool compute_unit_run(DeviceWrapper &child_dev, uint8_t compute_unit,
                              int hold_time_ms, int timeout_sec) {

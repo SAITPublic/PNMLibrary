@@ -1,7 +1,7 @@
 From 735c7730d70d3b5610e92381944a862ecfa4f0b9 Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Mon, 10 Apr 2023 18:45:09 +0300
-Subject: [PATCH 15/27] [pytorch, secndp] Enable shared memory usage
+Subject: [PATCH 15/29] [pytorch, secndp] Enable shared memory usage
 
 AxDIMM now uses shared memory for simulation which requires
 additional setup from Gramine part. Gramine does not allow

@@ -1,0 +1,213 @@
+From 660c30891a43bc59c5fc74ac728db44274310441 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Thu, 28 Sep 2023 17:16:47 +0300
+Subject: [PATCH 199/225] [pnm][sls] Remove interleaving parameters for SLS
+ device
+
+The interleaving constants for SLS memory map were removed due to next
+reason:
+1. constants are used only to evaluate interleaved offset that was never
+used by kernel or user libray;
+2. the unbinding SLS kernel module from this constants allows us to
+simplify the code for variable address map that will be implemented in
+user space.
+
+Resolve: MCS23-1704
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ PNM_README.md                             | 25 +++++------------
+ drivers/pnm/sls_resource/mem_info.c       | 18 -------------
+ drivers/pnm/sls_resource/sysfs/topology.c | 33 +++++++----------------
+ drivers/pnm/sls_resource/topo/axdimm.h    |  3 ---
+ drivers/pnm/sls_resource/topo/cxl.h       |  3 ---
+ drivers/pnm/sls_resource/topo/params.h    |  3 ---
+ include/uapi/linux/sls_resources.h        |  7 -----
+ 7 files changed, 16 insertions(+), 76 deletions(-)
+
+diff --git a/PNM_README.md b/PNM_README.md
+index 1498b053e..e9c560495 100644
+--- a/PNM_README.md
++++ b/PNM_README.md
+@@ -220,25 +220,14 @@ grep . -R /sys/module/sls_resource/parameters/
+ ```
+ The output should be the next:
+ ```
+-/sys/module/sls_resource/parameters/reg_en:0
+-/sys/module/sls_resource/parameters/nr_tag_buf:2
+-/sys/module/sls_resource/parameters/base_addr:66
+-/sys/module/sls_resource/parameters/inst_sz:8
+-/sys/module/sls_resource/parameters/cunit_interleaving_sz:128
+-/sys/module/sls_resource/parameters/interleaving_stride:128
+-/sys/module/sls_resource/parameters/nr_ch:2
+-/sys/module/sls_resource/parameters/nr_cunits:4
+-/sys/module/sls_resource/parameters/alignment_sz:4096
+-/sys/module/sls_resource/parameters/ch_interleaving_sz:131072
+-/sys/module/sls_resource/parameters/scale:0
+-/sys/module/sls_resource/parameters/reg_poll:2112
+-/sys/module/sls_resource/parameters/nr_cs:2
+-/sys/module/sls_resource/parameters/buf_sz:262144
+-/sys/module/sls_resource/parameters/nr_ranks:4
++/sys/module/sls_resource/parameters/nr_tag_buf:0
++/sys/module/sls_resource/parameters/base_addr:4
++/sys/module/sls_resource/parameters/nr_cunits:2
++/sys/module/sls_resource/parameters/scale:2
++/sys/module/sls_resource/parameters/buf_sz:262080
+ /sys/module/sls_resource/parameters/data_sz:4
+-/sys/module/sls_resource/parameters/dev_type:AXDIMM
+-/sys/module/sls_resource/parameters/reg_exec:64
++/sys/module/sls_resource/parameters/dev_type:CXL
+ /sys/module/sls_resource/parameters/nr_inst_buf:1
+-/sys/module/sls_resource/parameters/nr_psum_buf:2
++/sys/module/sls_resource/parameters/nr_psum_buf:1
+ /sys/module/sls_resource/parameters/aligned_tag_sz:64
+ ```
+diff --git a/drivers/pnm/sls_resource/mem_info.c b/drivers/pnm/sls_resource/mem_info.c
+index 8ddd2a308..cb6c97b76 100644
+--- a/drivers/pnm/sls_resource/mem_info.c
++++ b/drivers/pnm/sls_resource/mem_info.c
+@@ -74,20 +74,6 @@ static inline void make_cunit_regions(uint64_t nr_regions_per_cunit,
+ 	}
+ }
+ 
+-static inline void apply_interleaving(uint64_t nr_regions_per_cunit,
+-				      uint64_t cunit,
+-				      struct sls_mem_cunit_region *dst)
+-{
+-	const size_t interleaving =
+-		(cunit % sls_topo()->nr_cs) * sls_topo()->interleaving_stride;
+-	uint8_t r = 0;
+-
+-	for (r = 0; r < nr_regions_per_cunit; ++r) {
+-		dst[r].range.start += interleaving;
+-		dst[r].range.end += interleaving;
+-	}
+-}
+-
+ static void make_cunit_info(uint64_t nr_regions_per_cunit,
+ 			    struct sls_mem_cunit_info *mem_cunit_info,
+ 			    const struct sls_mem_info *mem_info)
+@@ -112,10 +98,6 @@ static void make_cunit_info(uint64_t nr_regions_per_cunit,
+ 		/* form cunit address layout */
+ 		make_cunit_regions(nr_regions_per_cunit, nr_interleaved_cu, dst,
+ 				   src);
+-
+-		/* apply cunit interleaving */
+-		if (sls_topo()->dev_type == SLS_AXDIMM)
+-			apply_interleaving(nr_regions_per_cunit, cu, dst);
+ 	}
+ }
+ 
+diff --git a/drivers/pnm/sls_resource/sysfs/topology.c b/drivers/pnm/sls_resource/sysfs/topology.c
+index a07e19cc1..0edb36e6c 100644
+--- a/drivers/pnm/sls_resource/sysfs/topology.c
++++ b/drivers/pnm/sls_resource/sysfs/topology.c
+@@ -25,9 +25,6 @@ EXPORT_PARAM(nr_ranks);
+ EXPORT_PARAM(nr_cunits);
+ EXPORT_PARAM(nr_cs);
+ EXPORT_PARAM(nr_ch);
+-EXPORT_PARAM(cunit_interleaving_sz);
+-EXPORT_PARAM(ch_interleaving_sz);
+-EXPORT_PARAM(interleaving_stride);
+ EXPORT_PARAM(aligned_tag_sz);
+ EXPORT_PARAM(inst_sz);
+ EXPORT_PARAM(data_sz);
+@@ -50,27 +47,15 @@ DEVICE_ATTR_RO(base_addr);
+ static struct kobject *mem_topo_kobj;
+ 
+ static struct attribute *mem_topo_attrs[] = {
+-	DEV_ATTR_REF(dev_type),
+-	DEV_ATTR_REF(nr_ranks),
+-	DEV_ATTR_REF(nr_cunits),
+-	DEV_ATTR_REF(nr_cs),
+-	DEV_ATTR_REF(nr_ch),
+-	DEV_ATTR_REF(cunit_interleaving_sz),
+-	DEV_ATTR_REF(ch_interleaving_sz),
+-	DEV_ATTR_REF(interleaving_stride),
+-	DEV_ATTR_REF(aligned_tag_sz),
+-	DEV_ATTR_REF(inst_sz),
+-	DEV_ATTR_REF(data_sz),
+-	DEV_ATTR_REF(buf_sz),
+-	DEV_ATTR_REF(nr_inst_buf),
+-	DEV_ATTR_REF(nr_psum_buf),
+-	DEV_ATTR_REF(nr_tag_buf),
+-	DEV_ATTR_REF(reg_en),
+-	DEV_ATTR_REF(reg_exec),
+-	DEV_ATTR_REF(reg_poll),
+-	DEV_ATTR_REF(alignment_sz),
+-	DEV_ATTR_REF(base_addr),
+-	NULL,
++	DEV_ATTR_REF(dev_type),	   DEV_ATTR_REF(nr_ranks),
++	DEV_ATTR_REF(nr_cunits),   DEV_ATTR_REF(nr_cs),
++	DEV_ATTR_REF(nr_ch),	   DEV_ATTR_REF(aligned_tag_sz),
++	DEV_ATTR_REF(inst_sz),	   DEV_ATTR_REF(data_sz),
++	DEV_ATTR_REF(buf_sz),	   DEV_ATTR_REF(nr_inst_buf),
++	DEV_ATTR_REF(nr_psum_buf), DEV_ATTR_REF(nr_tag_buf),
++	DEV_ATTR_REF(reg_en),	   DEV_ATTR_REF(reg_exec),
++	DEV_ATTR_REF(reg_poll),	   DEV_ATTR_REF(alignment_sz),
++	DEV_ATTR_REF(base_addr),   NULL,
+ };
+ 
+ static struct attribute_group mem_topo_attr_group = {
+diff --git a/drivers/pnm/sls_resource/topo/axdimm.h b/drivers/pnm/sls_resource/topo/axdimm.h
+index 90ee3b795..f1da656ba 100644
+--- a/drivers/pnm/sls_resource/topo/axdimm.h
++++ b/drivers/pnm/sls_resource/topo/axdimm.h
+@@ -15,9 +15,6 @@ static const struct sls_topology axdimm_default_sls_topology = {
+ 	.nr_cunits = 4, // nr_ranks
+ 	.nr_cs = 2,
+ 	.nr_ch = 1,
+-	.cunit_interleaving_sz = SZ_128,
+-	.ch_interleaving_sz = SZ_128K,
+-	.interleaving_stride = SZ_128,
+ 	.aligned_tag_sz = SZ_64,
+ 	.inst_sz = 8,
+ 	.data_sz = 4,
+diff --git a/drivers/pnm/sls_resource/topo/cxl.h b/drivers/pnm/sls_resource/topo/cxl.h
+index bf315c50e..ee876bafc 100644
+--- a/drivers/pnm/sls_resource/topo/cxl.h
++++ b/drivers/pnm/sls_resource/topo/cxl.h
+@@ -17,9 +17,6 @@ static const struct sls_topology cxl_default_sls_topology = {
+ 	.nr_cunits = 2, // nr_ranks
+ 	.nr_cs = 1,
+ 	.nr_ch = 1,
+-	.cunit_interleaving_sz = 0,
+-	.ch_interleaving_sz = 0,
+-	.interleaving_stride = 0,
+ 	.aligned_tag_sz = SZ_64,
+ 	.inst_sz = 8,
+ 	.data_sz = 4,
+diff --git a/drivers/pnm/sls_resource/topo/params.h b/drivers/pnm/sls_resource/topo/params.h
+index 163d9b35a..7db0f078e 100644
+--- a/drivers/pnm/sls_resource/topo/params.h
++++ b/drivers/pnm/sls_resource/topo/params.h
+@@ -37,9 +37,6 @@ struct sls_topology {
+ 	int nr_ranks;
+ 	int nr_cs;
+ 	int nr_ch;
+-	int cunit_interleaving_sz;
+-	int ch_interleaving_sz;
+-	int interleaving_stride;
+ 	int aligned_tag_sz; /* Single TAG size (Bytes) */
+ 	int inst_sz;
+ 	int data_sz;
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 49f2f74aa..c6fdda3e9 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -72,13 +72,6 @@
+ /* Size of TAG for sparse vector in bytes */
+ #define ATTR_ALIGNED_TAG_SIZE_PATH DEVICE_TOPOLOGY_CONSTANT_PATH(aligned_tag_sz)
+ 
+-/* Cunit interleaving size in bytes */
+-#define ATTR_CUNIT_INTERLEAVING_SIZE_PATH \
+-	DEVICE_TOPOLOGY_CONSTANT_PATH(cunit_interleaving_sz)
+-/* Channel interleaving size in bytes */
+-#define ATTR_CHANNEL_INTERLEAVING_SIZE_PATH \
+-	DEVICE_TOPOLOGY_CONSTANT_PATH(ch_interleaving_sz)
+-
+ /* Offset for polling register */
+ #define ATTR_POLLING_REGISTER_OFFSET_PATH \
+ 	DEVICE_TOPOLOGY_CONSTANT_PATH(reg_poll)
+-- 
+2.34.1
+

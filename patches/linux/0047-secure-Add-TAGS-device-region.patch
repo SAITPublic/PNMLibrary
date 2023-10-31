@@ -1,7 +1,7 @@
 From 2f078d5bd4722b55aed02db34cfb0271873e64ae Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 13 Oct 2022 13:16:11 +0300
-Subject: [PATCH 047/161] [secure] Add TAGS' device region
+Subject: [PATCH 047/225] [secure] Add TAGS' device region
 
 According to new HW specification, AXDIMM device has a separate TAGS
 region to store MAC for SecNDP verification.

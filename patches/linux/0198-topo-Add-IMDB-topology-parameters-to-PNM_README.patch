@@ -1,0 +1,45 @@
+From 5a6d4fb173a871b807dcc5c8aa27a4c8d6b519c2 Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Thu, 21 Sep 2023 14:28:29 +0300
+Subject: [PATCH 198/225] [topo] Add IMDB topology parameters to PNM_README
+
+Resolves: MCS23-1525
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+---
+ PNM_README.md | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/PNM_README.md b/PNM_README.md
+index 9b0becc4c..1498b053e 100644
+--- a/PNM_README.md
++++ b/PNM_README.md
+@@ -142,7 +142,8 @@ In case of any failure a module will not be loaded and you will receive error me
+ 
+ Modules use parameters to configure the memory and compute unit topology for hardware or simulator.
+ 
+-Only `sls_resource` module has parameters so far. There are 13 parameters. Here is a table with the parameter list and their default values depends on selected device type (`CXL` or `AXDIMM`):
++### sls_resource
++There are 13 parameters for `sls_resource`. Here is a table with the parameter list and their default values depends on selected device type (`CXL` or `AXDIMM`):
+ 
+ | Parameter               | `CONFIG_DEV_SLS_BUS=AXDIMM` | `CONFIG_DEV_SLS_BUS=CXL` | Description                                                                                                  | Restrictions                                           |
+ | ----------------------- | --------------------------- | ------------------------ |--------------------------------------------------------------------------------------------------------------| ------------------------------------------------------ |
+@@ -162,6 +163,15 @@ Only `sls_resource` module has parameters so far. There are 13 parameters. Here
+ 
+ The default parameters are bound to device bus type: `AXDIMM` or `CXL`. The default bus type is specified during the kernel build by `CONFIG_DEV_SLS_BUS`.
+ 
++### imdb_resource
++There are 3 parameters for `imdb_resource`. Here is a table with the parameter list and their default values:
++
++| Parameter               | Default | Description                                                            | Restrictions                                           |
++| ----------------------- | --------| ---------------------------------------------------------------------- | ------------------------------------------------------ |
++| `nr_cunits`             | 3       | The number of compute units                                            |                                                        |
++| `nr_pools`              | 2       | The number of memory pools                                             |                                                        |
++| `mem_size_gb`           | 32      | Overall data memory size in GB                                         |                                                        |
++
+ There are 2 ways to setup the module parameter.
+ 
+ 1. Explicitly specify required parameters and keep others with default values. You can use `modprobe` command in next format:
+-- 
+2.34.1
+

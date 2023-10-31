@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 /*! \brief The encryption strategy that use Intel AES-NI instruction.
  * This class can be used as a backend for AES_Engine.
  */
@@ -31,6 +31,6 @@ private:
   unsigned const encryption_rounds_;
   std::unique_ptr<uint8_t[]> key_schedule_;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // SLS_AES_NI_BACKEND_H

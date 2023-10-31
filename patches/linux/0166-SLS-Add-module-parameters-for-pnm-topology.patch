@@ -1,0 +1,1076 @@
+From dd6edd3ad6ad29f1afcf89b22e5f1536bbb540dd Mon Sep 17 00:00:00 2001
+From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Date: Mon, 3 Jul 2023 14:10:54 +0300
+Subject: [PATCH 166/225] [SLS] Add module parameters for pnm topology
+
+* Unbind partly key components like allocator, rank scheduler, sysfs
+and sls_mem_info from memory constants
+
+Resolves: MCS23-1166
+
+Signed-off-by: Sergey Lavrentiev <s.lavrentiev@samsung.com>
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+Signed-off-by: Savelii Motov <s.motov@samsung.com>
+---
+ drivers/dax/sls_dax.c                      | 71 ++++++++++++++++------
+ drivers/dax/sls_dax.h                      |  7 ++-
+ drivers/pnm/sls_resource/Makefile          |  2 +
+ drivers/pnm/sls_resource/allocator.c       | 14 +++--
+ drivers/pnm/sls_resource/parameters.c      | 50 +++++++++++++++
+ drivers/pnm/sls_resource/parameters.h      | 36 +++++++++++
+ drivers/pnm/sls_resource/rank_scheduler.c  | 68 +++++++++++++--------
+ drivers/pnm/sls_resource/rank_scheduler.h  |  3 +-
+ drivers/pnm/sls_resource/sls.c             | 40 ++++++++++--
+ drivers/pnm/sls_resource/sysfs.c           | 38 +++++++++---
+ drivers/pnm/sls_resource/topology_export.c | 47 +++++++++-----
+ include/linux/pnm_sls_set_mem_info.h       | 21 ++++---
+ include/linux/sls_common.h                 | 42 ++++++++-----
+ include/uapi/linux/pnm_sls_mem_topology.h  | 25 +-------
+ include/uapi/linux/sls_resources.h         | 18 ------
+ 15 files changed, 338 insertions(+), 144 deletions(-)
+ create mode 100644 drivers/pnm/sls_resource/parameters.c
+ create mode 100644 drivers/pnm/sls_resource/parameters.h
+
+diff --git a/drivers/dax/sls_dax.c b/drivers/dax/sls_dax.c
+index abf6ef34f..23b6237dc 100644
+--- a/drivers/dax/sls_dax.c
++++ b/drivers/dax/sls_dax.c
+@@ -14,10 +14,22 @@
+ static const struct sls_mem_info *get_mem_info(void)
+ {
+ 	static struct sls_mem_info mem_info;
+-	static bool mem_info_initialized;
+ 
+-	if (!mem_info_initialized)
+-		sls_set_mem_info(&mem_info);
++	mem_info.devtype = get_device_type(sls_device_name);
++	mem_info.num_of_cs = sls_param_num_of_chip_select;
++
++	mem_info.mem_offset = kcalloc(mem_info.num_of_cs * SLS_BLOCK_MAX,
++				      sizeof(uint64_t), GFP_KERNEL);
++	mem_info.mem_size = kcalloc(mem_info.num_of_cs * SLS_BLOCK_MAX,
++				    sizeof(uint64_t), GFP_KERNEL);
++
++	if (mem_info.mem_size == NULL || mem_info.mem_offset == NULL) {
++		kfree(mem_info.mem_offset);
++		kfree(mem_info.mem_size);
++		return NULL;
++	}
++
++	sls_set_mem_info(&mem_info);
+ 
+ 	return &mem_info;
+ }
+@@ -25,10 +37,13 @@ static const struct sls_mem_info *get_mem_info(void)
+ /*
+  * Set offsets for SLS blocks with different caching policies
+  */
+-static void set_ioremap_info(ulong *offset)
++static int set_ioremap_info(ulong *offset)
+ {
+ 	const struct sls_mem_info *mem_info = get_mem_info();
+ 
++	if (mem_info == NULL)
++		return -ENOMEM;
++
+ 	/* Set offset(iomem resource start address) */
+ 	offset[SLS_BASE_CS0] = mem_info->mem_offset[0][SLS_BLOCK_BASE];
+ 	offset[SLS_TAGS_CS0] = mem_info->mem_offset[0][SLS_BLOCK_TAGS];
+@@ -36,6 +51,11 @@ static void set_ioremap_info(ulong *offset)
+ 	offset[SLS_BASE_CS1] = mem_info->mem_offset[1][SLS_BLOCK_BASE];
+ 	offset[SLS_TAGS_CS1] = mem_info->mem_offset[1][SLS_BLOCK_TAGS];
+ 	offset[SLS_PSUM_CS1] = mem_info->mem_offset[1][SLS_BLOCK_PSUM];
++
++	kfree(mem_info->mem_offset);
++	kfree(mem_info->mem_size);
++
++	return 0;
+ }
+ 
+ static bool is_writecombine_region(int region_no)
+@@ -43,37 +63,48 @@ static bool is_writecombine_region(int region_no)
+ 	return region_no == SLS_BASE_CS0 || region_no == SLS_BASE_CS1;
+ }
+ 
+-static pgprot_t get_page_prot(struct vm_area_struct *vma)
++static int get_page_prot(struct vm_area_struct *vma, pgprot_t *p_prot)
+ {
+ 	unsigned long offset[NUM_OF_MEM_REGION];
+ 	int i;
+ 	unsigned long phys_offset;
+ 
++	if (set_ioremap_info(offset))
++		return -ENOMEM;
++
+ 	/* set physical offsets for SLS blocks with different caching policies */
+-	set_ioremap_info(offset);
+ 	phys_offset = vma->vm_pgoff << PAGE_SHIFT;
+ 
+ 	for (i = 0; i < NUM_OF_MEM_REGION - 1; ++i) {
+ 		if (phys_offset >= offset[i] && phys_offset < offset[i + 1]) {
+-			if (is_writecombine_region(i))
+-				return pgprot_writecombine(vma->vm_page_prot);
+-			return vma->vm_page_prot;
++			if (is_writecombine_region(i)) {
++				*p_prot =
++					pgprot_writecombine(vma->vm_page_prot);
++				return 0;
++			}
++			*p_prot = vma->vm_page_prot;
++			return 0;
+ 		}
+ 	}
+ 
+ 	/* last region corresponds to cs1 PSUM which is write-back */
+-	return vma->vm_page_prot;
++	*p_prot = vma->vm_page_prot;
++	return 0;
+ }
+ 
+ int sls_dax_mmap(struct file *filep, struct vm_area_struct *vma)
+ {
++	pgprot_t p_prot;
+ 	size_t page_addr, page_offset;
+ 	off_t gpio_addr = SLS_BASE_ADDR;
+ 
+ 	page_offset = gpio_addr >> PAGE_SHIFT;
+ 	page_addr = page_offset + vma->vm_pgoff;
+ 
+-	vma->vm_page_prot = get_page_prot(vma);
++	if (get_page_prot(vma, &p_prot))
++		return -ENOMEM;
++
++	vma->vm_page_prot = p_prot;
+ 
+ 	pr_info(LOG_PREFIX
+ 		"Device mmap Offset 0x%lx, Size 0x%lx, page prot 0x%lx\n",
+@@ -99,8 +130,11 @@ static int setup_sls_ranges(struct dev_dax *dev_dax)
+ 	unsigned long start, end;
+ 	const struct sls_mem_info *mem_info = get_mem_info();
+ 
++	if (mem_info == NULL)
++		return -ENOMEM;
++
+ 	rc = 0;
+-	dev_dax->nr_range = SLS_BLOCK_MAX * NUM_OF_CS;
++	dev_dax->nr_range = SLS_BLOCK_MAX * mem_info->num_of_cs;
+ 	ranges = krealloc(dev_dax->ranges, sizeof(*ranges) * dev_dax->nr_range,
+ 			  GFP_KERNEL);
+ 
+@@ -118,11 +152,9 @@ static int setup_sls_ranges(struct dev_dax *dev_dax)
+ 		 */
+ 		if (i == 0) {
+ 			start = orig_range_start;
+-			end = SLS_BASE_ADDR + mem_info->mem_size[cs][block] -
+-			      1;
++			end = SLS_BASE_ADDR + mem_info->mem_size[cs][block] - 1;
+ 		} else {
+-			start = mem_info->mem_offset[cs][block] +
+-				SLS_BASE_ADDR;
++			start = mem_info->mem_offset[cs][block] + SLS_BASE_ADDR;
+ 			end = start + mem_info->mem_size[cs][block] - 1;
+ 		}
+ 		ranges[i] = (struct dev_dax_range) {
+@@ -138,6 +170,9 @@ static int setup_sls_ranges(struct dev_dax *dev_dax)
+ 			i, ranges[i].range.start, ranges[i].range.end);
+ 	}
+ 
++	kfree(mem_info->mem_offset);
++	kfree(mem_info->mem_size);
++
+ 	return rc;
+ }
+ 
+@@ -149,7 +184,5 @@ int init_sls_dax_device(struct dev_dax *dev_dax)
+ 	/* Setup dev_dax ranges for SLS, this is needed for proper
+ 	 * devdax <-> system-ram transitions (devdax <-> kmem).
+ 	 */
+-	setup_sls_ranges(dev_dax);
+-
+-	return 0;
++	return setup_sls_ranges(dev_dax);
+ }
+diff --git a/drivers/dax/sls_dax.h b/drivers/dax/sls_dax.h
+index 1dbaa4296..9a5680327 100644
+--- a/drivers/dax/sls_dax.h
++++ b/drivers/dax/sls_dax.h
+@@ -14,13 +14,16 @@
+ #include <linux/fs.h>
+ #include <linux/mm_types.h>
+ 
++extern int sls_param_num_of_rank;
++extern int sls_param_num_of_chip_select;
++extern char *sls_device_name;
++
+ int sls_dax_mmap(struct file *filep, struct vm_area_struct *vma);
+ int init_sls_dax_device(struct dev_dax *dev_dax);
+ 
+ static inline bool is_sls_range(u64 start, u64 end)
+ {
+-	return start >= SLS_BASE_ADDR &&
+-	       end < SLS_BASE_ADDR + SLS_MEMORY_SIZE;
++	return start >= SLS_BASE_ADDR && end < SLS_BASE_ADDR + SLS_MEMORY_SIZE;
+ }
+ 
+ #endif /* __SLS_DAX_H__ */
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index 2052e3669..a4b12f97c 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -2,6 +2,7 @@ obj-$(CONFIG_SLS_RESOURCE) += sls_resource.o
+ 
+ CFLAGS_sls.o += -DSLS_DRIVER_VERSION=\"$(shell git rev-parse --short HEAD)\"
+ subdir-ccflags-y := -I $(srctree)/$(src)/..
++
+ sls_resource-y := resource.o
+ sls_resource-y += sls.o
+ sls_resource-y += allocator.o
+@@ -9,3 +10,4 @@ sls_resource-y += process_manager.o
+ sls_resource-y += rank_scheduler.o
+ sls_resource-y += sysfs.o
+ sls_resource-y += topology_export.o
++sls_resource-y += parameters.o
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index 4bcfd7cb6..14390783a 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -2,8 +2,8 @@
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "allocator.h"
+-
+ #include "log.h"
++#include "parameters.h"
+ #include "private.h"
+ #include "process_manager.h"
+ 
+@@ -21,6 +21,7 @@
+ struct allocator {
+ 	/* Allocator granularity in bytes, the number should be a power of 2 */
+ 	uint64_t gran;
++	uint64_t num_of_cs;
+ 	/* GenAlloc memory pools for each rank, each pool has it's own virtual
+ 	 * range, currently this range is not bound to the real memory by PA,
+ 	 * Range: [reserved_indent == PAGE_SIZE, rank_size - reserved_indent]
+@@ -113,11 +114,14 @@ static void cleanup_pools(struct allocator *alloc)
+ 
+ static inline uint64_t get_rank_size(struct allocator *alloc, uint8_t rank)
+ {
++	uint64_t num_of_ranks_per_cs =
++		sls_param_num_of_rank / sls_param_num_of_chip_select;
+ 	uint64_t size =
+-		alloc->mem_info->mem_size[rank % NUM_OF_CS][SLS_BLOCK_BASE];
++		alloc->mem_info
++			->mem_size[rank % alloc->num_of_cs][SLS_BLOCK_BASE];
+ 
+ 	if (alloc->devtype == SLS_AXDIMM)
+-		size /= NUM_RANKS_PER_CS;
++		size /= num_of_ranks_per_cs;
+ 
+ 	return size;
+ }
+@@ -181,12 +185,12 @@ static int init(struct allocator *alloc, struct sls_mem_info *mem_info,
+ 
+ 	alloc->mem_info = mem_info;
+ 	alloc->devtype = devtype;
++	alloc->num_of_cs = sls_param_num_of_chip_select;
++	alloc->nr_pools = sls_param_num_of_rank;
+ 
+ 	if (alloc->devtype == SLS_AXDIMM) {
+-		alloc->nr_pools = NUM_OF_CH * NUM_RANKS_PER_CS;
+ 		err = set_granularity(alloc, PAGE_SIZE);
+ 	} else { /* SLS_CXL case */
+-		alloc->nr_pools = NUM_OF_CH;
+ 		err = set_granularity(alloc, HUGE_PAGE_SIZE);
+ 	}
+ 	if (err)
+diff --git a/drivers/pnm/sls_resource/parameters.c b/drivers/pnm/sls_resource/parameters.c
+new file mode 100644
+index 000000000..e18ee69c5
+--- /dev/null
++++ b/drivers/pnm/sls_resource/parameters.c
+@@ -0,0 +1,50 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include "parameters.h"
++
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++
++//[TODO: y-lavrinenko] Add the parameters validation
++int sls_param_num_of_rank = 0x4;
++EXPORT_SYMBOL(sls_param_num_of_rank);
++int sls_param_num_of_chip_select = 0x2;
++EXPORT_SYMBOL(sls_param_num_of_chip_select);
++int sls_param_num_of_channel = 0x2;
++int sls_param_rank_interleaving_size = 0x80;
++int sls_param_channel_interleaving_size = 0x20000;
++int sls_param_interleaving_stride_len = 0x80;
++int sls_param_register_exec = 0x40;
++int sls_param_register_enable;
++int sls_param_register_polling = 0x840;
++int sls_param_aligned_tag_size = 64;
++int sls_param_instruction_size = 8;
++int sls_param_data_size = 4;
++
++module_param_named(num_of_rank, sls_param_num_of_rank, int, 0400);
++module_param_named(num_of_cs, sls_param_num_of_chip_select, int, 0400);
++module_param_named(num_of_ch, sls_param_num_of_channel, int, 0400);
++module_param_named(rank_interleaving_size, sls_param_rank_interleaving_size,
++		   int, 0400);
++module_param_named(channel_interleaving_size,
++		   sls_param_channel_interleaving_size, int, 0400);
++module_param_named(interleaving_stride, sls_param_interleaving_stride_len, int,
++		   0400);
++module_param_named(reg_en, sls_param_register_enable, int, 0400);
++module_param_named(reg_exec, sls_param_register_exec, int, 0400);
++module_param_named(reg_polling, sls_param_register_polling, int, 0400);
++module_param_named(aligned_tag_size, sls_param_aligned_tag_size, int, 0400);
++module_param_named(instruction_size, sls_param_instruction_size, int, 0400);
++module_param_named(data_size, sls_param_data_size, int, 0400);
++
++#define HW_BUF_SIZE (256 * 1024)
++
++int sls_param_inst_buf_size[MAX_NUM_OF_BUF] = { HW_BUF_SIZE };
++module_param_array_named(inst_buf, sls_param_inst_buf_size, int, NULL, 0400);
++
++int sls_param_psum_buf_size[MAX_NUM_OF_BUF] = { HW_BUF_SIZE, HW_BUF_SIZE };
++module_param_array_named(psum_buf, sls_param_psum_buf_size, int, NULL, 0400);
++
++int sls_param_tags_buf_size[MAX_NUM_OF_BUF] = { HW_BUF_SIZE, HW_BUF_SIZE };
++module_param_array_named(tags_buf, sls_param_tags_buf_size, int, NULL, 0400);
+diff --git a/drivers/pnm/sls_resource/parameters.h b/drivers/pnm/sls_resource/parameters.h
+new file mode 100644
+index 000000000..2263dc5ab
+--- /dev/null
++++ b/drivers/pnm/sls_resource/parameters.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef PNMLINUX_PARAMETERS_H
++#define PNMLINUX_PARAMETERS_H
++
++#include <linux/types.h>
++
++extern int sls_param_num_of_rank;
++extern int sls_param_num_of_chip_select;
++extern int sls_param_num_of_channel;
++
++extern int sls_param_rank_interleaving_size;
++extern int sls_param_channel_interleaving_size;
++extern int sls_param_interleaving_stride_len;
++
++extern int sls_param_register_enable;
++extern int sls_param_register_exec;
++extern int sls_param_register_polling;
++
++/* Single TAG size (Bytes) */
++extern int sls_param_aligned_tag_size;
++
++/* Instruction Size (Bytes) */
++extern int sls_param_instruction_size;
++
++/* Data Size (Bytes) */
++extern int sls_param_data_size;
++
++/* Instruction, Psum & Tags Buffers Size (Bytes) */
++#define MAX_NUM_OF_BUF 4
++extern int sls_param_inst_buf_size[MAX_NUM_OF_BUF];
++extern int sls_param_psum_buf_size[MAX_NUM_OF_BUF];
++extern int sls_param_tags_buf_size[MAX_NUM_OF_BUF];
++
++#endif //PNMLINUX_PARAMETERS_H
+diff --git a/drivers/pnm/sls_resource/rank_scheduler.c b/drivers/pnm/sls_resource/rank_scheduler.c
+index 00aa998fa..562a666cc 100644
+--- a/drivers/pnm/sls_resource/rank_scheduler.c
++++ b/drivers/pnm/sls_resource/rank_scheduler.c
+@@ -3,15 +3,16 @@
+ 
+ #include "rank_scheduler.h"
+ #include "log.h"
++#include "parameters.h"
+ #include "process_manager.h"
+ 
+ #include <linux/bitops.h>
++#include <linux/slab.h>
+ #include <linux/uaccess.h>
+ #include <linux/wait.h>
+ 
+ #define BUSY_STATE (1)
+ #define IDLE_STATE (0)
+-#define MAX_MSK_VAL ((1 << NUM_OF_RANK) - 1)
+ 
+ /* this timeout value was tunned for FPGA, in order to avoid hangs, which
+  * presumably come from userspace rank acquire attempts in a loop
+@@ -27,9 +28,10 @@ struct rank_scheduler {
+ 		uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(uint8_t)];
+ 		atomic64_t wr_acquisition_count;
+ 		uint8_t cacheline_padding_3[L1_CACHE_BYTES - sizeof(atomic64_t)];
+-	} rank_stats[NUM_OF_RANK];
++	} *rank_stats;
+ 	atomic64_t retry_timeout_ns;
+ 	uint8_t cacheline_padding_4[L1_CACHE_BYTES - sizeof(atomic64_t)];
++	uint64_t num_of_rank;
+ 	struct mutex rank_stat_lock;
+ };
+ 
+@@ -45,12 +47,12 @@ acquire_free_rank_for_write(struct rank_scheduler *rank_sched,
+ 			    unsigned int rw_msk, unsigned int wo_msk)
+ {
+ 	unsigned long rank;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->rank_stats;
++	struct sls_rank_stat_t *rs = rank_sched->rank_stats;
+ 
+ 	rank = __ffs(rw_msk ? rw_msk : wo_msk);
+ 
+-	axd_rs[rank].wr_stat = BUSY_STATE;
+-	atomic64_inc(&axd_rs[rank].wr_acquisition_count);
++	rs[rank].wr_stat = BUSY_STATE;
++	atomic64_inc(&rs[rank].wr_acquisition_count);
+ 	return rank;
+ }
+ 
+@@ -58,14 +60,14 @@ static void find_free_ranks(struct rank_scheduler *rank_sched, unsigned int msk,
+ 			    unsigned int *rw_msk, unsigned int *wo_msk)
+ {
+ 	size_t rank;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->rank_stats;
++	struct sls_rank_stat_t *rs = rank_sched->rank_stats;
+ 
+ 	/* fill wo_msk and rw_msk according to actual read and write
+ 	 * rank statuses and user requested mask
+ 	 */
+-	for (rank = 0; rank < NUM_OF_RANK; rank++) {
+-		if (msk & (1 << rank) && axd_rs[rank].wr_stat == IDLE_STATE) {
+-			if (axd_rs[rank].rd_stat == IDLE_STATE)
++	for (rank = 0; rank < rank_sched->num_of_rank; rank++) {
++		if (msk & (1 << rank) && rs[rank].wr_stat == IDLE_STATE) {
++			if (rs[rank].rd_stat == IDLE_STATE)
+ 				*rw_msk |= (1 << rank);
+ 			else
+ 				*wo_msk |= (1 << rank);
+@@ -83,7 +85,7 @@ void reset_rank_scheduler(void)
+ 	SLS_DBG("Resetting SLS rank scheduler\n");
+ 
+ 	/* set all ranks as idle */
+-	for (rank = 0; rank < NUM_OF_RANK; rank++) {
++	for (rank = 0; rank < sls_rank_sched.num_of_rank; rank++) {
+ 		sls_rank_sched.rank_stats[rank].wr_stat = IDLE_STATE;
+ 		sls_rank_sched.rank_stats[rank].rd_stat = IDLE_STATE;
+ 		atomic64_set(
+@@ -94,15 +96,27 @@ void reset_rank_scheduler(void)
+ 	atomic64_set(&sls_rank_sched.retry_timeout_ns, RETRY_TIMEOUT_NS);
+ }
+ 
+-void init_rank_scheduler(void)
++int init_rank_scheduler(void)
+ {
+-	reset_rank_scheduler();
++	sls_rank_sched.num_of_rank = sls_param_num_of_rank;
++	sls_rank_sched.rank_stats = kcalloc(sls_rank_sched.num_of_rank,
++					    sizeof(struct sls_rank_stat_t),
++					    GFP_KERNEL);
++
++	if (!sls_rank_sched.rank_stats) {
++		SLS_ERR("No free memory for rank_stats\n");
++		return -ENOMEM;
++	}
++
++	atomic64_set(&sls_rank_sched.retry_timeout_ns, RETRY_TIMEOUT_NS);
+ 	mutex_init(&sls_rank_sched.rank_stat_lock);
++
++	return 0;
+ }
+ 
+ void destroy_rank_scheduler(void)
+ {
+-	reset_rank_scheduler();
++	kfree(sls_rank_sched.rank_stats);
+ 	mutex_destroy(&sls_rank_sched.rank_stat_lock);
+ }
+ 
+@@ -112,10 +126,11 @@ static int get_rank_write(struct rank_scheduler *rank_sched, unsigned int msk)
+ 	/* masks for saving available ranks in corresponding bits */
+ 	unsigned int rw_mask = 0;
+ 	unsigned int wo_mask = 0;
++	unsigned int max_msk_val = (1 << rank_sched->num_of_rank) - 1;
+ 
+ 	SLS_DBG("Acquiring rank for write (mask 0x%x)\n", msk);
+ 
+-	if (msk > MAX_MSK_VAL) {
++	if (msk > max_msk_val) {
+ 		SLS_ERR("Invalid mask value: 0x%x\n", msk);
+ 		return ret;
+ 	}
+@@ -144,11 +159,11 @@ static int get_rank_read(struct rank_scheduler *rank_sched,
+ 			 unsigned int rank_id)
+ {
+ 	int ret = -1;
+-	struct sls_rank_stat_t *axd_rs = rank_sched->rank_stats;
++	struct sls_rank_stat_t *rs = rank_sched->rank_stats;
+ 
+ 	SLS_DBG("Acquiring rank %u for read\n", rank_id);
+ 
+-	if (rank_id > (NUM_OF_RANK - 1)) {
++	if (rank_id > (rank_sched->num_of_rank - 1)) {
+ 		SLS_ERR("Invalid rank value: %u\n", rank_id);
+ 		return ret;
+ 	}
+@@ -156,9 +171,9 @@ static int get_rank_read(struct rank_scheduler *rank_sched,
+ 	mutex_lock(&rank_sched->rank_stat_lock);
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(rank_sched->rank_stats);
+-		if (axd_rs[rank_id].rd_stat == IDLE_STATE) {
++		if (rs[rank_id].rd_stat == IDLE_STATE) {
+ 			ret = rank_id;
+-			axd_rs[rank_id].rd_stat = BUSY_STATE;
++			rs[rank_id].rd_stat = BUSY_STATE;
+ 		}
+ 	}
+ 	mutex_unlock(&rank_sched->rank_stat_lock);
+@@ -174,11 +189,11 @@ static int get_rank_read(struct rank_scheduler *rank_sched,
+ int release_rank_write(unsigned int rank_id)
+ {
+ 	int ret = rank_id;
+-	struct sls_rank_stat_t *axd_rs = sls_rank_sched.rank_stats;
++	struct sls_rank_stat_t *rs = sls_rank_sched.rank_stats;
+ 
+ 	SLS_DBG("Releasing rank %u for write\n", rank_id);
+ 
+-	if (rank_id > (NUM_OF_RANK - 1)) {
++	if (rank_id > (sls_rank_sched.num_of_rank - 1)) {
+ 		SLS_ERR("Invalid rank value: %u\n", rank_id);
+ 		return -1;
+ 	}
+@@ -186,7 +201,7 @@ int release_rank_write(unsigned int rank_id)
+ 	mutex_lock(&sls_rank_sched.rank_stat_lock);
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sls_rank_sched.rank_stats);
+-		axd_rs[rank_id].wr_stat = IDLE_STATE;
++		rs[rank_id].wr_stat = IDLE_STATE;
+ 	}
+ 	mutex_unlock(&sls_rank_sched.rank_stat_lock);
+ 
+@@ -196,11 +211,11 @@ int release_rank_write(unsigned int rank_id)
+ int release_rank_read(unsigned int rank_id)
+ {
+ 	int ret = rank_id;
+-	struct sls_rank_stat_t *axd_rs = sls_rank_sched.rank_stats;
++	struct sls_rank_stat_t *rs = sls_rank_sched.rank_stats;
+ 
+ 	SLS_DBG("Releasing rank %u for read\n", rank_id);
+ 
+-	if (rank_id > (NUM_OF_RANK - 1)) {
++	if (rank_id > (sls_rank_sched.num_of_rank - 1)) {
+ 		SLS_ERR("Invalid rank value: %u\n", rank_id);
+ 		return -1;
+ 	}
+@@ -208,7 +223,7 @@ int release_rank_read(unsigned int rank_id)
+ 	mutex_lock(&sls_rank_sched.rank_stat_lock);
+ 	{
+ 		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sls_rank_sched.rank_stats);
+-		axd_rs[rank_id].rd_stat = IDLE_STATE;
++		rs[rank_id].rd_stat = IDLE_STATE;
+ 	}
+ 	mutex_unlock(&sls_rank_sched.rank_stat_lock);
+ 	return ret;
+@@ -345,3 +360,8 @@ int release_sls_rank(struct file *filp, unsigned int cmd, unsigned int arg)
+ 
+ 	return -1;
+ }
++
++uint64_t rank_scheduler_rank_num(void)
++{
++	return sls_rank_sched.num_of_rank;
++}
+diff --git a/drivers/pnm/sls_resource/rank_scheduler.h b/drivers/pnm/sls_resource/rank_scheduler.h
+index 719d74552..62103e16a 100644
+--- a/drivers/pnm/sls_resource/rank_scheduler.h
++++ b/drivers/pnm/sls_resource/rank_scheduler.h
+@@ -12,7 +12,7 @@
+ #include <linux/types.h>
+ 
+ void reset_rank_scheduler(void);
+-void init_rank_scheduler(void);
++int init_rank_scheduler(void);
+ void destroy_rank_scheduler(void);
+ int get_sls_rank(struct file *filp, unsigned int cmd, unsigned int arg);
+ int release_sls_rank(struct file *filp, unsigned int cmd, unsigned int arg);
+@@ -26,6 +26,7 @@ int release_rank_read(unsigned int rank_id);
+ 
+ bool rank_scheduler_rank_state(uint8_t rank);
+ uint64_t rank_scheduler_acquisition_count(uint8_t rank);
++uint64_t rank_scheduler_rank_num(void);
+ 
+ uint64_t rank_scheduler_acquisition_timeout(void);
+ void rank_scheduler_set_acquisition_timeout(uint64_t timeout);
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 5ea06b09a..f10d19abc 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -2,6 +2,7 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "log.h"
++#include "parameters.h"
+ #include "private.h"
+ #include "process_manager.h"
+ #include "sysfs.h"
+@@ -11,7 +12,6 @@
+ #include <linux/cdev.h>
+ #include <linux/dax.h>
+ #include <linux/fs.h>
+-#include <linux/io.h>
+ #include <linux/mm.h>
+ #include <linux/mman.h>
+ #include <linux/module.h>
+@@ -177,6 +177,23 @@ static void sls_destroy_cdev(void)
+ 	cdev_del(&sls_resource_cdev);
+ }
+ 
++static int init_mem_info(struct sls_mem_info *mem_info)
++{
++	mem_info->devtype = get_device_type(sls_device_name);
++	mem_info->num_of_cs = sls_param_num_of_chip_select;
++	mem_info->mem_offset = kcalloc(mem_info->num_of_cs * SLS_BLOCK_MAX,
++				       sizeof(uint64_t), GFP_KERNEL);
++	mem_info->mem_size = kcalloc(mem_info->num_of_cs * SLS_BLOCK_MAX,
++				     sizeof(uint64_t), GFP_KERNEL);
++
++	if (mem_info->mem_size == NULL || mem_info->mem_offset == NULL)
++		return -ENOMEM;
++
++	sls_set_mem_info(mem_info);
++
++	return 0;
++}
++
+ int init_sls_device(void)
+ {
+ 	int err;
+@@ -217,7 +234,9 @@ int init_sls_device(void)
+ 	}
+ 
+ 	/* Initialize device mem_info */
+-	sls_set_mem_info(&mem_info);
++	err = init_mem_info(&mem_info);
++	if (err)
++		goto mem_info_fail;
+ 
+ 	/* Initialize memory allocator */
+ 	err = init_sls_allocator(&mem_info, sls_device_type);
+@@ -225,21 +244,28 @@ int init_sls_device(void)
+ 		goto allocator_fail;
+ 
+ 	/* Reset ranks status and synchronization primitives */
+-	init_rank_scheduler();
++	err = init_rank_scheduler();
++	if (err)
++		goto rank_scheduler_fail;
+ 
+ 	/* Create sysfs subsystem for the device */
+ 	err = build_sls_sysfs(&mem_info, sls_resource_device, sls_device_type);
+ 	if (unlikely(err))
+-		goto build_sls_sysfs_fail;
++		goto build_sysfs_fail;
+ 
+ 	SLS_INF("Initialization is done");
+ 	return 0;
+ 
+-build_sls_sysfs_fail:
++build_sysfs_fail:
+ 	destroy_rank_scheduler();
+ 	cleanup_process_manager();
++rank_scheduler_fail:
++	cleanup_sls_allocator();
+ allocator_fail:
+ 	sls_destroy_cdev();
++mem_info_fail:
++	kfree(mem_info.mem_offset);
++	kfree(mem_info.mem_size);
+ init_cdev_fail:
+ 	pnm_destroy_resource_device(sls_resource_device);
+ resource_device_fail:
+@@ -255,6 +281,10 @@ void cleanup_sls_device(void)
+ 	/* Free allocated memory */
+ 	cleanup_sls_allocator();
+ 
++	/* Free mem_info structure */
++	kfree(mem_info.mem_offset);
++	kfree(mem_info.mem_size);
++
+ 	/* Free allocated memory if any user processes alive upon device remove*/
+ 	cleanup_process_manager();
+ 
+diff --git a/drivers/pnm/sls_resource/sysfs.c b/drivers/pnm/sls_resource/sysfs.c
+index 1fb5cc6b6..6a5d13c5f 100644
+--- a/drivers/pnm/sls_resource/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs.c
+@@ -4,6 +4,7 @@
+ #include "sysfs.h"
+ #include "allocator.h"
+ #include "log.h"
++#include "parameters.h"
+ #include "private.h"
+ #include "process_manager.h"
+ #include "rank_scheduler.h"
+@@ -153,7 +154,7 @@ struct regions_sysfs {
+ 	struct kobject regions_kobj;
+ };
+ 
+-static struct rank_sysfs {
++struct rank_sysfs {
+ 	struct rank_attribute attrs[RANK_SYSFS_ATTR_COUNT];
+ 	struct attribute *attributes[WITH_NULL_TERM(RANK_SYSFS_ATTR_COUNT)];
+ 	struct attribute_group group;
+@@ -161,7 +162,9 @@ static struct rank_sysfs {
+ 		*groups[WITH_NULL_TERM(RANK_SYSFS_GROUPS_COUNT)];
+ 	struct regions_sysfs regions_fs;
+ 	struct kobject rank_idx_kobj;
+-} ranks_fs[NUM_OF_RANK];
++};
++
++static struct rank_sysfs *ranks_fs;
+ 
+ static const char *const rank_attr_name[] = {
+ 	"state",
+@@ -222,19 +225,22 @@ static const char *const region_attr_name[] = {
+ static ssize_t region_show(struct region_attribute *attr, char *buf)
+ {
+ 	uint64_t size;
++	uint64_t num_of_cs;
++	uint64_t num_of_rank;
+ 
+-	if (strcmp(attr->attr.name, region_attr_name[0]) == 0) {
+-		size = mem_info->mem_size[attr->rank % NUM_OF_CS][attr->region];
++	num_of_cs = sls_param_num_of_chip_select;
++	num_of_rank = sls_param_num_of_rank;
+ 
+-		if (sls_device_type == SLS_AXDIMM)
+-			size /= NUM_RANKS_PER_CS;
++	if (strcmp(attr->attr.name, region_attr_name[0]) == 0) {
++		size = mem_info->mem_size[attr->rank % num_of_cs][attr->region] /
++		       (num_of_rank / num_of_cs);
+ 
+ 		return sysfs_emit(buf, "%llu\n", size);
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, region_attr_name[1]) == 0)
+ 		return sysfs_emit(buf, "%llu\n",
+-				  mem_info->mem_offset[attr->rank % NUM_OF_CS]
++				  mem_info->mem_offset[attr->rank % num_of_cs]
+ 						      [attr->region]);
+ 
+ 	return 0;
+@@ -363,6 +369,13 @@ static int build_rank_sysfs(struct kobject *kobj, uint8_t rank)
+ 
+ 	SLS_DBG("Building SLS sysfs for rank %hhu\n", rank);
+ 
++	ranks_fs = kcalloc(sls_param_num_of_rank, sizeof(struct rank_sysfs),
++			   GFP_KERNEL);
++	if (!ranks_fs) {
++		SLS_ERR("No free memory for ranks direcotries\n");
++		return -ENOMEM;
++	}
++
+ 	kobject_init(&ranks_fs[rank].rank_idx_kobj, &rank_type);
+ 	sprintf(buf, "%hhu", rank);
+ 	err = kobject_add(&ranks_fs[rank].rank_idx_kobj, kobj, buf);
+@@ -392,6 +405,7 @@ int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev,
+ 		    enum sls_device_type devtype)
+ {
+ 	int rank;
++	uint64_t num_of_rank;
+ 	int err = 0;
+ 
+ 	if (devtype == SLS_UNDEFINED)
+@@ -401,6 +415,8 @@ int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev,
+ 
+ 	mem_info = meminfo;
+ 
++	num_of_rank = sls_param_num_of_rank;
++
+ 	SLS_DBG("Building SLS sysfs\n");
+ 	ranks_kobj = kobject_create_and_add("ranks", &resource_dev->kobj);
+ 
+@@ -421,7 +437,7 @@ int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev,
+ 		goto sysfs_out;
+ 	}
+ 
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++	for (rank = 0; rank < num_of_rank; ++rank) {
+ 		err = build_rank_sysfs(ranks_kobj, rank);
+ 		if (err) {
+ 			SLS_ERR("Failed to build sysfs for rank [%d]\n", rank);
+@@ -438,10 +454,13 @@ int build_sls_sysfs(struct sls_mem_info *meminfo, struct device *resource_dev,
+ void destroy_sls_sysfs(void)
+ {
+ 	int rank;
++	uint64_t num_of_rank;
+ 
+ 	SLS_DBG("Destroying SLS sysfs\n");
+ 
+-	for (rank = 0; rank < NUM_OF_RANK; ++rank) {
++	num_of_rank = sls_param_num_of_rank;
++
++	for (rank = 0; rank < num_of_rank; ++rank) {
+ 		sysfs_remove_groups(&ranks_fs[rank].regions_fs.regions_kobj,
+ 				    ranks_fs[rank].regions_fs.groups);
+ 		kobject_del(&ranks_fs[rank].regions_fs.regions_kobj);
+@@ -452,6 +471,7 @@ void destroy_sls_sysfs(void)
+ 	sls_destroy_topology_constants();
+ 	sysfs_remove_groups(ranks_kobj, dev_attr_groups);
+ 	kobject_del(ranks_kobj);
++	kfree(ranks_fs);
+ 
+ 	SLS_DBG("Destroyed SLS sysfs\n");
+ }
+diff --git a/drivers/pnm/sls_resource/topology_export.c b/drivers/pnm/sls_resource/topology_export.c
+index a0d7ec299..d7b4d4a67 100644
+--- a/drivers/pnm/sls_resource/topology_export.c
++++ b/drivers/pnm/sls_resource/topology_export.c
+@@ -3,6 +3,7 @@
+ 
+ #include "topology_export.h"
+ #include "log.h"
++#include "parameters.h"
+ #include "private.h"
+ 
+ #include <linux/pnm_sls_mem_topology.h>
+@@ -43,25 +44,41 @@
+ 	}                                                                    \
+ 	static DEVICE_ATTR_RO(name)
+ 
+-SINGLE_VALUE_ATTR(num_of_ranks, NUM_OF_RANK);
+-SINGLE_VALUE_ATTR(num_of_cs, NUM_OF_CS);
+-SINGLE_VALUE_ATTR(num_of_channel, NUM_OF_CH);
++static int actual_buffer_num(int buf[MAX_NUM_OF_BUF])
++{
++	int i;
++
++	for (i = 0; i < MAX_NUM_OF_BUF && buf[i] != 0; ++i)
++		;
++
++	return i;
++}
++
++SINGLE_VALUE_ATTR(num_of_ranks, sls_param_num_of_rank);
++SINGLE_VALUE_ATTR(num_of_cs, sls_param_num_of_chip_select);
++SINGLE_VALUE_ATTR(num_of_channel, sls_param_num_of_channel);
++
++SINGLE_VALUE_ATTR(instruction_size, sls_param_instruction_size);
++SINGLE_VALUE_ATTR(data_size, sls_param_data_size);
++SINGLE_VALUE_ATTR(aligned_tag_size, sls_param_aligned_tag_size);
++
++SINGLE_VALUE_ATTR(rank_interleaving_size, sls_param_rank_interleaving_size);
++SINGLE_VALUE_ATTR(channel_interleaving_size,
++		  sls_param_channel_interleaving_size);
++SINGLE_VALUE_ATTR(interleaving_stride, sls_param_interleaving_stride_len);
+ 
+-SINGLE_VALUE_ATTR(instruction_size, INSTRUCTION_SIZE);
+-SINGLE_VALUE_ATTR(data_size, DATA_SIZE);
+-SINGLE_VALUE_ATTR(aligned_tag_size, ALIGNED_TAG_SIZE);
++SINGLE_VALUE_ATTR(polling_reg_offset, sls_param_register_polling);
++SINGLE_VALUE_ATTR(sls_exec_value, sls_param_register_exec);
++SINGLE_VALUE_ATTR(enable_sls_reg_offset, sls_param_register_enable);
+ 
+-SINGLE_VALUE_ATTR(rank_interleaving_size, RANK_INTERLEAVING_SIZE);
+-SINGLE_VALUE_ATTR(channel_interleaving_size, CHANNEL_INTERLEAVING_SIZE);
+-SINGLE_VALUE_ATTR(interleaving_stride, INTERLEAVING_STRIDE_LENGTH);
++DOUBLE_VALUE_ATTR(psum_buffer, actual_buffer_num(sls_param_psum_buf_size),
++		  sls_param_psum_buf_size[0]);
+ 
+-SINGLE_VALUE_ATTR(polling_reg_offset, REG_POLLING);
+-SINGLE_VALUE_ATTR(sls_exec_value, REG_SLS_EXEC);
+-SINGLE_VALUE_ATTR(enable_sls_reg_offset, REG_SLS_EN);
++DOUBLE_VALUE_ATTR(tags_buffer, actual_buffer_num(sls_param_tags_buf_size),
++		  sls_param_tags_buf_size[0]);
+ 
+-DOUBLE_VALUE_ATTR(psum_buffer, NUM_OF_PSUM_BUF, PSUM_BUF_SIZE);
+-DOUBLE_VALUE_ATTR(tags_buffer, NUM_OF_TAGS_BUF, TAGS_BUF_SIZE);
+-DOUBLE_VALUE_ATTR(inst_buffer, NUM_OF_INST_BUF, INST_BUF_SIZE);
++DOUBLE_VALUE_ATTR(inst_buffer, actual_buffer_num(sls_param_inst_buf_size),
++		  sls_param_inst_buf_size[0]);
+ 
+ static struct kobject *mem_topo_kobj;
+ 
+diff --git a/include/linux/pnm_sls_set_mem_info.h b/include/linux/pnm_sls_set_mem_info.h
+index c8cbe6c77..51bd8fa89 100644
+--- a/include/linux/pnm_sls_set_mem_info.h
++++ b/include/linux/pnm_sls_set_mem_info.h
+@@ -88,10 +88,10 @@ static uint64_t sls_make_address(int channel, int rank, int bankgroup, int bank,
+ static void sls_set_mem_info(struct sls_mem_info *mem_info)
+ {
+ 	int cs;
+-	int block __maybe_unused;
++	int block;
+ 
+ 	/* Calculate system addr & size */
+-	for (cs = 0; cs < NUM_OF_CS; cs++) {
++	for (cs = 0; cs < mem_info->num_of_cs; cs++) {
+ 		/* init register address for each cs */
+ 		mem_info->mem_offset[cs][SLS_BLOCK_BASE] =
+ 			(cs & 1) ?
+@@ -126,15 +126,20 @@ static void sls_set_mem_info(struct sls_mem_info *mem_info)
+ 				[SLS_BLOCK_PSUM]; // Assume that all psum sizes are the same
+ 	}
+ 
+-#if CONFIG_DEV_SLS_BUS == SLS_TYPE_CXL
+-	for (cs = 0; cs < NUM_OF_CS; cs++) {
++	/* if more than one rank per CS, then it is AXDIMM type */
++	if (mem_info->devtype != SLS_CXL)
++		return;
++
++	/* one rank per CS, CXL type, need to adjust offsets and size */
++	for (cs = 0; cs < mem_info->num_of_cs; cs++) {
+ 		for (block = 0; block < SLS_BLOCK_MAX; ++block) {
+-			mem_info->mem_offset[cs][block] /= NUM_RANKS_PER_CS;
+-			mem_info->mem_size[cs][block] /= NUM_RANKS_PER_CS;
++			/* [TODO: MCS23-1373] get rid of magic '2' once mem_info
++			 * initialization will be refactored by above task
++			 */
++			mem_info->mem_offset[cs][block] /= 2;
++			mem_info->mem_size[cs][block] /= 2;
+ 		}
+ 	}
+-
+-#endif
+ }
+ 
+ #endif /* __SLS_SET_MEM_INFO_H__ */
+diff --git a/include/linux/sls_common.h b/include/linux/sls_common.h
+index a6cde47cb..489153552 100644
+--- a/include/linux/sls_common.h
++++ b/include/linux/sls_common.h
+@@ -11,13 +11,39 @@
+ 
+ #include <linux/pnm_sls_mem_topology.h>
+ #include <linux/sls_resources.h>
++#include <linux/io.h>
+ #include <linux/types.h>
+ 
++#define SLS_TYPE_UNDEFINED 0
++#define SLS_TYPE_AXDIMM 1
++#define SLS_TYPE_CXL 2
++#define SLS_TYPE_MAX 3
++
++enum sls_device_type {
++	SLS_UNDEFINED = SLS_TYPE_UNDEFINED,
++	SLS_AXDIMM = SLS_TYPE_AXDIMM,
++	SLS_CXL = SLS_TYPE_CXL,
++	SLS_MAX = SLS_TYPE_MAX,
++};
++
+ struct sls_mem_info {
+-	uint64_t mem_offset[NUM_OF_CS][SLS_BLOCK_MAX];
+-	uint64_t mem_size[NUM_OF_CS][SLS_BLOCK_MAX];
++	enum sls_device_type devtype;
++	uint64_t num_of_cs;
++	uint64_t (*mem_offset)[SLS_BLOCK_MAX];
++	uint64_t (*mem_size)[SLS_BLOCK_MAX];
+ };
+ 
++static inline enum sls_device_type get_device_type(char *device_name)
++{
++	if (strcmp("AXDIMM", device_name) == 0)
++		return SLS_AXDIMM;
++
++	if (strcmp("CXL", device_name) == 0)
++		return SLS_CXL;
++
++	return SLS_UNDEFINED;
++}
++
+ /* A scale of SLS memory range */
+ #define SLS_MEMORY_SCALE ((uint64_t)CONFIG_DEV_SLS_MEMORY_SCALE)
+ 
+@@ -42,16 +68,4 @@ enum sls_mem_regions_e {
+ 	NUM_OF_MEM_REGION = 6 /* Number of index for memory mapping region */
+ };
+ 
+-#define SLS_TYPE_UNDEFINED 0
+-#define SLS_TYPE_AXDIMM 1
+-#define SLS_TYPE_CXL 2
+-#define SLS_TYPE_MAX 3
+-
+-enum sls_device_type {
+-	SLS_UNDEFINED = SLS_TYPE_UNDEFINED,
+-	SLS_AXDIMM = SLS_TYPE_AXDIMM,
+-	SLS_CXL = SLS_TYPE_CXL,
+-	SLS_MAX = SLS_TYPE_MAX,
+-};
+-
+ #endif /* __SLS_COMMON_H__ */
+diff --git a/include/uapi/linux/pnm_sls_mem_topology.h b/include/uapi/linux/pnm_sls_mem_topology.h
+index fbb3bcdd2..a9791bef3 100644
+--- a/include/uapi/linux/pnm_sls_mem_topology.h
++++ b/include/uapi/linux/pnm_sls_mem_topology.h
+@@ -20,33 +20,10 @@
+ #include <stdint.h> // for uint64_t
+ #endif
+ 
+-/* Interleaving Stride length : 128Bytes (0x80) */
+-#define INTERLEAVING_STRIDE_LENGTH 0x80
+-
+-/* number of Home Agent(# of MC at CPU) */
+-#define NUM_OF_HA 2
+-
+-/* number of Channel(# of line can be connected at the same time in one MC) */
+-#define NUM_OF_CH 2
+-
+-/* number of CS(# of rank connected to one CH) */
+-#define NUM_OF_CS 2
+-
+ /* channel ID used by SLS accelerator */
++/* [TODO: MCS23-1373] remove once 'sls_set_mem_info' will be refactored */
+ #define SLS_CH_ID 0
+ 
+-/* total number of ranks for axdimm */
+-#define NUM_OF_RANK 4
+-
+-/* number of ranks on one chip select */
+-#define NUM_RANKS_PER_CS (NUM_OF_RANK / NUM_OF_CS)
+-
+-/* Channel interleaving unit size (Bytes) */
+-#define CHANNEL_INTERLEAVING_SIZE 0x20000
+-
+-/* Rank interleaving unit size (Bytes) */
+-#define RANK_INTERLEAVING_SIZE 0x80
+-
+ #endif
+ 
+ /* __PNM_SLS_MEM_TOPOLOGY_H__ */
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index b66b05386..6104d0477 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -22,24 +22,6 @@
+ 
+ #include <linux/pnm_sls_mem_topology.h>
+ 
+-/* Offset at config reg */
+-#define REG_SLS_EN 0x0
+-#define REG_SLS_EXEC 0x40
+-
+-/* number of Instruction, Psum & Tags buffers */
+-#define NUM_OF_INST_BUF 1
+-#define NUM_OF_PSUM_BUF 2
+-#define NUM_OF_TAGS_BUF 2
+-
+-/* Single TAG size (Bytes) */
+-#define ALIGNED_TAG_SIZE 64
+-
+-/* Instruction Size (Bytes) */
+-#define INSTRUCTION_SIZE 8
+-
+-/* Data Size (Bytes) */
+-#define DATA_SIZE 4
+-
+ #define SLS_RESOURCE_DEVICE_NAME "sls_resource"
+ 
+ /* Path to SLS resource manager device within /dev */
+-- 
+2.34.1
+

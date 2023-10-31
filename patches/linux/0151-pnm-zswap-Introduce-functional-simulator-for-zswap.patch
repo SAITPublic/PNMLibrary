@@ -1,7 +1,7 @@
 From 6e83f937e5cc86b5361094a5553b5f7b35d18f31 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Thu, 27 Jul 2023 02:54:57 -0400
-Subject: [PATCH 151/161] [pnm][zswap] Introduce functional simulator for zswap
+Subject: [PATCH 151/225] [pnm][zswap] Introduce functional simulator for zswap
 
 Here we introduce the initial version of functional simulator and made
 minor refactor of simulator code to brake dependencies from compression

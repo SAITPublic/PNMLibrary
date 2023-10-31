@@ -1,7 +1,7 @@
 From f050811219bbb7de9e2398e0da93fadb818aad3a Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 23 May 2023 04:56:19 +0000
-Subject: [PATCH 111/161] [refactor] Rename libaxdimm.h and
+Subject: [PATCH 111/225] [refactor] Rename libaxdimm.h and
  axdimm_set_mem_info.h
 
 Complete 'axdimm' -> 'sls' transition by renaming 2 last headers:

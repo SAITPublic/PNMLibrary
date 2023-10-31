@@ -26,7 +26,7 @@ namespace {
 std::mutex print_profiling_info_mutex;
 
 void sls_report_profile_impl() {
-  if (get_profiling_flag()) {
+  if (pnm::profile::get_profiling_flag()) {
     const std::lock_guard<std::mutex> guard(print_profiling_info_mutex);
     pnm::log::profile("PRINTING PROFILING INFO:");
     pnm::utils::NamedTimer::print_profiling_info();
@@ -35,8 +35,12 @@ void sls_report_profile_impl() {
 
 } // namespace
 
+namespace pnm::profile {
+
 PNM_API void sls_report_profile() { sls_report_profile_impl(); }
 
 PNM_API void sls_start_profiling() { start_profiling(); }
 
 PNM_API void sls_end_profiling() { end_profiling(); }
+
+} // namespace pnm::profile

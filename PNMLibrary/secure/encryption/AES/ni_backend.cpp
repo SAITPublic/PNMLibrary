@@ -27,13 +27,13 @@
 #include <memory>
 
 namespace {
-unsigned aes_rounds_count(sls::secure::AES_KEY_SIZE key) {
+unsigned aes_rounds_count(pnm::sls::secure::AES_KEY_SIZE key) {
   switch (key) {
-  case sls::secure::AES_KEY_SIZE::AES_128:
+  case pnm::sls::secure::AES_KEY_SIZE::AES_128:
     return 10;
-  case sls::secure::AES_KEY_SIZE::AES_192:
+  case pnm::sls::secure::AES_KEY_SIZE::AES_192:
     return 12;
-  case sls::secure::AES_KEY_SIZE::AES_256:
+  case pnm::sls::secure::AES_KEY_SIZE::AES_256:
     return 14;
   };
   return 0;
@@ -123,8 +123,8 @@ unsigned long AES_ECB_encrypt(const uint8_t *in, uint8_t *out,
 }
 } // namespace
 
-sls::secure::AES_NI_Backend::AES_NI_Backend(sls::secure::AES_KEY_SIZE key_size,
-                                            const uint8_t *key)
+pnm::sls::secure::AES_NI_Backend::AES_NI_Backend(
+    pnm::sls::secure::AES_KEY_SIZE key_size, const uint8_t *key)
     : encryption_rounds_(::aes_rounds_count(key_size)) {
   key_schedule_ =
       std::make_unique<uint8_t[]>((encryption_rounds_ + 1) * ::AES_BLOCK_SIZE);
@@ -141,8 +141,8 @@ sls::secure::AES_NI_Backend::AES_NI_Backend(sls::secure::AES_KEY_SIZE key_size,
   }
 }
 
-int sls::secure::AES_NI_Backend::encrypt(const uint8_t *data, int length,
-                                         uint8_t *out) const {
+int pnm::sls::secure::AES_NI_Backend::encrypt(const uint8_t *data, int length,
+                                              uint8_t *out) const {
   return ::AES_ECB_encrypt(data, out, length, key_schedule_.get(),
                            encryption_rounds_);
 }

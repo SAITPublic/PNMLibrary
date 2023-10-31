@@ -28,6 +28,8 @@
 #include <stdexcept>
 #include <string>
 
+namespace tools::gen::sls {
+
 IndicesInfo::IndicesInfo(const std::filesystem::path &path) {
   std::ifstream in(path);
   in.exceptions(std::istream::badbit);
@@ -75,3 +77,5 @@ void IndicesInfo::store_to_file(const std::filesystem::path &path) const {
   fmt::print(out, "lengths = {}\n", fmt::join(lengths(), " "));
   fmt::print(out, "minibatch_sizes = {}\n", minibatch_sizes_);
 }
+
+} // namespace tools::gen::sls

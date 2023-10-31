@@ -1,7 +1,7 @@
 From 9cd77f98e1e10dbdd40809dd60183002589fec1e Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 3 Nov 2021 16:21:40 +0900
-Subject: [PATCH 021/128] [caffe2/core] Add AXDIMM event functionality
+Subject: [PATCH 021/135] [caffe2/core] Add AXDIMM event functionality
 
 Sync/Async runs are handled with events; each device has its own event
 handling. Implement this for AXDIMM (almost same to CPU though).

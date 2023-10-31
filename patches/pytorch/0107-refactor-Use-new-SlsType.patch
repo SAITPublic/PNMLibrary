@@ -1,7 +1,7 @@
 From b15b349cb146b01513ead03926854466d43c1070 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 14 Mar 2023 19:05:33 +0300
-Subject: [PATCH 107/128] [refactor] Use new SlsType
+Subject: [PATCH 107/135] [refactor] Use new SlsType
 
 Update code according to new API (`axdimm_sls_type` -> `SlsType`)
 

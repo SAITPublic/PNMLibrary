@@ -1,7 +1,7 @@
 From 921e202be6f4f7e7361f4468d41b06b39ff737a5 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Wed, 26 Oct 2022 17:41:42 +0900
-Subject: [PATCH 081/128] [torch/nn/modules] Fix EmbeddingBagAxdimm helper
+Subject: [PATCH 081/135] [torch/nn/modules] Fix EmbeddingBagAxdimm helper
  binding
 
 The helper class name is AxdimmPrecompiledOp, not AxdimmOperationsStorage.

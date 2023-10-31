@@ -1,7 +1,7 @@
 From 5be4ba6f54b1679584e9079e0391c65bc52c1872 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 13 Jun 2022 10:47:23 +0900
-Subject: [PATCH 045/128] [caffe2] Support new AxdimmMemoryObject based API for
+Subject: [PATCH 045/135] [caffe2] Support new AxdimmMemoryObject based API for
  tables and new psum type
 
 * now before creating AxdimmTablesLayout one need to create AxdimmMemoryObject

@@ -12,10 +12,10 @@
 #ifndef PNM_SLS_SUPPL_H
 #define PNM_SLS_SUPPL_H
 
-#include "core/device/sls/control.h"
-
 #include "common/file_descriptor_holder.h"
 #include "common/topology_constants.h"
+
+#include "pnmlib/sls/control.h"
 
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/device.h"
@@ -34,30 +34,32 @@
 #include <limits>
 #include <vector>
 
-using pnm::device::topo;
+using pnm::sls::device::topo;
 
-template <typename T> class SLSFixture : public ::testing::Test {
+template <typename T> class SlsFixture : public ::testing::Test {
 protected:
   using value_type = T;
 
-  SLSFixture() : rank_mem_(topo().NumOfRanks) {}
+  SlsFixture()
+      : rank_mem_(topo().NumOfCUnits),
+        device_(pnm::sls::device::get_device_path(), O_RDWR) {}
 
   void SetUp() override {
     const pnm::sls::device::Control ctrl_context;
     const auto mem_info = ctrl_context.get_mem_info();
 
-    for (auto rid = 0U; rid < topo().NumOfRanks; ++rid) {
-      auto *addr = static_cast<uint8_t *>(
-          mmap(nullptr, mem_info[rid][SLS_BLOCK_BASE].size * topo().NumOfCS,
-               PROT_READ | PROT_WRITE, MAP_SHARED, *device_,
-               mem_info[rid][SLS_BLOCK_BASE].offset));
-      ASSERT_NE(addr, MAP_FAILED);
+    for (auto rid = 0U; rid < topo().NumOfCUnits; ++rid) {
+      const auto &block_info = mem_info[rid][SLS_BLOCK_BASE];
+      auto *memory = static_cast<uint8_t *>(
+          mmap(nullptr, block_info.map_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+               *device_, block_info.map_offset));
+      ASSERT_NE(memory, MAP_FAILED);
 
       auto size = mem_info[rid][SLS_BLOCK_BASE].size;
 
-      rank_mem_[rid] = pnm::make_view(addr, size);
+      rank_mem_[rid] = pnm::views::make_view(memory, size);
     }
-    ctx_ = pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+    ctx_ = pnm::make_context(pnm::Device::Type::SLS);
 
     data_.resize(VALUES_COUNT);
 
@@ -71,7 +73,7 @@ protected:
   }
 
   void TearDown() override {
-    for (auto rid = 0U; rid < topo().NumOfRanks; ++rid) {
+    for (auto rid = 0U; rid < topo().NumOfCUnits; ++rid) {
       auto *addr = rank_mem_[rid].data();
       auto size = rank_mem_[rid].size();
 
@@ -79,15 +81,11 @@ protected:
     }
   }
 
-  // [TODO: @a.korzun] Consider renaming this, as DRV_PATH was renamed to
-  // SLS_MEMDEV_PATH.
-  static constexpr auto SLS_DRV_PATH =
-      PNM_PLATFORM != FUNCSIM ? SLS_MEMDEV_PATH : "/dev/shm/sls";
-  std::vector<pnm::common_view<uint8_t>> rank_mem_;
-  pnm::utils::FileDescriptorHolder device_{SLS_DRV_PATH, O_RDWR};
+  std::vector<pnm::views::common<uint8_t>> rank_mem_;
+  pnm::utils::FileDescriptorHolder device_;
   pnm::ContextHandler ctx_;
 
-  static constexpr auto TEST_DATASET_SIZE = 1024 * 1024 * 8;
+  static constexpr auto TEST_DATASET_SIZE = 8 << 20; // MB
   static constexpr auto VALUES_COUNT = TEST_DATASET_SIZE / sizeof(value_type);
   std::vector<T> data_;
 };

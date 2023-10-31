@@ -18,6 +18,8 @@
 
 #include <memory>
 
+namespace tools::gen::sls {
+
 IndicesGeneratorFactory &IndicesGeneratorFactory::default_factory() {
   static IndicesGeneratorFactory factory;
 
@@ -30,3 +32,5 @@ IndicesGeneratorFactory &IndicesGeneratorFactory::default_factory() {
   });
   return factory;
 }
+
+} // namespace tools::gen::sls

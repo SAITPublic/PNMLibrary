@@ -1,7 +1,7 @@
 From 4d2acccf3f06e3193c64c7f6d182f1482212d4d6 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 13 Oct 2022 16:43:36 +0300
-Subject: [PATCH 10/27] [ci] Add build scripts for CI
+Subject: [PATCH 10/29] [ci] Add build scripts for CI
 
 Related to: AXDIMM-396
 ---

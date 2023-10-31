@@ -1,7 +1,7 @@
 From 36e2effa39b1e08683a60d99f45217510601a0b0 Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Wed, 5 Apr 2023 16:44:31 +0300
-Subject: [PATCH 100/161] [axdimm_resource] Add install_axdimm_resource.sh.
+Subject: [PATCH 100/225] [axdimm_resource] Add install_axdimm_resource.sh.
 
 The script installs the axdimm_resource driver compiled in-tree
 and `modprobe`s it.

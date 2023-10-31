@@ -11,7 +11,7 @@
 
 #include "transfer_manager.h"
 
-#include "core/device/sls/rank_address.h"
+#include "core/device/sls/utils/rank_address.h"
 
 #include "pnmlib/core/transfer_manager.h"
 
@@ -19,17 +19,17 @@
 
 #include <cstdint>
 
-uint64_t pnm::memory::AXDIMMTransferManager::copy_to_device_impl(
-    pnm::common_view<const uint8_t> host_region,
+uint64_t pnm::memory::AxdimmTransferManager::copy_to_device_impl(
+    pnm::views::common<const uint8_t> host_region,
     const pnm::memory::TransferManager::DeviceRegionInfo &dev_region) {
   const auto &vregion = std::get<VRegionType>(dev_region.virt);
   const auto &pregion = std::get<RegionType>(dev_region.phys);
 
   uint64_t copied = 0;
   for (auto i = 0UL; i < vregion.size(); ++i) {
-    if (!vregion[i].empty()) {
+    if (!vregion[i].empty() && pregion.regions[i].location.has_value()) {
       auto ipointer = pnm::sls::device::make_interleaved_pointer(
-          pregion.regions[i].location, pregion.regions[i].start,
+          *pregion.regions[i].location, pregion.regions[i].start,
           vregion[i].begin());
 
       copied = pnm::sls::device::memcpy_interleaved(
@@ -39,17 +39,17 @@ uint64_t pnm::memory::AXDIMMTransferManager::copy_to_device_impl(
   return copied;
 }
 
-uint64_t pnm::memory::AXDIMMTransferManager::copy_from_device_impl(
+uint64_t pnm::memory::AxdimmTransferManager::copy_from_device_impl(
     const pnm::memory::TransferManager::DeviceRegionInfo &dev_region,
-    pnm::common_view<uint8_t> host_region) {
+    pnm::views::common<uint8_t> host_region) {
   const auto &vregion = std::get<VRegionType>(dev_region.virt);
   const auto &pregion = std::get<RegionType>(dev_region.phys);
 
   uint64_t copied = 0;
   for (auto i = 0UL; i < vregion.size(); ++i) {
-    if (!vregion[i].empty()) {
+    if (!vregion[i].empty() && pregion.regions[i].location.has_value()) {
       auto ipointer = pnm::sls::device::make_interleaved_pointer(
-          pregion.regions[i].location, pregion.regions[i].start,
+          *pregion.regions[i].location, pregion.regions[i].start,
           vregion[i].begin());
 
       copied = pnm::sls::device::memcpy_interleaved(

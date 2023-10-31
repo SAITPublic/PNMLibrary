@@ -21,7 +21,7 @@
 
 namespace tools::ctl::sls {
 
-class SetupDaxDevice final : public ICommand {
+class SetupDaxDevice : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 
@@ -29,7 +29,7 @@ private:
   void execute();
 };
 
-class DestroyDaxDevice final : public ICommand {
+class DestroyDaxDevice : public ICommand {
 public:
   void add_subcommand(CLI::App &app) override;
 

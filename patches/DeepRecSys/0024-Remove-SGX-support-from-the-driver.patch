@@ -1,7 +1,7 @@
 From 3d3d347055b414f6d170fa87f0acd6139bfeb4df Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Thu, 17 Nov 2022 15:58:00 +0300
-Subject: [PATCH 24/33] Remove SGX support from the driver.
+Subject: [PATCH 24/34] Remove SGX support from the driver.
 
 This commit removes SGX support from the AXDIMM driver, because it
 is supposed to be superseeded with running the whole driver under

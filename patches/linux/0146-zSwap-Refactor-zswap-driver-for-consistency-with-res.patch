@@ -1,7 +1,7 @@
 From ca32a13f141261a2cb0364da6fe7fb2156253b93 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Tue, 25 Jul 2023 05:13:27 -0400
-Subject: [PATCH 146/161] [zSwap] Refactor zswap driver for consistency with
+Subject: [PATCH 146/225] [zSwap] Refactor zswap driver for consistency with
  resource modules
 
 - Group sim files to one module and rename module to pnm_zswap_sim

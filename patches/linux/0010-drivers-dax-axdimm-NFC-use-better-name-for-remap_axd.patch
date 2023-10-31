@@ -1,7 +1,7 @@
 From 02b2062a5805caf140f22267dde0258ecfd086b5 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Thu, 2 Dec 2021 10:42:10 +0900
-Subject: [PATCH 010/161] [drivers/dax/axdimm] NFC: use better name for
+Subject: [PATCH 010/225] [drivers/dax/axdimm] NFC: use better name for
  remap_axdimm_range
 
 Rename remap_axdimm_range, remove unused parameter, add comment.

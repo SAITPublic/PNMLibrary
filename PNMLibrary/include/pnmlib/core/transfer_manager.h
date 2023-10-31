@@ -26,8 +26,9 @@ namespace pnm::memory {
 class TransferManager {
 public:
   template <typename T>
-  uint64_t copy_to_device(common_view<T> host_region, Accessor<T> accessor) {
-    auto casted_range = view_cast<const uint8_t>(host_region);
+  uint64_t copy_to_device(pnm::views::common<T> host_region,
+                          Accessor<T> accessor) {
+    auto casted_range = pnm::views::view_cast<const uint8_t>(host_region);
     const auto copied = copy_to_device_impl(
         casted_range,
         DeviceRegionInfo{accessor.virtual_range(), accessor.phys_range()});
@@ -38,8 +39,9 @@ public:
   }
 
   template <typename T>
-  uint64_t copy_from_device(Accessor<T> accessor, common_view<T> host_region) {
-    auto casted_range = view_cast<uint8_t>(host_region);
+  uint64_t copy_from_device(Accessor<T> accessor,
+                            pnm::views::common<T> host_region) {
+    auto casted_range = pnm::views::view_cast<uint8_t>(host_region);
     const auto copied = copy_from_device_impl(
         DeviceRegionInfo{accessor.virtual_range(), accessor.phys_range()},
         casted_range);
@@ -58,10 +60,12 @@ protected:
   };
 
 private:
-  virtual uint64_t copy_to_device_impl(common_view<const uint8_t> host_region,
-                                       const DeviceRegionInfo &dev_region) = 0;
-  virtual uint64_t copy_from_device_impl(const DeviceRegionInfo &dev_region,
-                                         common_view<uint8_t> host_region) = 0;
+  virtual uint64_t
+  copy_to_device_impl(pnm::views::common<const uint8_t> host_region,
+                      const DeviceRegionInfo &dev_region) = 0;
+  virtual uint64_t
+  copy_from_device_impl(const DeviceRegionInfo &dev_region,
+                        pnm::views::common<uint8_t> host_region) = 0;
 };
 
 } // namespace pnm::memory

@@ -1,7 +1,7 @@
 From dcc4d6c49bec1be66b18cb01e6901727f12ce411 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 26 Apr 2022 15:54:31 +0900
-Subject: [PATCH 022/161] [drivers/dax/axdimm] Define AXDIMM_BASE_ADDR in
+Subject: [PATCH 022/225] [drivers/dax/axdimm] Define AXDIMM_BASE_ADDR in
  Kconfig
 
 Move AXDIMM_BASE_ADDR into Kconfig to allow user specify it during build time.

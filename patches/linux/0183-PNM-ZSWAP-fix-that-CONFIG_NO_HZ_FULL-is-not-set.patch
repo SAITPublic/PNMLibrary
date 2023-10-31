@@ -1,0 +1,63 @@
+From fa630d9e46a5c51992585000d7db3d8ccc4bde9a Mon Sep 17 00:00:00 2001
+From: "mao.chen" <mao.chen@samsung.com>
+Date: Wed, 13 Sep 2023 23:58:27 +0800
+Subject: [PATCH 183/225] [PNM][ZSWAP]fix that CONFIG_NO_HZ_FULL is not set
+
+enable CONFIG_NO_HZ_FULL, and disable CONFIG_NO_HZ_IDLE.
+CONFIG_NO_HZ_FULL parameter is used to isolate CPU
+
+Resolve: 1552
+
+Signed-off-by: mao.chen <mao.chen@samsung.com>
+---
+ PNM_ZSWAP_HOW_TO.md | 18 ++++++++++++++++++
+ config-pnm          |  4 ++--
+ 2 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/PNM_ZSWAP_HOW_TO.md b/PNM_ZSWAP_HOW_TO.md
+index 7d260eae8..dd1916f2c 100644
+--- a/PNM_ZSWAP_HOW_TO.md
++++ b/PNM_ZSWAP_HOW_TO.md
+@@ -10,6 +10,24 @@ so you should just ignore it during the build.
+ 
+ During the build you should setup all parameters in next states:
+ ```bash
++* Timers subsystem
++*
++Timer tick handling
++  1. Periodic timer ticks (constant rate, no dynticks) (HZ_PERIODIC)
++  2. Idle dynticks system (tickless idle) (NO_HZ_IDLE) (NEW)
++> 3. Full dynticks system (tickless) (NO_HZ_FULL)
++choice[1-3?]: 3
++Force user context tracking (CONTEXT_TRACKING_USER_FORCE) [N/y/?] (NEW) n
++Old Idle dynticks config (NO_HZ) [Y/n/?] y
++High Resolution Timer Support (HIGH_RES_TIMERS) [Y/n/?] y
++Clocksource watchdog maximum allowable skew (in μs) (CLOCKSOURCE_WATCHDOG_MAX_SKEW_US) [100] 100
++*
++* RCU Subsystem
++*
++Make expert-level adjustments to RCU configuration (RCU_EXPERT) [N/y/?] n
++Offload RCU callback processing from boot-selected CPUs (RCU_NOCB_CPU) [Y/?] (NEW) y
++  Offload RCU callback processing from all CPUs by default (RCU_NOCB_CPU_DEFAULT_ALL) [N/y/?] (NEW) n
++*
+ * DAX: direct access to differentiated memory
+ *
+ DAX: direct access to differentiated memory (DAX) [Y/?] y
+diff --git a/config-pnm b/config-pnm
+index aa2ccb75c..d97b82bd2 100644
+--- a/config-pnm
++++ b/config-pnm
+@@ -100,8 +100,8 @@ CONFIG_CONTEXT_TRACKING_IDLE=y
+ CONFIG_TICK_ONESHOT=y
+ CONFIG_NO_HZ_COMMON=y
+ # CONFIG_HZ_PERIODIC is not set
+-CONFIG_NO_HZ_IDLE=y
+-# CONFIG_NO_HZ_FULL is not set
++# CONFIG_NO_HZ_IDLE
++CONFIG_NO_HZ_FULL=y
+ CONFIG_NO_HZ=y
+ CONFIG_HIGH_RES_TIMERS=y
+ CONFIG_CLOCKSOURCE_WATCHDOG_MAX_SKEW_US=100
+-- 
+2.34.1
+

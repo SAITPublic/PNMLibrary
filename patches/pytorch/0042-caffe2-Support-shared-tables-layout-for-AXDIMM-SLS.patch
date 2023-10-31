@@ -1,7 +1,7 @@
 From 339b6ce6a9d7588cf56fef11018e5e75d1eaba83 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 27 May 2022 17:07:18 +0900
-Subject: [PATCH 042/128] [caffe2] Support shared tables layout for AXDIMM SLS
+Subject: [PATCH 042/135] [caffe2] Support shared tables layout for AXDIMM SLS
 
 * add "shared_tables_uuid" parameter to AXDIMMSparseLengthsReductionOpVec
   to be able to get shared tables from application.

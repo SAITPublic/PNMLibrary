@@ -18,7 +18,7 @@
 #include <cstddef>
 #include <iterator>
 
-namespace pnm {
+namespace pnm::views {
 /*! \brief Class presents contiguous memory range as an array of views
  *
  * Class provides access to single constant contiguous memory block like it
@@ -40,22 +40,21 @@ namespace pnm {
  *   - back_gap -- a gap between logical and physical row ends
  * @tparam T type of elements in array
  * */
-template <typename T> class rowwise_view {
+template <typename T> class rowwise {
 public:
-  rowwise_view() = default;
-  rowwise_view(T *begin, T *end, size_t row_size, size_t front_gap,
-               size_t back_gap)
+  rowwise() = default;
+  rowwise(T *begin, T *end, size_t row_size, size_t front_gap, size_t back_gap)
       : begin_{begin}, end_{end}, row_physical_size_{row_size},
         row_logical_size_{row_size - back_gap - front_gap},
         front_gap_{front_gap},
         size_(std::distance(begin_, end_) / row_physical_size_) {}
 
-  rowwise_view(T *begin, T *end, size_t row_size)
-      : rowwise_view(begin, end, row_size, 0, 0) {}
+  rowwise(T *begin, T *end, size_t row_size)
+      : rowwise(begin, end, row_size, 0, 0) {}
 
   template <typename R> struct views_iterator {
     using iterator_category = std::random_access_iterator_tag;
-    using value_type = pnm::common_view<R>;
+    using value_type = common<R>;
     using difference_type = std::ptrdiff_t;
     using pointer = value_type *;
     using reference = value_type &;
@@ -144,7 +143,7 @@ private:
 template <typename T>
 auto make_rowwise_view(T *begin, T *end, size_t row_size, size_t front_gap,
                        size_t back_gap) {
-  return rowwise_view(begin, end, row_size, front_gap, back_gap);
+  return rowwise(begin, end, row_size, front_gap, back_gap);
 }
 
 template <typename T>
@@ -152,6 +151,6 @@ auto make_rowwise_view(T *begin, T *end, size_t row_size) {
   return make_rowwise_view(begin, end, row_size, 0, 0);
 }
 
-} // namespace pnm
+} // namespace pnm::views
 
 #endif // PNM_ROWWISE_VIEW_H

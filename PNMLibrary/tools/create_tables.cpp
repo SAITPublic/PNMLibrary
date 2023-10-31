@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
                  "Path to the root directory where test tables will be located")
       ->check(CLI::ExistingDirectory)
       ->required();
-  app.add_option("-n,--num_tables", num_tables, "Number of embedded tables")
+  app.add_option("-n,--num_tables", num_tables, "Number of embedding tables")
       ->default_val(1);
   app.add_option("--ms,--min_table_size", min_table_size,
                  "Min number of rows for each table")
@@ -76,8 +76,9 @@ int main(int argc, char **argv) {
     return app.exit(e);
   }
 
-  auto table_generator = TablesGeneratorFactory::default_factory().create(
-      generator_name, generator_args);
+  auto table_generator =
+      tools::gen::sls::TablesGeneratorFactory::default_factory().create(
+          generator_name, generator_args);
 
   std::vector<uint32_t> rows(num_tables);
 
@@ -96,7 +97,8 @@ int main(int argc, char **argv) {
   std::generate(rows.begin(), rows.end(),
                 [&engine, &rows_distr]() { return rows_distr(engine); });
 
-  const TablesInfo info(num_tables, sparse_feature_size, std::move(rows));
+  const tools::gen::sls::TablesInfo info(num_tables, sparse_feature_size,
+                                         std::move(rows));
   table_generator->create_and_store(tables_root, info);
   return 0;
 }

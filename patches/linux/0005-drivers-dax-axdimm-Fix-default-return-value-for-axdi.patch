@@ -1,7 +1,7 @@
 From ede696c4c89e150ac8110b7944317f5618d62641 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 19 Nov 2021 14:43:08 +0900
-Subject: [PATCH 005/161] [drivers/dax/axdimm] Fix default return value for
+Subject: [PATCH 005/225] [drivers/dax/axdimm] Fix default return value for
  axdimm_ioctl
 
 With '-ENOTTY' as a default value axdimm_starter fails to write

@@ -1,0 +1,66 @@
+From c55f4ae5a10c3dbe58c10f4591d0b1d4a5873a4d Mon Sep 17 00:00:00 2001
+From: Alex Antonov <alex.antonov@samsung.com>
+Date: Tue, 3 Oct 2023 19:28:30 +0300
+Subject: [PATCH 200/225] [sls] Fix KCSAN issue
+
+If we release mutex inside the scope,
+we are still in the scope. It can be the reason
+of KCSAN ASSERT_EXCLUSIVE_ACCESS_SCOPED issue.
+
+Signed-off-by: Alex Antonov <alex.antonov@samsung.com>
+---
+ drivers/pnm/sls_resource/allocator.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index 326ecd7f3..c45f2d1cd 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -106,8 +106,7 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 		err = pnm_alloc_pool_malloc(&alloc, kreq.memory_pool, kreq.size,
+ 					    &kreq.addr);
+ 		if (unlikely(err)) {
+-			unlock_sls_allocator();
+-			return err;
++			goto unlock_and_exit;
+ 		}
+ 
+ 		SLS_COPY_TO_USER(err, ureq, &kreq,
+@@ -115,8 +114,7 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 		if (unlikely(err)) {
+ 			PNM_ERR("Failed to write user alloc request. Ptr = %p.\n",
+ 				ureq);
+-			unlock_sls_allocator();
+-			return err;
++			goto unlock_and_exit;
+ 		}
+ 
+ 		err = sls_proc_register_alloc(filp, kreq);
+@@ -126,6 +124,8 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 				kreq.memory_pool, kreq.addr, kreq.size);
+ 		}
+ 	}
++
++unlock_and_exit:
+ 	unlock_sls_allocator();
+ 
+ 	return err;
+@@ -157,12 +157,13 @@ static int deallocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 
+ 		err = deallocate_memory_unsafe(kreq);
+ 		if (unlikely(err)) {
+-			unlock_sls_allocator();
+-			return err;
++			goto unlock_and_exit;
+ 		}
+ 
+ 		err = sls_proc_remove_alloc(filp, kreq);
+ 	}
++
++unlock_and_exit:
+ 	unlock_sls_allocator();
+ 
+ 	return err;
+-- 
+2.34.1
+

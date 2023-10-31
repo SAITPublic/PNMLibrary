@@ -1,0 +1,38 @@
+From 0b5058cabcd6573d11111174cbc4c9f7533c5c9f Mon Sep 17 00:00:00 2001
+From: "mao.chen" <mao.chen@samsung.com>
+Date: Fri, 29 Sep 2023 01:11:10 +0800
+Subject: [PATCH 206/225] fix:[PNM][ZSWAP] pnm_accel error log
+
+When pnm_accel is set to a wrong value, a zpool error log is reported
+
+Closes: MCS23-1552
+
+Signed-off-by: mao.chen <mao.chen@samsung.com>
+---
+ mm/pnm/pnm_zswap.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index 679c66d60..c850dfd8f 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1119,10 +1119,15 @@ static int __cxl_zswap_param_set(const char *val, const struct kernel_param *kp,
+ 		return param_set_charp(s, kp);
+ 
+ 	if (!type) {
+-		if (!zpool_has_pool(s)) {
++		if (!strcmp(cxl_zswap_compressor, compressor) &&
++		    !zpool_has_pool(s)) {
+ 			PNM_ERR("zpool %s not available\n", s);
+ 			return -ENOENT;
+ 		}
++		if (!strcmp(pnm_accel_type, compressor)) {
++			PNM_ERR("pnm_accel %s not available\n", s);
++			return -ENOENT;
++		}
+ 		type = s;
+ 	} else if (!compressor) {
+ 		if (!crypto_has_acomp(s, 0, 0)) {
+-- 
+2.34.1
+

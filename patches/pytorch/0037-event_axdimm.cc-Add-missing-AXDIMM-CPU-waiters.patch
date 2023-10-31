@@ -1,7 +1,7 @@
 From 37804db75a7ad3d2b9b734274e3e3f47f1612ab9 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 15 Feb 2022 14:54:18 +0900
-Subject: [PATCH 037/128] [event_axdimm.cc] Add missing AXDIMM <-> CPU waiters
+Subject: [PATCH 037/135] [event_axdimm.cc] Add missing AXDIMM <-> CPU waiters
 
 Add missed registers:
 

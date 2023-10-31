@@ -1,7 +1,7 @@
 From 156f298e002db66d5b1ff4dbf2f6db4b829426ec Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Sun, 30 Jul 2023 21:03:15 -0400
-Subject: [PATCH 153/161] [pnm][zswap] Fix simulator state transition sequence
+Subject: [PATCH 153/225] [pnm][zswap] Fix simulator state transition sequence
 
 The state transition sequence was changed in next way:
 1.In HOST thread: `done` flag of the compression/decompression unit is

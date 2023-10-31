@@ -16,21 +16,25 @@
 #include "pnmlib/common/views.h"
 
 #include <cstdint>
+#include <optional>
 #include <variant>
 #include <vector>
 
 namespace pnm::memory {
 /** @brief The sequential device's memory region */
 struct SequentialRegion {
-  uintptr_t start = 0;   // region start address
-  uint64_t size = 0;     // region size
-  int32_t location = -1; // location tag (rank id or similar)
+  uintptr_t start = 0; // region start address
+  uint64_t size = 0;   // region size
+  std::optional<uint8_t> location =
+      std::nullopt;      // location tag (rank id or similar)
+  uint8_t is_global = 0; // is region in global pool
 };
 
+// [TODO: MCS23-432] Use default comparison operator
 inline bool operator==(const SequentialRegion &lhs,
                        const SequentialRegion &rhs) {
   return lhs.start == rhs.start && lhs.size == rhs.size &&
-         lhs.location == rhs.location;
+         lhs.location == rhs.location && lhs.is_global == rhs.is_global;
 }
 
 // [TODO @e-kutovoi MCS23-1260]: Make this a `using` declaration
@@ -46,8 +50,8 @@ inline bool operator==(const RankedRegion &lhs, const RankedRegion &rhs) {
 
 using DeviceRegion = std::variant<SequentialRegion, RankedRegion>;
 
-using VirtualSequentialRegion = pnm::common_view<uint8_t>;
-using VirtualRankedRegion = std::vector<pnm::common_view<uint8_t>>;
+using VirtualSequentialRegion = pnm::views::common<uint8_t>;
+using VirtualRankedRegion = std::vector<pnm::views::common<uint8_t>>;
 using VirtualRegion =
     std::variant<VirtualSequentialRegion, VirtualRankedRegion>;
 

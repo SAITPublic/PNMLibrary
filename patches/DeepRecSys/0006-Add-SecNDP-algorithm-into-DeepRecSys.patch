@@ -1,7 +1,7 @@
 From 84251852cb58da0922e939f076692061f286f811 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 16 Jun 2022 17:28:11 +0300
-Subject: [PATCH 06/33] Add SecNDP algorithm into DeepRecSys
+Subject: [PATCH 06/34] Add SecNDP algorithm into DeepRecSys
 
  * Make possible to use SecNDP in DeepRecSys app.
  * Forward embedded tables path to caffe2 operator to avoid extra copy.

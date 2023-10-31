@@ -23,8 +23,8 @@
 namespace pnm {
 class PNM_API Device {
 public:
-  enum class Type { SLS_AXDIMM, SLS_CXL, IMDB_CXL };
-  enum class ResetOptions : size_t {
+  enum class Type : uint8_t { SLS, IMDB };
+  enum class ResetOptions : uint8_t {
     SoftwareOnly = 0,
     HardwareOnly = 1,
     SoftwareHardware = 2,
@@ -63,6 +63,8 @@ public:
     }
   }
 
+  size_t memory_size() const { return memory_size_impl(); }
+
   bool get_resource_cleanup() const { return get_resource_cleanup_impl(); };
 
   void set_resource_cleanup(bool state) const {
@@ -79,6 +81,7 @@ public:
   virtual Type get_device_type() const = 0;
 
 protected:
+  virtual size_t memory_size_impl() const = 0;
   virtual void reset_impl(ResetOptions options) = 0;
   virtual bool get_resource_cleanup_impl() const = 0;
   virtual void set_resource_cleanup_impl(bool state) const = 0;

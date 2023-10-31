@@ -16,10 +16,10 @@ export PATH=$PATH:`pwd`/build/tools
 ./scripts/create_test_dataset.sh --root ~/path/to/test_folder/testset_1 --secndp
 ```
 
-Script will create `testset_1` directory and several subdirectories with embedded tables, indices and golden vectors.
+Script will create `testset_1` directory and several subdirectories with embedding tables, indices and golden vectors.
 You can look at the dataset via common hex editors.
 
-This script also allows to create embedded tables for DLRM.
+This script also allows to create embedding tables for DLRM.
 
 ```shell
 ./scripts/create_test_dataset.sh --root ~/path/to/test_folder/testset_1 --dlrm

@@ -1,7 +1,7 @@
 From ba87477ab71a4cf08265b9edafaff063c32580c2 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Mon, 10 Jul 2023 21:54:15 -0400
-Subject: [PATCH 132/161] [pnm][zswap] Add HW accelerated implementation of
+Subject: [PATCH 132/225] [pnm][zswap] Add HW accelerated implementation of
  zswap
 
 The hardware accelerated implementation of zswap was added. Here we use

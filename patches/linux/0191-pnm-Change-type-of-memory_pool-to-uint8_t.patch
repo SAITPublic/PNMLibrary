@@ -1,0 +1,43 @@
+From d903caf63431018df8efeb452a263b63709f2a78 Mon Sep 17 00:00:00 2001
+From: Bogdan Palkin <b.palkin@samsung.com>
+Date: Fri, 22 Sep 2023 09:48:06 +0000
+Subject: [PATCH 191/225] [pnm] Change type of memory_pool to uint8_t
+
+Type has been changed to uint8_t, because we don't use more than
+it can provide to us.
+
+Signed-off-by: Bogdan Palkin <b.palkin@samsung.com>
+---
+ include/uapi/linux/pnm_resources.h | 2 +-
+ include/uapi/linux/sls_resources.h | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/include/uapi/linux/pnm_resources.h b/include/uapi/linux/pnm_resources.h
+index d238f604f..546cc57cf 100644
+--- a/include/uapi/linux/pnm_resources.h
++++ b/include/uapi/linux/pnm_resources.h
+@@ -24,7 +24,7 @@
+ struct pnm_allocation {
+ 	uint64_t addr;
+ 	uint64_t size;
+-	uint32_t memory_pool;
++	uint8_t memory_pool;
+ };
+ #pragma pack(pop)
+ 
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 02ed1b479..49f2f74aa 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -174,7 +174,7 @@ enum sls_user_preferences {
+ #define GET_ALLOC_SINGLE_CUNIT_PREFERENCE(preference) \
+ 	((preference & SLS_USER_CUNIT_MASK) >> SLS_USER_PREF_BITS)
+ 
+-#define SLS_ALLOC_ANY_CUNIT 0xffffffffU
++#define SLS_ALLOC_ANY_CUNIT ((uint8_t)0xffU)
+ 
+ #define SLS_IOC_MAGIC 'T'
+ 
+-- 
+2.34.1
+

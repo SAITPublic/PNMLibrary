@@ -1,7 +1,7 @@
 From 4c2bbf32906c4682014c6466c1fc817a6cf76d9a Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 1 Nov 2021 16:55:43 +0900
-Subject: [PATCH 007/128] [caffe2/proto] Add AXDIMM protobuf type
+Subject: [PATCH 007/135] [caffe2/proto] Add AXDIMM protobuf type
 
 Handle AXDIMM in protobuf as a separate device type.
 

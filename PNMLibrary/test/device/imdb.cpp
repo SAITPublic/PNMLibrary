@@ -25,18 +25,18 @@
 #include <random>
 #include <vector>
 
-class IMDBAllocatorFixture : public ::testing::Test {
+class ImdbAllocatorFixture : public ::testing::Test {
 protected:
   pnm::ContextHandler ctx;
   pnm::imdb::device::BaseDevice *dev;
 
   void SetUp() override {
-    ctx = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+    ctx = pnm::make_context(pnm::Device::Type::IMDB);
     dev = ctx->device()->as<pnm::imdb::device::BaseDevice>();
   }
 };
 
-TEST_F(IMDBAllocatorFixture, AllocatorBasic) {
+TEST_F(ImdbAllocatorFixture, AllocatorBasic) {
   const auto mem_size = dev->memory_size();
   const auto free_size = dev->free_size();
   const auto alignment = dev->alignment();
@@ -54,7 +54,7 @@ TEST_F(IMDBAllocatorFixture, AllocatorBasic) {
   EXPECT_EQ(dev->free_size(), free_size);
 }
 
-TEST_F(IMDBAllocatorFixture, AllocDealloc) {
+TEST_F(ImdbAllocatorFixture, AllocDealloc) {
   // random constants
   static constexpr int alloc_cnt = 42;
   const long long alloc_size = dev->alignment() * 42;
@@ -80,7 +80,7 @@ TEST_F(IMDBAllocatorFixture, AllocDealloc) {
   EXPECT_EQ(dev->free_size(), dev->memory_size());
 }
 
-TEST_F(IMDBAllocatorFixture, AllocateEverything) {
+TEST_F(ImdbAllocatorFixture, AllocateEverything) {
   const long long alloc_size = dev->alignment() * 4;
   const int alloc_cnt = dev->memory_size() / alloc_size;
 
@@ -107,7 +107,7 @@ TEST_F(IMDBAllocatorFixture, AllocateEverything) {
   EXPECT_EQ(dev->free_size(), dev->memory_size());
 }
 
-TEST_F(IMDBAllocatorFixture, AllocDeallocMT) {
+TEST_F(ImdbAllocatorFixture, AllocDeallocMT) {
   auto job = [this]() {
     // currently we can allocate up to 34359738368 / 2097152 = 16384
     // alignments, so make sure that we won't allocate more

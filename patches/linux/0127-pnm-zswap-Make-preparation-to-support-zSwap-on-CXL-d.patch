@@ -1,7 +1,7 @@
 From 78c8937c70c9919bbe73d840de7b962c105ea511 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Sun, 9 Jul 2023 21:23:43 -0400
-Subject: [PATCH 127/161] [pnm][zswap] Make preparation to support zSwap on CXL
+Subject: [PATCH 127/225] [pnm][zswap] Make preparation to support zSwap on CXL
  device
 
 The parameters to enable support of CXL-zSwap device were added into

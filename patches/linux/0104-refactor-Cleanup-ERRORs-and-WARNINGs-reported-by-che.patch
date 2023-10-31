@@ -1,7 +1,7 @@
 From a201a548a0253c9ff3760af2f1f6d4ddf3ec5a0b Mon Sep 17 00:00:00 2001
 From: Sergey Lavrentiev <s.lavrentiev@samsung.com>
 Date: Tue, 11 Apr 2023 17:19:56 +0300
-Subject: [PATCH 104/161] [refactor] Cleanup ERRORs and WARNINGs reported by
+Subject: [PATCH 104/225] [refactor] Cleanup ERRORs and WARNINGs reported by
  checkpatch
 
 Resolves: MCS23-292

@@ -1,0 +1,441 @@
+From 9ab8f6272e495f0b07acbee6a559a843466173b5 Mon Sep 17 00:00:00 2001
+From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+Date: Mon, 11 Sep 2023 17:12:55 +0300
+Subject: [PATCH 181/225] [pnm][doc] Add module parameters description
+
+The PNM_HOW_TO_BUILD.md was renamed to PNM_README.md.
+The information about sls_resource module parameters was added.
+
+Resolve: MCS23-1542
+Signed-off-by: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
+---
+ PNM_HOW_TO_BUILD.md | 106 -------------------
+ PNM_README.md       | 242 ++++++++++++++++++++++++++++++++++++++++++++
+ PNM_ZSWAP_HOW_TO.md |  29 ++++--
+ 3 files changed, 260 insertions(+), 117 deletions(-)
+ delete mode 100644 PNM_HOW_TO_BUILD.md
+ create mode 100644 PNM_README.md
+
+diff --git a/PNM_HOW_TO_BUILD.md b/PNM_HOW_TO_BUILD.md
+deleted file mode 100644
+index 37a1706ba..000000000
+--- a/PNM_HOW_TO_BUILD.md
++++ /dev/null
+@@ -1,106 +0,0 @@
+-# Kernel build & install
+-
+-## Build
+-
+-```bash
+-$ make distclean # cleanup from previous build
+-$ cp -v config-pnm .config
+-$ make -j `getconf _NPROCESSORS_ONLN` bindeb-pkg # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
+-# NOTE: to speed-up build process is recommended to use `ccache`: make CC="ccache gcc" -j `getconf _NPROCESSORS_ONLN`
+-...
+-
+-* DAX: direct access to differentiated memory
+-*
+-DAX: direct access to differentiated memory (DAX) [Y/?] y
+-  Device DAX: direct access mapping device (DEV_DAX) [M/n/y/?] m
+-    PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
+-  HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
+-  KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+-     Choose PNM SLS device type
+-    > 1. AXDIMM (DEV_SLS_AXDIMM) (NEW)
+-      2. CXL (DEV_SLS_CXL) (NEW)
+-    choice[1-2?]: -> choose between AXDIMM and CXL SLS
+-
+-# If CXL-zSwap is required set the next options, otherwise just leave it as default.
+-CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y # Or N if you don't want to build kernel with zswap
+-  CXL-zSwap simulator (PNM_ZSWAP_SIM) [Y/n/m/?] (NEW) m
+-  Modify allocation policy in zbud allocator (PNM_ZSWAP_MODIFY_ZBUD) [Y/n/?] (NEW) y
+-    A NUMA node index (PNM_ZSWAP_NUMA_NODE) [1] (NEW) 1
+-
+-*
+-* IMDB Resource Manager
+-*
+-IMDB Resource Manager (IMDB_RESOURCE) [M/n/y/?] m
+-  A scale of IMDB memory range (IMDB_MEMORY_SCALE) [0] (NEW) 0 -> choose IMDB scale here (0 for 32GB, 1 for 16GB, 2 for 8GB and etc)
+-```
+-
+-## Install
+-
+-```bash
+-$ ./scripts/pnm/install_debs.sh
+-```
+-
+-# DAX driver only
+-
+-```bash
+-$ make M=drivers/dax/ -j32
+-```
+-
+-Built drivers can then be installed with `install_dax_drivers` script:
+-```bash
+-$ ./scripts/pnm/install_dax_drivers.sh
+-```
+-
+-# Class resource driver only (required to install SLS/IMDB resource)
+-
+-```bash
+-$ make M=drivers/pnm/ -j32
+-```
+-
+-Built drivers can then be installed with `install_pnm_resource` script:
+-```bash
+-$ ./scripts/pnm/install_pnm_resource.sh
+-```
+-
+-# SLS resource driver only
+-
+-```bash
+-$ make M=drivers/pnm/sls_resource/ -j32
+-```
+-
+-Built drivers can then be installed with `install_sls_resource` script:
+-```bash
+-$ ./scripts/pnm/install_sls_resource.sh
+-```
+-
+-# IMDB resource driver only
+-
+-```bash
+-$ make M=drivers/pnm/imdb_resource/ -j32
+-```
+-
+-Built drivers can then be installed with `install_imdb_resource` script:
+-```bash
+-$ ./scripts/pnm/install_imdb_resource.sh
+-```
+-
+-# Install SLS headers only
+-```bash
+-$ ./scripts/pnm/install_sls_headers.sh
+-```
+-
+-## Parameters
+-
+-If you want to override default module parameters, you can specify them explicitly in `modprobe` command.
+-For example, the code below sets the `scale` and `base_addr` parameters to 1 and 4 respectively.
+-
+-```bash
+-sudo modprobe sls_resource dev_type=CXL scale=1 base_addr=4
+-```
+-
+-If you do not want to pass module parameters every time, you can set arguments in linux cmd-line
+-Just edit `/etc/default/grub` and add needed parameters to`GRUB_CMDLINE_LINUX_DEFAULT` like
+-
+-```bash
+-GRUB_CMDLINE_LINUX_DEFAULT="sls_resource.dev_type=CXL sls_resource.base_addr=4 sls_resource.scale=1"
+-```
+\ No newline at end of file
+diff --git a/PNM_README.md b/PNM_README.md
+new file mode 100644
+index 000000000..e7fd9383b
+--- /dev/null
++++ b/PNM_README.md
+@@ -0,0 +1,242 @@
++# Kernel build & install
++
++## Build
++
++```bash
++$ make clean # cleanup
++# NOTE: to make deep clean you can use `make distclean` command instead.
++$ cp -v config-pnm .config
++$ make -j `getconf _NPROCESSORS_ONLN` bindeb-pkg # check https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html#s-common-building
++# NOTE: to speed-up build process is recommended to use `ccache`: make CC="ccache gcc" -j `getconf _NPROCESSORS_ONLN` bindeb-pkg
++...
++
++* DAX: direct access to differentiated memory
++*
++DAX: direct access to differentiated memory (DAX) [Y/?] y
++  Device DAX: direct access mapping device (DEV_DAX) [M/n/y/?] m
++    PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
++  HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
++  KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
++     Choose PNM SLS device type
++    > 1. AXDIMM (DEV_SLS_AXDIMM) (NEW)
++      2. CXL (DEV_SLS_CXL) (NEW)
++    choice[1-2?]: -> choose between AXDIMM and CXL SLS
++
++# If CXL-zSwap is required set the next options, otherwise just leave it as default.
++CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y # Or N if you don't want to build kernel with zswap
++  CXL-zSwap simulator (PNM_ZSWAP_SIM) [Y/n/m/?] (NEW) m
++  Modify allocation policy in zbud allocator (PNM_ZSWAP_MODIFY_ZBUD) [Y/n/?] (NEW) y
++    A NUMA node index (PNM_ZSWAP_NUMA_NODE) [1] (NEW) 1
++
++*
++* IMDB Resource Manager
++*
++IMDB Resource Manager (IMDB_RESOURCE) [M/n/y/?] m
++  A scale of IMDB memory range (IMDB_MEMORY_SCALE) [0] (NEW) 0 -> choose IMDB scale here (0 for 32GB, 1 for 16GB, 2 for 8GB and etc)
++```
++
++## Install
++
++```bash
++./scripts/pnm/install_debs.sh
++```
++
++# DAX driver only
++
++```bash
++make M=drivers/dax/ -j32
++```
++
++Built drivers can then be installed with `install_dax_drivers` script:
++
++```bash
++./scripts/pnm/install_dax_drivers.sh
++```
++
++# Class resource driver only (required to install SLS/IMDB resource)
++
++```bash
++make M=drivers/pnm/ -j32
++```
++
++Built drivers can then be installed with `install_pnm_resource` script:
++
++```bash
++./scripts/pnm/install_pnm_resource.sh
++```
++
++# SLS resource driver only
++
++```bash
++make M=drivers/pnm/sls_resource/ -j32
++```
++
++Built drivers can then be installed with `install_sls_resource` script:
++
++```bash
++./scripts/pnm/install_sls_resource.sh
++```
++
++# IMDB resource driver only
++
++```bash
++make M=drivers/pnm/imdb_resource/ -j32
++```
++
++Built drivers can then be installed with `install_imdb_resource` script:
++
++```bash
++./scripts/pnm/install_imdb_resource.sh
++```
++
++# Install SLS headers only
++
++```bash
++./scripts/pnm/install_sls_headers.sh
++```
++
++## Use
++
++# Hardware drivers
++
++If the HW is presented in the system and use CXL interface then `/dev/cxl/imdb0` will be created automatically.
++
++To create device entry for AXDIMM device use `pnm_ctl` from [`PNMLibrary`](https://github.samsungds.net/SAIT/PNMLibrary.git).
++
++# Resource modules
++
++The PNM kernel contains multiple resource modules that handle PNM device resource and provide unique access to them.
++There are next modules available:
++
++ - `sls_resource` --- module to handle SLS memory, compute units and process manager;
++ - `imdb_resource` --- handle the IMDB memory, threads and process manager.
++
++The modules should be loaded before any operations with PNM device. In case of SLS HW the `sls_resource` module will be loaded automatically (SLS-CXL)
++or when the `/dev/sls_device` is created (in case of AXDIMM HW or performance simulator (PS) mode for SLS-CXL).
++
++The modules can be loaded without real hardware to work with simulators.
++
++If the module doesn't load automatically, you can load it manually by `modprobe` command.
++
++Example:
++```bash
++sudo modprobe sls_resource
++```
++or
++```bash
++sudo modprobe imdb_resource
++```
++
++A module can be unloaded by `rmmod` command.
++```bash
++sudo rmmod sls_resource
++```
++or
++```bash
++sudo rmmod imdb_resource
++```
++
++In case of any failure a module will not be loaded and you will receive error message in `dmesg` with the issue description.
++
++## Parameters
++
++Modules use parameters to configure the memory and compute unit topology for hardware or simulator.
++
++Only `sls_resource` module has parameters so far. There are 21 parameters. Here is a table with the parameter list and their default values depends on selected device type (`CXL` or `AXDIMM`):
++
++| Parameter               | `CONFIG_DEV_SLS_BUS=AXDIMM` | `CONFIG_DEV_SLS_BUS=CXL` | Description                                                            | Restrictions                                           |
++| ----------------------- | --------------------------- | ------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------ |
++| `dev_type`              | "AXDIMM"                    | "CXL"                    | The device type                                                        |                                                        |
++| `base_addr`             | 66                          | 66                       | The physical offset (in GB) of device memory                           |                                                        |
++| `scale`                 | 0                           | 0                        | The scale of device memory. The overall memory size is `64GB >> scale` | Should be lower or equal to 4                          |
++| `nr_cunits`             | 4                           | 2                        | The number of compute units                                            | Should be a power of 2                                 |
++| `nr_ch`                 | 2                           | 2                        | The number of CH                                                       |                                                        |
++| `nr_cs`                 | 2                           | 2                        | The number of CS                                                       | Should be lower that `nr_cunits`                       |
++| `nr_ranks`              | 4                           | 4                        | The number of memory ranks                                             | Should be a power of 2 and equal to `nr_cunit * nr_cs` |
++| `buf_sz`                | 262144                      | 262080                   | Size of internal buffers (`INST`, `PSUM`, `TAGS`)                      | Should be aligned by 64 bytes                          |
++| `nr_inst_buf`           | 1                           | 1                        | The number of instruction buffers                                      |                                                        |
++| `nr_psum_buf`           | 2                           | 1                        | The number of `PSUM` buffers                                           |                                                        |
++| `nr_tag_buf`            | 2                           | 0                        | The number of `TAGS` buffers                                           |                                                        |
++| `alignment_sz`          | 4096                        | 2097152                  | The data alignment                                                     |                                                        |
++| `inst_sz`               | 8                           | 8                        | The single instruction size                                            |                                                        |
++| `data_sz`               | 4                           | 4                        | Size of single data entry                                              |                                                        |
++| `aligned_tag_sz`        | 64                          | 64                       | The size of single verification `TAG` entry                            | Should be 64 so far                                    |
++| `reg_en`                | 0                           | 0                        | The offset for `SLS_ENABLE` register                                   |                                                        |
++| `reg_poll`              | 2112                        | 1088                     | The offset of `PSUM_POLLING` register                                  |                                                        |
++| `reg_exec`              | 64                          | 64                       | The offset for `SLS_EXEC` register                                     |                                                        |
++| `cunit_interleaving_sz` | 128                         | 0                        | The size of small step in interleaving pattern                         | 0 or 128                                               |
++| `interleaving_stride`   | 128                         | 0                        | The interleaving stride                                                | 0 or 128                                               |
++| `ch_interleaving_sz`    | 131072                      | 0                        | The interleaving pattern switch size                                   | 0 or 131072                                            |
++
++The default parameters are bound to device bus type: `AXDIMM` or `CXL`. The default bus type is specified during the kernel build by `CONFIG_DEV_SLS_BUS`.
++
++There are 2 ways to setup the module parameter.
++
++1. Explicitly specify required parameters and keep others with default values. You can use `modprobe` command in next format:
++```bash
++sudo modprobe sls_resource [parameter_name=parameter_value] [parameter_name=parameter_value] [parameter_name=parameter_value] ...
++```
++Example:
++```bash
++sudo modprobe sls_resource dev_type=CXL scale=1 base_addr=4 #Use defaults for CXL column, set scale to 1 and base addr to 4GB
++```
++
++The default values can be defined in two ways. First of all, if the `dev_type` is specified, then the default values will be selected for the respective device type.
++```bash
++sudo modprobe sls_resource dev_type=AXDIMM  # will use AXDIMM defaults for other parameters
++sudo modprobe sls_resource dev_type=CXL # will use CXL defaults for other parameters
++```
++
++If the `dev_type` is not specified, that the default value for `dev_type` will be depended on `CONFIG_DEV_SLS_BUS` value. When the `dev_type` is resolved, the others default
++values will be setup according to logic is mentioned before.
++
++For example, if kernel was built with `CONFIG_DEV_SLS_BUS=AXDIMM` then when `sls_resource` module is loaded without parameters
++the `dev_type` will be `AXDIMM` and other parameters will be from second table row (`AXDIMM`). The same logic is applicable for `CONFIG_DEV_SLS_BUS=CXL`.
++
++2. The parameters can be added to kernel command line arguments by editing `/etc/default/grub` and adding required parameters to `GRUB_CMDLINE_LINUX_DEFAULT` like:
++
++```bash
++GRUB_CMDLINE_LINUX_DEFAULT="sls_resource.dev_type=CXL sls_resource.base_addr=4 sls_resource.scale=1"
++```
++
++This approach is useful if you don't want to redefine defaults for specific parameters or you need to reconfigure the environment for new HW.
++
++The information about current linux kernel arguments can be found here: `/proc/cmdline`.
++
++**This approach allows to specify parameters for autoload that is crucial for HW configuration.**
++
++> **_NOTE:_**
++Do not use entries in `/sys/module/sls_resource/parameters/*` to change the parameters for loaded module. It can fall module into inconsistent state.
++If you want to reconfigure the resource module, you should make `rmmod` and then make `modprobe` with new parameters.
++
++
++The current module parameters can be observed at `/sys/module/sls_resource/parameters` in respective files.
++You can use `grep` command to have a list of the parameters with their values:
++
++```bash
++grep . -R /sys/module/sls_resource/parameters/
++```
++The output should be the next:
++```
++/sys/module/sls_resource/parameters/reg_en:0
++/sys/module/sls_resource/parameters/nr_tag_buf:2
++/sys/module/sls_resource/parameters/base_addr:66
++/sys/module/sls_resource/parameters/inst_sz:8
++/sys/module/sls_resource/parameters/cunit_interleaving_sz:128
++/sys/module/sls_resource/parameters/interleaving_stride:128
++/sys/module/sls_resource/parameters/nr_ch:2
++/sys/module/sls_resource/parameters/nr_cunits:4
++/sys/module/sls_resource/parameters/alignment_sz:4096
++/sys/module/sls_resource/parameters/ch_interleaving_sz:131072
++/sys/module/sls_resource/parameters/scale:0
++/sys/module/sls_resource/parameters/reg_poll:2112
++/sys/module/sls_resource/parameters/nr_cs:2
++/sys/module/sls_resource/parameters/buf_sz:262144
++/sys/module/sls_resource/parameters/nr_ranks:4
++/sys/module/sls_resource/parameters/data_sz:4
++/sys/module/sls_resource/parameters/dev_type:AXDIMM
++/sys/module/sls_resource/parameters/reg_exec:64
++/sys/module/sls_resource/parameters/nr_inst_buf:1
++/sys/module/sls_resource/parameters/nr_psum_buf:2
++/sys/module/sls_resource/parameters/aligned_tag_sz:64
++```
+diff --git a/PNM_ZSWAP_HOW_TO.md b/PNM_ZSWAP_HOW_TO.md
+index bbd165f24..7d260eae8 100644
+--- a/PNM_ZSWAP_HOW_TO.md
++++ b/PNM_ZSWAP_HOW_TO.md
+@@ -2,7 +2,7 @@ Here is a brief instruction how to build and run linux kernel with pnm-zswap.
+ 
+ # Kernel build & install
+ 
+-Just follow the common [PNM_HOW_TO_BUILD](PNM_HOW_TO_BUILD.md#kernel-build--install) guide build and install steps.
++Just follow the common [PNM_HOW_TO_BUILD](PNM_README.md#kernel-build--install) guide build and install steps.
+ 
+ During the build process you should specify several parameters, that are not predefined in `config-pnm` file.
+ Currently, our kernel contains modules for SLS and IMDB devices and there is no possibility to disable them,
+@@ -16,19 +16,15 @@ DAX: direct access to differentiated memory (DAX) [Y/?] y
+   Device DAX: direct access mapping device (DEV_DAX) [M/n/y/?] m
+     PMEM DAX: direct access to persistent memory (DEV_DAX_PMEM) [M/n/?] m
+   HMEM DAX: direct access to 'specific purpose' memory (DEV_DAX_HMEM) [M/n/y/?] m
+-  DEV_SLS support (DEV_SLS) [Y/n/?] y
+   KMEM DAX: volatile-use of persistent memory (DEV_DAX_KMEM) [M/n/?] m
+-  A base address of SLS range (DEV_SLS_BASE_ADDR) [4] (NEW) 4 # Put 4 or ignore
+-  A scale of SLS memory range (DEV_SLS_MEMORY_SCALE) [1] (NEW) 1 # Put 1 or ignore
+-  Choose PNM SLS type
+-  > 1. AXDIMM (DEV_SLS_AXDIMM) (NEW)
+-    2. CXL (DEV_SLS_CXL) (NEW)
+-  choice[1-2?]: 1 # Put 1 or ignore
++     Choose PNM SLS device type
++    > 1. AXDIMM (DEV_SLS_AXDIMM) (NEW)
++      2. CXL (DEV_SLS_CXL) (NEW)
++    choice[1-2?]: 1 # Put 1 or ignore
+ 
+-Database Accelerator (IMDB) [Y/n/?] y
+-SLS Resource Manager (SLS_RESOURCE) [M/n/y/?] m
++# If CXL-zSwap is required set the next options, otherwise just leave it as default.
+ CXL-zSwap Devices Support (PNM_ZSWAP) [N/y/?] (NEW) y # This flag enables PNM_ZSWAP in kernel
+-  CXL-zSwap simulator (PNM_ZSWAP_SIM) [Y/n/m/?] (NEW) y # This flag enables build of PNM_ZSWAP simulators (ps and fs)
++  CXL-zSwap simulator (PNM_ZSWAP_SIM) [Y/n/m/?] (NEW) m # This flag enables build of PNM_ZSWAP simulators (ps and fs). The 'y' values can be used to simplify the debug and testing process.
+   Modify allocation policy in zbud allocator (PNM_ZSWAP_MODIFY_ZBUD) [Y/n/?] (NEW) y # Here we enable modification of zbud
+     A NUMA node index (PNM_ZSWAP_NUMA_NODE) [1] (NEW) 1 # Related to flag above, here we define the numa-node that is used as memory storage
+ *
+@@ -96,8 +92,19 @@ if ssh is not working for some reason:
+ ssh -p 22242 root@localhost
+ ```
+ 
++Also, you can use own QEMU configuration that are different from mentioned in `/scripts/pnm/zswap/qemu/run_sim.sh`. In this case you
++should add several values to kernel parameters:
++```
++KERNEL_OPTIONS="root=/dev/sda rw console=ttyS0 nokaslr memblock=debug loglevel=7  \
++                fsck.repair=yes rootwait isolcpus=nohz,domain,10-15 nohz_full=10-15  \
++                memmap=3G\$0x140000000 memmap=9G\$0x200000000"
++```
++
++
+ ## Run functional simulator
+ 
++If you build simulator part as a module, than you should use `modprobe pnm_zswap_sim` before any actions with simulator and pnm-zswap.
++
+ The default mode for zswap simulator is `functional simulator` with `deflate` compression algorithm. To enable pnm zswap
+ you should execute next command:
+ ```bash
+-- 
+2.34.1
+

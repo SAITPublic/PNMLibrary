@@ -16,10 +16,10 @@
 #include "core/memory/sls/cxl/channel_accessor.h"
 
 #include "common/make_error.h"
+#include "common/topology_constants.h"
 
 #include "pnmlib/core/accessor.h"
 #include "pnmlib/core/context.h"
-#include "pnmlib/core/device.h"
 #include "pnmlib/core/memory.h"
 
 #include "pnmlib/common/compiler.h"
@@ -40,15 +40,17 @@ pnm::memory::create_accessor_core(const pnm::memory::DeviceRegion &region,
                                   [[maybe_unused]] Context *ctx) {
   auto on_sequential_region = [ctx](const pnm::memory::SequentialRegion &r)
       -> std::unique_ptr<pnm::memory::AccessorCore> {
-    return std::make_unique<pnm::memory::IMDBAccessorCore>(r, ctx->device());
+    return std::make_unique<pnm::memory::ImdbAccessorCore>(r, ctx->device());
   };
 
   auto on_ndregion = [ctx]([[maybe_unused]] const pnm::memory::RankedRegion &r)
       -> std::unique_ptr<pnm::memory::AccessorCore> {
-    if (ctx->type() == pnm::Device::Type::SLS_AXDIMM) {
-      return std::make_unique<pnm::memory::SLSAccessorCore>(r, ctx->device());
+    const auto type = sls::device::topo().Bus;
+
+    if (type == pnm::sls::device::BusType::AXDIMM) {
+      return std::make_unique<pnm::memory::SlsAccessorCore>(r, ctx->device());
     }
-    if (ctx->type() == pnm::Device::Type::SLS_CXL) {
+    if (type == pnm::sls::device::BusType::CXL) {
       return std::make_unique<pnm::memory::ChannelAccessorCore>(r,
                                                                 ctx->device());
     }

@@ -13,12 +13,11 @@
 
 #include "sls/operation/execution_generator.h"
 
+#include "common/topology_constants.h"
+
 #include "pnmlib/sls/operation.h"
-#include "pnmlib/sls/type.h"
 
 #include "pnmlib/common/128bit_math.h"
-
-#include <linux/sls_resources.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -26,8 +25,11 @@
 
 namespace pnm::sls {
 
-ExecutionPacksData::ExecutionPacksData(const PNMSLSOperation &sls_op)
-    : sls_op_(sls_op), is_tagged_(sls_op_.op_type() == SLSType::Uint32Tagged) {}
+ExecutionPacksData::ExecutionPacksData(
+    const pnm::operations::SlsOperation &sls_op)
+    : sls_op_(sls_op),
+      is_tagged_(sls_op_.op_type() ==
+                 pnm::operations::SlsOperation::Type::Uint32Tagged) {}
 
 void ExecutionPacksData::init(const ExecutionGenerator &exec_gen) {
   init_data_initializers();
@@ -111,7 +113,8 @@ void ExecutionPacksData::init_data_initializers() {
   });
 
   // Calculation of table batch psum output buffer adress
-  const auto sp_feature_size = sls_op_.sparse_feature_size() * DATA_SIZE;
+  const auto sp_feature_size =
+      sls_op_.sparse_feature_size() * pnm::sls::device::topo().DataSize;
   const uint64_t data_size = sls_op_.minibatch_size() * sp_feature_size;
   auto *psum = const_cast<uint8_t *>(sls_op_.psum().data());
   data_initializers_.emplace_back([this, sp_feature_size, data_size,
@@ -125,7 +128,7 @@ void ExecutionPacksData::init_data_initializers() {
 
   // Calculation of table batch tags output buffer address
   if (is_tagged_) {
-    const auto tag_size = sizeof(pnm::uint128_t);
+    const auto tag_size = sizeof(pnm::types::uint128_t);
     const uint64_t tags_per_table_size = sls_op_.minibatch_size() * tag_size;
     auto *tags = psum + sls_op_.lengths().size() * sp_feature_size;
     data_initializers_.emplace_back([this, tags, tags_per_table_size](

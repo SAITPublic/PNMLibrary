@@ -1,7 +1,7 @@
 From 94e3ee8893df65428470b5701eab4ecbddf4ffe1 Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Mon, 13 Feb 2023 13:36:04 +0300
-Subject: [PATCH 19/23] Remove default value for weights_path
+Subject: [PATCH 19/24] Remove default value for weights_path
 
 Signed-off-by: Nikita Enin <n.enin@samsung.com>
 ---

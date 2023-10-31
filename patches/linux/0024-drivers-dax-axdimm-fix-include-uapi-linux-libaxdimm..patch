@@ -1,7 +1,7 @@
 From 5bf09dceb77390375f621847c4f0fc0eb51d8f5b Mon Sep 17 00:00:00 2001
 From: "p.bred" <p.bred@samsung.com>
 Date: Tue, 31 May 2022 03:26:50 +0300
-Subject: [PATCH 024/161] [drivers/dax/axdimm] fix
+Subject: [PATCH 024/225] [drivers/dax/axdimm] fix
  include/uapi/linux/libaxdimm.h header (#3)
 
 Signed-off-by: Petr Bred <p.bred@samsung.com>

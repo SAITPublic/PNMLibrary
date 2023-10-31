@@ -16,6 +16,8 @@
 #include "secure/plain/device/untrusted_sls.h"
 #include "secure/plain/sls.h"
 
+#include "common/topology_constants.h"
+
 #include <gtest/gtest-typed-test.h>
 #include <gtest/gtest.h>
 #include <gtest/internal/gtest-port.h>
@@ -82,36 +84,41 @@ template <typename T> struct SecNDPTestFixture : public ::testing::Test {
   using test_object_type = T;
 };
 
-using sls::secure::ProdConsCPURunner;
-using sls::secure::ProdConsSLSRunner;
-using sls::secure::SyncCPURunner;
-using sls::secure::SyncSLSRunner;
+using pnm::sls::secure::ProdConsCpuRunner;
+using pnm::sls::secure::ProdConsSlsRunner;
+using pnm::sls::secure::SyncCpuRunner;
+using pnm::sls::secure::SyncSlsRunner;
 
-using CPU = sls::secure::TrivialCPU<uint32_t>;
-using SLS_ACC = sls::secure::UntrustedDevice<uint32_t>;
+using CPU = pnm::sls::secure::TrivialCPU<uint32_t>;
+using SLS_ACC = pnm::sls::secure::UntrustedDevice<uint32_t>;
 
 using SecNDPTestObjects = ::testing::Types<
-    SecNDPSlsSequential<uint32_t, SyncCPURunner, CPU>,
-    SecNDPSlsSequential<uint32_t, SyncSLSRunner, SLS_ACC>,
+    SecNDPSlsSequential<uint32_t, SyncCpuRunner, CPU>,
+    SecNDPSlsSequential<uint32_t, SyncSlsRunner, SLS_ACC>,
 
-    SecNDPSlsSequential<uint32_t, ProdConsCPURunner, CPU>,
-    SecNDPSlsSequential<uint32_t, ProdConsSLSRunner, SLS_ACC>,
+    SecNDPSlsSequential<uint32_t, ProdConsCpuRunner, CPU>,
+    SecNDPSlsSequential<uint32_t, ProdConsSlsRunner, SLS_ACC>,
 
-    SecNDPSlsMultiThreads<uint32_t, SyncCPURunner, CPU>,
-    SecNDPSlsMultiThreads<uint32_t, SyncSLSRunner, SLS_ACC>,
+    SecNDPSlsMultiThreads<uint32_t, SyncCpuRunner, CPU>,
+    SecNDPSlsMultiThreads<uint32_t, SyncSlsRunner, SLS_ACC>,
 
-    SecNDPSlsMultiThreads<uint32_t, ProdConsCPURunner, CPU>,
-    SecNDPSlsMultiThreads<uint32_t, ProdConsSLSRunner, SLS_ACC>,
+    SecNDPSlsMultiThreads<uint32_t, ProdConsCpuRunner, CPU>,
+    SecNDPSlsMultiThreads<uint32_t, ProdConsSlsRunner, SLS_ACC>,
 
-    SecNDPSlsMultiProcesses<uint32_t, SyncCPURunner, CPU>,
-    SecNDPSlsMultiProcesses<uint32_t, SyncSLSRunner, SLS_ACC>,
+    SecNDPSlsMultiProcesses<uint32_t, SyncCpuRunner, CPU>,
+    SecNDPSlsMultiProcesses<uint32_t, SyncSlsRunner, SLS_ACC>,
 
-    SecNDPSlsMultiProcesses<uint32_t, ProdConsCPURunner, CPU>,
-    SecNDPSlsMultiProcesses<uint32_t, ProdConsSLSRunner, SLS_ACC>>;
+    SecNDPSlsMultiProcesses<uint32_t, ProdConsCpuRunner, CPU>,
+    SecNDPSlsMultiProcesses<uint32_t, ProdConsSlsRunner, SLS_ACC>>;
 
 TYPED_TEST_SUITE(SecNDPTestFixture, SecNDPTestObjects);
 
 TYPED_TEST(SecNDPTestFixture, SecNDPRun) {
+  if (TestEnvironment::with_tag() &&
+      pnm::sls::device::topo().Bus == pnm::sls::device::BusType::CXL) {
+    GTEST_SKIP() << "SLS-CXL does not support tags\n";
+  }
+
   typename TestFixture ::test_object_type const test_object{
       TestEnvironment::num_instances(), TestEnvironment::with_tag()};
   test_object.print();

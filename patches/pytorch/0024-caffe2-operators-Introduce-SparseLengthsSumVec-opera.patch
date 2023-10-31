@@ -1,7 +1,7 @@
 From 68bc32dfb36037a2af365091607f5b09d967a204 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 9 Nov 2021 16:02:47 +0900
-Subject: [PATCH 024/128] [caffe2/operators] Introduce SparseLengthsSumVec
+Subject: [PATCH 024/135] [caffe2/operators] Introduce SparseLengthsSumVec
  operator
 
 To match AXDIMM execution pattern introduce SparseLengthsSumVec operator.

@@ -30,33 +30,33 @@
 #include <utility>
 #include <vector>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 /*! \brief Class to perform accelerated secure SLS
  *
- * This class performs SLS over embedded table. Class can work in SGX enclave.
- * The SLSOperationStrategy is used to interact with SLS (or other) device.
+ * This class performs SLS over embedding table. Class can work in SGX enclave.
+ * The SlsOperationStrategy is used to interact with SLS (or other) device.
  *
  * @tparam T -- is a type of table entry
- * @tparam SLSDevice -- is a strategy for SLS operation (untrusted).
- * @tparam SLSExecutionStrategy -- is a strategy that define SLS execution
+ * @tparam SlsDevice -- is a strategy for SLS operation (untrusted).
+ * @tparam SlsExecutionStrategy -- is a strategy that define SLS execution
  * process on device
  * */
-template <typename T, typename SLSDevice, typename SLSExecutionStrategy>
+template <typename T, typename SlsDevice, typename SlsExecutionStrategy>
 class OperationExecutor {
 public:
   using value_type = T;
-  using sls_device_type = SLSDevice;
-  using sls_runner_type = SLSExecutionStrategy;
+  using sls_device_type = SlsDevice;
+  using sls_runner_type = SlsExecutionStrategy;
 
-  explicit OperationExecutor(SLSExecutionStrategy runner = {})
+  explicit OperationExecutor(SlsExecutionStrategy runner = {})
       : exec_{std::move(runner)}, buffers_{} {}
 
   void load_tables(const void *src,
-                   pnm::common_view<const uint32_t> num_entries,
+                   pnm::views::common<const uint32_t> num_entries,
                    uint32_t sparse_feature_size, bool with_tag = false) {
-    DLRMPreprocessor<T, typename SLSDevice::MemoryReader,
-                     typename SLSDevice::MemoryWriter>
+    DLRMPreprocessor<T, typename SlsDevice::MemoryReader,
+                     typename SlsDevice::MemoryWriter>
         preprocessor(
             src, std::vector<uint32_t>(num_entries.begin(), num_entries.end()),
             sparse_feature_size);
@@ -81,36 +81,37 @@ public:
   }
 
   bool run_sls(uint64_t minibatch_size,
-               pnm::common_view<const uint32_t> lengths,
-               pnm::common_view<const uint32_t> indices,
-               pnm::common_view<T> psum, pnm::common_view<uint8_t> checks = {});
+               pnm::views::common<const uint32_t> lengths,
+               pnm::views::common<const uint32_t> indices,
+               pnm::views::common<T> psum,
+               pnm::views::common<uint8_t> checks = {});
 
 private:
   void reorder_indices(uint64_t minibatch_size,
-                       pnm::common_view<const uint32_t> lengths,
-                       pnm::common_view<const uint32_t> indices);
+                       pnm::views::common<const uint32_t> lengths,
+                       pnm::views::common<const uint32_t> indices);
 
   void execute_sls(uint64_t minibatch_size,
-                   pnm::common_view<const uint32_t> lengths,
-                   pnm::common_view<const uint32_t> indices,
-                   pnm::common_view<T> augmented_psum_view);
+                   pnm::views::common<const uint32_t> lengths,
+                   pnm::views::common<const uint32_t> indices,
+                   pnm::views::common<T> augmented_psum_view);
 
-  bool decrypt(uint64_t minibatch_size, pnm::common_view<T> psum_buffer,
-               pnm::common_view<uint8_t> check);
+  bool decrypt(uint64_t minibatch_size, pnm::views::common<T> psum_buffer,
+               pnm::views::common<uint8_t> check);
 
-  void make_user_psum(pnm::common_view<T> user_psum,
-                      pnm::common_view<T> augmented_psum,
-                      pnm::common_view<uint8_t> check);
+  void make_user_psum(pnm::views::common<T> user_psum,
+                      pnm::views::common<T> augmented_psum,
+                      pnm::views::common<uint8_t> check);
 
-  static constexpr auto TAG_SIZE = sizeof(pnm::uint128_t) / sizeof(T);
+  static constexpr auto TAG_SIZE = sizeof(pnm::types::uint128_t) / sizeof(T);
 
   size_t num_tables_{};
   uint64_t sparse_feature_size_{};
   bool with_tag_{};
   std::unique_ptr<IPostprocessor<T>> postprocessor_;
 
-  SLSDevice device_;
-  SLSExecutionStrategy exec_;
+  SlsDevice device_;
+  SlsExecutionStrategy exec_;
 
   struct {
     std::vector<T> cpsum; // psum from device, only in tag mode
@@ -120,18 +121,18 @@ private:
   } buffers_; // Buffers should be defined after device
 };
 
-template <typename T, typename SLSOperationStrategy,
-          typename SLSDeviceRunStrategy>
-bool OperationExecutor<T, SLSOperationStrategy, SLSDeviceRunStrategy>::run_sls(
-    uint64_t minibatch_size, pnm::common_view<const uint32_t> lengths,
-    pnm::common_view<const uint32_t> indices, pnm::common_view<T> psum,
-    pnm::common_view<uint8_t> checks) {
+template <typename T, typename SlsOperationStrategy,
+          typename SlsDeviceRunStrategy>
+bool OperationExecutor<T, SlsOperationStrategy, SlsDeviceRunStrategy>::run_sls(
+    uint64_t minibatch_size, pnm::views::common<const uint32_t> lengths,
+    pnm::views::common<const uint32_t> indices, pnm::views::common<T> psum,
+    pnm::views::common<uint8_t> checks) {
 
-  pnm::common_view<T> augmented_psum_view = psum;
+  pnm::views::common<T> augmented_psum_view = psum;
   if (with_tag_) { // We need extra storage only in tagged case
     buffers_.cpsum.resize(minibatch_size * num_tables_ *
                           (sparse_feature_size_ + TAG_SIZE));
-    augmented_psum_view = pnm::make_view(buffers_.cpsum);
+    augmented_psum_view = pnm::views::make_view(buffers_.cpsum);
   }
 
   // Reallocate temporary buffer for EPSUM
@@ -152,56 +153,56 @@ bool OperationExecutor<T, SLSOperationStrategy, SLSDeviceRunStrategy>::run_sls(
     return verification_status;
   }
   return decrypt(minibatch_size, augmented_psum_view,
-                 pnm::common_view<uint8_t>());
+                 pnm::views::common<uint8_t>());
 }
 
-template <typename T, typename SLSOperationStrategy,
-          typename SLSDeviceRunStrategy>
-void OperationExecutor<T, SLSOperationStrategy, SLSDeviceRunStrategy>::
+template <typename T, typename SlsOperationStrategy,
+          typename SlsDeviceRunStrategy>
+void OperationExecutor<T, SlsOperationStrategy, SlsDeviceRunStrategy>::
     reorder_indices(uint64_t minibatch_size,
-                    pnm::common_view<const uint32_t> lengths,
-                    pnm::common_view<const uint32_t> indices) {
+                    pnm::views::common<const uint32_t> lengths,
+                    pnm::views::common<const uint32_t> indices) {
   buffers_.indices.clear();
   buffers_.indices.reserve(num_tables_);
 
   const auto *idx_it = indices.begin();
 
-  auto lengths_v =
-      pnm::make_rowwise_view(lengths.begin(), lengths.end(), minibatch_size);
+  auto lengths_v = pnm::views::make_rowwise_view(lengths.begin(), lengths.end(),
+                                                 minibatch_size);
   auto lengths_it = lengths_v.begin();
 
   for (auto tid = 0UL; tid < num_tables_; ++tid) {
     auto lookups_in_minibatch =
         std::accumulate(lengths_it->begin(), lengths_it->end(), 0ULL);
     buffers_.indices.emplace_back(
-        tid, make_variable_row_view(idx_it, idx_it + lookups_in_minibatch,
-                                    *lengths_it));
+        tid, pnm::views::make_variable_row_view(
+                 idx_it, idx_it + lookups_in_minibatch, *lengths_it));
     std::advance(idx_it, lookups_in_minibatch);
     ++lengths_it;
   }
 }
 
-template <typename T, typename SLSOperationStrategy,
-          typename SLSDeviceRunStrategy>
-bool OperationExecutor<T, SLSOperationStrategy, SLSDeviceRunStrategy>::decrypt(
-    uint64_t minibatch_size, pnm::common_view<T> psum_buffer,
-    pnm::common_view<uint8_t> check) {
+template <typename T, typename SlsOperationStrategy,
+          typename SlsDeviceRunStrategy>
+bool OperationExecutor<T, SlsOperationStrategy, SlsDeviceRunStrategy>::decrypt(
+    uint64_t minibatch_size, pnm::views::common<T> psum_buffer,
+    pnm::views::common<uint8_t> check) {
 
   const auto psum_size = minibatch_size * num_tables_ * sparse_feature_size_;
-  auto psum_rv = pnm::make_rowwise_view(psum_buffer.begin(),
-                                        psum_buffer.begin() + psum_size,
-                                        sparse_feature_size_);
+  auto psum_rv = pnm::views::make_rowwise_view(psum_buffer.begin(),
+                                               psum_buffer.begin() + psum_size,
+                                               sparse_feature_size_);
 
   const auto augmented_row_size = sparse_feature_size_ + TAG_SIZE * with_tag_;
-  auto epsum_v = pnm::make_rowwise_view(
+  auto epsum_v = pnm::views::make_rowwise_view(
       buffers_.epsum.data(), buffers_.epsum.data() + buffers_.epsum.size(),
       augmented_row_size, 0, TAG_SIZE * with_tag_);
 
   if (with_tag_) {
-    auto ctag_v = pnm::make_rowwise_view(psum_buffer.begin() + psum_size,
-                                         psum_buffer.end(), TAG_SIZE);
+    auto ctag_v = pnm::views::make_rowwise_view(psum_buffer.begin() + psum_size,
+                                                psum_buffer.end(), TAG_SIZE);
 
-    auto tag_v = pnm::make_rowwise_view(
+    auto tag_v = pnm::views::make_rowwise_view(
         buffers_.epsum.data(), buffers_.epsum.data() + buffers_.epsum.size(),
         augmented_row_size, sparse_feature_size_, 0);
 
@@ -211,15 +212,15 @@ bool OperationExecutor<T, SLSOperationStrategy, SLSDeviceRunStrategy>::decrypt(
   return postprocessor_->decrypt_psum(psum_rv, epsum_v);
 }
 
-template <typename T, typename SLSDevice, typename SLSDeviceRunStrategy>
-void OperationExecutor<T, SLSDevice, SLSDeviceRunStrategy>::make_user_psum(
-    pnm::common_view<T> user_psum, pnm::common_view<T> augmented_psum,
-    pnm::common_view<uint8_t> check) {
+template <typename T, typename SlsDevice, typename SlsDeviceRunStrategy>
+void OperationExecutor<T, SlsDevice, SlsDeviceRunStrategy>::make_user_psum(
+    pnm::views::common<T> user_psum, pnm::views::common<T> augmented_psum,
+    pnm::views::common<uint8_t> check) {
   const auto psum_size = user_psum.size();
-  auto aug_psum_rows = pnm::make_rowwise_view(
+  auto aug_psum_rows = pnm::views::make_rowwise_view(
       augmented_psum.begin(), augmented_psum.begin() + psum_size,
       sparse_feature_size_);
-  auto user_psum_rows = pnm::make_rowwise_view(
+  auto user_psum_rows = pnm::views::make_rowwise_view(
       user_psum.begin(), user_psum.end(), sparse_feature_size_);
 
   auto *is_row_ok = check.begin();
@@ -236,11 +237,11 @@ void OperationExecutor<T, SLSDevice, SLSDeviceRunStrategy>::make_user_psum(
                  user_psum_rows.begin(), aug_psum_rows.begin(), copy_func);
 }
 
-template <typename T, typename SLSDevice, typename SLSExecutionStrategy>
-void OperationExecutor<T, SLSDevice, SLSExecutionStrategy>::execute_sls(
-    uint64_t minibatch_size, pnm::common_view<const uint32_t> lengths,
-    pnm::common_view<const uint32_t> indices,
-    pnm::common_view<T> augmented_psum_view) {
+template <typename T, typename SlsDevice, typename SlsExecutionStrategy>
+void OperationExecutor<T, SlsDevice, SlsExecutionStrategy>::execute_sls(
+    uint64_t minibatch_size, pnm::views::common<const uint32_t> lengths,
+    pnm::views::common<const uint32_t> indices,
+    pnm::views::common<T> augmented_psum_view) {
   // SLS on OTPs/OTPs and TAGs, each table can be processed in parallel
   auto augmented_row_size = sparse_feature_size_ + TAG_SIZE * with_tag_;
 
@@ -252,16 +253,16 @@ void OperationExecutor<T, SLSDevice, SLSExecutionStrategy>::execute_sls(
 
   buffers_.results.reserve(buffers_.indices.size());
   for (const auto &request_it : buffers_.indices) {
-    auto table_indices = pnm::make_view(&request_it, &request_it + 1);
+    auto table_indices = pnm::views::make_view(&request_it, &request_it + 1);
 
     const auto epsum_buffer_per_table =
         augmented_row_size * request_it.second.size();
-    auto epsum_v = pnm::make_rowwise_view(
+    auto epsum_v = pnm::views::make_rowwise_view(
         epsum_buffer_it, epsum_buffer_it + epsum_buffer_per_table,
         augmented_row_size, 0, TAG_SIZE * with_tag_);
 
     if (with_tag_) {
-      auto tag_v = pnm::make_rowwise_view(
+      auto tag_v = pnm::views::make_rowwise_view(
           epsum_buffer_it, epsum_buffer_it + epsum_buffer_per_table,
           augmented_row_size, sparse_feature_size_, 0);
 
@@ -278,7 +279,7 @@ void OperationExecutor<T, SLSDevice, SLSExecutionStrategy>::execute_sls(
   // Run SLS on device. Do not offload this work to another thread because it
   // hurts peformance.
   device_(minibatch_size, lengths, indices,
-          pnm::view_cast<uint8_t>(augmented_psum_view));
+          pnm::views::view_cast<uint8_t>(augmented_psum_view));
 
   // Wait for SLS on OTPs
   for (auto &result : buffers_.results) {
@@ -287,6 +288,6 @@ void OperationExecutor<T, SLSDevice, SLSExecutionStrategy>::execute_sls(
   buffers_.results.clear();
 }
 
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // SLS_SECURE_EXECUTOR_H

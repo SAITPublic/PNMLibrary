@@ -12,26 +12,26 @@
 
 #ifndef _SLS_CUNIT_H_
 
-#include "core/device/sls/base.h"
-
 #include "common/make_error.h"
 
 #include "pnmlib/core/device.h"
 
+#include "pnmlib/common/misc_utils.h"
 #include "pnmlib/common/views.h"
 
 #include <cstdint>
+#include <thread>
 #include <type_traits>
 
 namespace pnm::sls {
 
-enum class BlockType {
+enum class BlockType : uint8_t {
   INST,
   TAGS,
   PSUM,
 };
 
-enum class PollType {
+enum class PollType : uint8_t {
   ENABLE,
   FINISH,
   CONTROL_SWITCH,
@@ -53,43 +53,55 @@ public:
 
   void poll(PollType type) { impl()->poll(type); }
 
-  void read_buffer(BlockType type, pnm::common_view<uint8_t> buf) {
+  void read_buffer(BlockType type, pnm::views::common<uint8_t> buf) {
     impl()->read_buffer(type, buf);
   }
 
-  void write_buffer(BlockType type, pnm::common_view<const uint8_t> buf) {
+  void write_buffer(BlockType type, pnm::views::common<const uint8_t> buf) {
     impl()->write_buffer(type, buf);
   }
 
 protected:
-  void read_buffer(device::BaseDevice *device, uint8_t cunit_id, BlockType type,
-                   pnm::common_view<uint8_t> data) {
+  template <typename DeviceType>
+  void read_buffer(DeviceType &device, uint8_t cunit_id, BlockType type,
+                   pnm::views::common<uint8_t> data) {
     switch (type) {
     case BlockType::PSUM:
-      device->read_and_reset_psum(cunit_id, data.begin(), data.size());
+      device.read_and_reset_psum(cunit_id, data.begin(), data.size());
       break;
     case BlockType::TAGS:
-      device->read_and_reset_tags(cunit_id, data.begin(), data.size());
+      device.read_and_reset_tags(cunit_id, data.begin(), data.size());
       break;
     default:
       throw pnm::error::make_not_sup(
           "Read operation for block type: {}, device {}",
           std::underlying_type_t<BlockType>(type),
-          std::underlying_type_t<Device::Type>(device->get_device_type()));
+          std::underlying_type_t<Device::Type>(device.get_device_type()));
     }
   }
 
-  void write_buffer(device::BaseDevice *device, uint8_t cunit_id,
-                    BlockType type, pnm::common_view<const uint8_t> data) {
+  template <typename DeviceType>
+  void write_buffer(DeviceType &device, uint8_t cunit_id, BlockType type,
+                    pnm::views::common<const uint8_t> data) {
     switch (type) {
     case BlockType::INST:
-      device->write_inst_block(cunit_id, data.data(), data.size());
+      device.write_inst_block(cunit_id, data.data(), data.size());
       break;
     default:
       throw pnm::error::make_not_sup(
           "Write operation for block type: {}, device {}",
           std::underlying_type_t<BlockType>(type),
-          std::underlying_type_t<Device::Type>(device->get_device_type()));
+          std::underlying_type_t<Device::Type>(device.get_device_type()));
+    }
+  }
+
+  void poll_register(volatile uint32_t *reg, uint32_t target) {
+    // There was hardware instability on that part that required
+    // explicit reading of cacheline instead of atomic load.
+    // It's also not clear if AxDIMM hardware works without busy loop.
+    auto *atomic_reg = pnm::utils::as_vatomic<uint32_t>(reg);
+    while (atomic_reg->load() != target) {
+      std::this_thread::yield();
     }
   }
 

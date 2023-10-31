@@ -16,21 +16,21 @@
 #include "base.h"
 
 #include "core/device/sls/memblockhandler/block_ops.h"
-#include "core/device/sls/simulator/cxl.h"
+#include "core/device/sls/simulator_core/cxl_core_sim.h"
 
 #include <cstdint>
 
 namespace pnm::sls::device {
 
-class CXLSimulatorMemBlockHandler final
-    : public CXLMemBlockHandler<CXLSimulatorMemBlockHandler> {
+class CxlSimulatorMemBlockHandler
+    : public CxlMemBlockHandler<CxlSimulatorMemBlockHandler> {
 public:
-  CXLSimulatorMemBlockHandler() : simulator_(mem_map()) {}
+  CxlSimulatorMemBlockHandler() : simulator_(mem_map()) {}
 
   // [TODO: @a.korzun] this is a temporary hack to support simulator method
   // calls from the outside of the memblockhandler. Existing code should be
   // reworked and this method should then be removed from the public API.
-  CXLSLSSimulator &simulator() noexcept { return simulator_; };
+  CxlSimulatorCore &simulator() noexcept { return simulator_; };
 
   auto psum_reader() const { return RawBlockReader{}; };
   auto tags_reader() const { return RawBlockReader{}; };
@@ -41,7 +41,7 @@ private:
   uint64_t get_mem_addr(uint8_t compute_unit, uint32_t type, uint64_t offset);
   void write_reg(uint8_t *reg_addr, uint32_t val);
 
-  CXLSLSSimulator simulator_;
+  CxlSimulatorCore simulator_;
 };
 
 } // namespace pnm::sls::device

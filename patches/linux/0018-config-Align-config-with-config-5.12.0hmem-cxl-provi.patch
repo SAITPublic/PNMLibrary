@@ -1,7 +1,7 @@
 From acc33045eb6e2229386212c181c931a97ee5e6ca Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 14 Mar 2022 16:50:00 +0900
-Subject: [PATCH 018/161] [config] Align config with config-5.12.0hmem-cxl
+Subject: [PATCH 018/225] [config] Align config with config-5.12.0hmem-cxl
  provided by SSIR
 
 Setup new config to reflect recent BIOS changes for homogeneity.

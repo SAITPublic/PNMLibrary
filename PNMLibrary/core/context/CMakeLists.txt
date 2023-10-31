@@ -1,5 +1,5 @@
 add_library(sls_context INTERFACE)
-target_link_libraries(sls_context INTERFACE sls_memory sls_device sls_operation sls_compute_unit)
+target_link_libraries(sls_context INTERFACE sls_memory sls_device sls_operation)
 
 add_library(imdb_context INTERFACE)
 target_link_libraries(imdb_context INTERFACE imdb_memory imdb_device imdb_operation)

@@ -1,7 +1,7 @@
 From f9b1d685886c247d3542d9648ebc3968f20afb57 Mon Sep 17 00:00:00 2001
 From: "Li, Xun" <xun.li@intel.com>
 Date: Thu, 20 Oct 2022 05:16:01 +0000
-Subject: [PATCH 01/27] [LibOS,PAL,Docs] Add shared untrusted memory support
+Subject: [PATCH 01/29] [LibOS,PAL,Docs] Add shared untrusted memory support
 
 Add manifest syntax item `sys.insecure__shared_memory = "[none|passthrough]"`.
 When "passthrough" is specified, Gramine mounts `/dev/shm/` on host to

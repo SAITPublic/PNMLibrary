@@ -1,7 +1,7 @@
 From 138e16c68d37a93d8fff7ae1180a699731ce2642 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Wed, 12 Apr 2023 16:23:19 +0300
-Subject: [PATCH 119/161] [dba_resource] Add process manager
+Subject: [PATCH 119/225] [dba_resource] Add process manager
 
 Add process manager to dba_resource
 

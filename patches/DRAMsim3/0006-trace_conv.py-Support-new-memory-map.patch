@@ -1,0 +1,45 @@
+From f43c0d49ee865d1c8f7f14ec9297e375d253235a Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 6 Oct 2023 04:31:07 +0000
+Subject: [PATCH 6/6] [trace_conv.py] Support new memory map
+
+Update 'conv_data_addr' according to latest changes in PNMLibrary.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ scripts_real_app_mode/trace_conv.py | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/scripts_real_app_mode/trace_conv.py b/scripts_real_app_mode/trace_conv.py
+index 3f8d044..a70ae1c 100644
+--- a/scripts_real_app_mode/trace_conv.py
++++ b/scripts_real_app_mode/trace_conv.py
+@@ -187,18 +187,19 @@ def conv_data_addr(fs_data_addr):
+ 
+     addr.ra = (fs_data_addr >> 34) & 0x1
+ 
+-    addr.bg = ((fs_data_addr >> 17) & 0x1) << 1
+-    addr.bg += (fs_data_addr >> 6) & 0x1
++    addr.bg = ((fs_data_addr >> 13) & 0x1) << 1
++    addr.bg += (fs_data_addr >> 12) & 0x1
+ 
+-    addr.ba = (fs_data_addr >> 18) & 0x3
++    addr.ba = (fs_data_addr >> 19) & 0x3
+     
+     addr.ro = ((fs_data_addr >> 29) & 0x1f) << 12
+     addr.ro += ((fs_data_addr >> 21) & 0x7f) << 5
+     addr.ro += ((fs_data_addr >> 28) & 0x1) << 4
+-    addr.ro += ((fs_data_addr >> 20) & 0x1) << 3
+-    addr.ro += ((fs_data_addr >> 14) & 0x1)
++    addr.ro += ((fs_data_addr >> 11) & 0x1) << 3
++    addr.ro += ((fs_data_addr >> 8) & 0x7)
+ 
+-    addr.co = (fs_data_addr >> 3) & 0x3ff
++    addr.co = ((fs_data_addr >> 14) & 0x1f) << 5
++    addr.co += (fs_data_addr >> 3) & 0x1f
+ 
+     ps_data_addr = addr.ro << ps_ch_pos
+     ps_data_addr = addr.ra << ps_ra_pos
+-- 
+2.34.1
+

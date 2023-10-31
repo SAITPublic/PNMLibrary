@@ -13,22 +13,21 @@
 #define _SLS_OPERATION_INTERNAL_H_
 
 #include "execution_generator.h"
-#include "inst_generator.h"
 #include "packs_data.h"
 #include "reduction_operation.h"
 #include "trace_generator.h"
 
 #include "core/device/sls/base.h"
-#include "core/device/sls/constants.h"
 #include "core/device/sls/rank_memory.h"
+#include "core/device/sls/utils/constants.h"
+#include "core/device/sls/utils/inst_generator.h"
 
 #include "common/make_error.h"
 #include "common/timer.h"
 #include "common/topology_constants.h"
 
-#include "pnmlib/sls/embedded_tables.h"
+#include "pnmlib/sls/embedding_tables.h"
 #include "pnmlib/sls/operation.h"
-#include "pnmlib/sls/type.h"
 
 #include "pnmlib/common/128bit_math.h"
 #include "pnmlib/common/views.h"
@@ -48,9 +47,10 @@
 namespace pnm::sls {
 
 template <typename InstructionGenerator>
-class SLSOperation : public ReductionOperation {
+class SparseReduction : public ReductionOperation {
 public:
-  SLSOperation(PNMSLSOperation &sls_op, const device::BaseDevice &device)
+  SparseReduction(pnm::operations::SlsOperation &sls_op,
+                  const device::BaseDevice &device)
       : sls_op_(sls_op), packs_data_(sls_op) {
     init_exec_gen(device);
     init_trace_gen();
@@ -78,12 +78,12 @@ public:
     }
   }
 
-  pnm::common_view<uint8_t> get_tmp_buffer(uint8_t pack,
-                                           uint32_t exec_no) const override {
+  pnm::views::common<uint8_t> get_tmp_buffer(uint8_t pack,
+                                             uint32_t exec_no) const override {
     const size_t read_size =
         exec_gen_.get_pack_execs(pack)[exec_no].get_psum_read_size();
     psum_intermediate_buffer().resize(read_size);
-    return pnm::make_view(psum_intermediate_buffer());
+    return pnm::views::make_view(psum_intermediate_buffer());
   }
 
   uint8_t get_num_outputs() const override { return is_tagged() ? 2 : 1; }
@@ -102,17 +102,20 @@ public:
         sls_op_.tables()->layout()[pack], is_tagged());
   }
 
-  ~SLSOperation() override = default;
+  ~SparseReduction() override = default;
 
 private:
-  bool is_tagged() const { return sls_op_.op_type() == SLSType::Uint32Tagged; }
+  bool is_tagged() const {
+    return sls_op_.op_type() ==
+           pnm::operations::SlsOperation::Type::Uint32Tagged;
+  }
 
   uint32_t get_sparse_ft_tag_nb() const {
-    return is_tagged() ? sizeof(pnm::uint128_t) : 0;
+    return is_tagged() ? sizeof(pnm::types::uint128_t) : 0;
   }
 
   uint32_t get_sparse_ft_data_nb() const {
-    return sls_op_.sparse_feature_size() * pnm::device::topo().DataSize;
+    return sls_op_.sparse_feature_size() * device::topo().DataSize;
   }
 
   void write_result(const Execution &exec, std::vector<uint8_t *> &dst,
@@ -227,7 +230,7 @@ private:
     return buffer;
   }
 
-  PNMSLSOperation &sls_op_;
+  pnm::operations::SlsOperation &sls_op_;
 
   ExecutionGenerator exec_gen_;
   ExecutionPacksData packs_data_;
@@ -235,8 +238,8 @@ private:
       trace_gen_;
 };
 
-using SLSOperationRanked = SLSOperation<RankedInstGenerator>;
-using SLSOperationChanneled = SLSOperation<ChannelInstGenerator>;
+using SparseReductionRanked = SparseReduction<RankedInstGenerator>;
+using SparseReductionChanneled = SparseReduction<ChannelInstGenerator>;
 
 } // namespace pnm::sls
 

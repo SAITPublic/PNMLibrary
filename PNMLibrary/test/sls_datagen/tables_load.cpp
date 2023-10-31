@@ -33,9 +33,11 @@
 #include <memory>
 #include <string>
 
+using namespace tools::gen::sls;
+
 TEST(TablesMmapLoad, LoadViaUtils_position) {
   const pnm::utils::TemporaryDirectory root{};
-  fmt::print("The temporary embedded tables will be saved at {}\n",
+  fmt::print("The temporary embedding tables will be saved at {}\n",
              root.name());
 
   const TablesInfo tinfo{4, 16, {5, 20, 56, 42}}; // Some random tables
@@ -45,8 +47,8 @@ TEST(TablesMmapLoad, LoadViaUtils_position) {
     gen->create_and_store(root.name(), tinfo);
   }
 
-  ASSERT_THROW(sls::tests::get_test_tables_mmap("/"), pnm::error::IO);
-  auto tables = sls::tests::get_test_tables_mmap(root.name());
+  ASSERT_THROW(get_test_tables_mmap("/"), pnm::error::IO);
+  auto tables = get_test_tables_mmap(root.name());
 
   ASSERT_EQ(tables.info.rows(), tinfo.rows());
   ASSERT_EQ(tables.info.cols(), tinfo.cols());
@@ -69,7 +71,7 @@ TEST(TablesMmapLoad, LoadViaUtils_position) {
 
 TEST(TablesMmapLoad, LoadViaUtils_float_tapp) {
   const pnm::utils::TemporaryDirectory root{};
-  fmt::print("The temporary embedded tables will be saved at {}\n",
+  fmt::print("The temporary embedding tables will be saved at {}\n",
              root.name());
 
   constexpr uint32_t sparse_feature_size = 16;
@@ -85,8 +87,8 @@ TEST(TablesMmapLoad, LoadViaUtils_float_tapp) {
     gen->create_and_store(root.name(), tinfo);
   }
 
-  ASSERT_THROW(sls::tests::get_test_tables_mmap("/"), pnm::error::IO);
-  auto tables = sls::tests::get_test_tables_mmap(root.name());
+  ASSERT_THROW(get_test_tables_mmap("/"), pnm::error::IO);
+  auto tables = get_test_tables_mmap(root.name());
 
   ASSERT_EQ(tables.info.rows(), tinfo.rows());
   ASSERT_EQ(tables.info.cols(), tinfo.cols());
@@ -115,7 +117,7 @@ TEST(TablesMmapLoad, LoadViaUtils_float_tapp) {
 
 TEST(TablesMmapLoad, LoadViaUtils_uint32_t_tapp) {
   const pnm::utils::TemporaryDirectory root{};
-  fmt::print("The temporary embedded tables will be saved at {}\n",
+  fmt::print("The temporary embedding tables will be saved at {}\n",
              root.name());
 
   constexpr uint32_t sparse_feature_size = 16;
@@ -132,8 +134,8 @@ TEST(TablesMmapLoad, LoadViaUtils_uint32_t_tapp) {
     gen->create_and_store(root.name(), tinfo);
   }
 
-  ASSERT_THROW(sls::tests::get_test_tables_mmap("/"), pnm::error::IO);
-  auto tables = sls::tests::get_test_tables_mmap(root.name());
+  ASSERT_THROW(get_test_tables_mmap("/"), pnm::error::IO);
+  auto tables = get_test_tables_mmap(root.name());
 
   ASSERT_EQ(tables.info.rows(), tinfo.rows());
   ASSERT_EQ(tables.info.cols(), tinfo.cols());

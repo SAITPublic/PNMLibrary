@@ -18,11 +18,13 @@ namespace pnm {
 class InternalRunner {
 public:
   void run(InternalOperator &op) { run_impl(op); }
+  void init() { init_impl(); }
 
   virtual ~InternalRunner() = default;
 
 private:
   virtual void run_impl(pnm::InternalOperator &op) = 0;
+  virtual void init_impl() = 0;
 };
 
 } // namespace pnm

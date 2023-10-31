@@ -20,6 +20,8 @@
 #include <unordered_map>
 #include <utility>
 
+namespace tools::gen {
+
 /*! \brief Common factory template */
 template <typename KeyT, typename ReturnType, typename... BuildArgs>
 class CommonFactory {
@@ -88,5 +90,7 @@ public:
 private:
   std::unordered_map<KeyT, build_function> builders_;
 };
+
+} // namespace tools::gen
 
 #endif // SLS_COMMON_FACTORY_H

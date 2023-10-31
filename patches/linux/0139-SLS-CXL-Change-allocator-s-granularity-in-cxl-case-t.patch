@@ -1,7 +1,7 @@
 From 9769aa6da3e1743b2bd7f907eaae7272c15c933f Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Mon, 17 Jul 2023 05:39:27 -0400
-Subject: [PATCH 139/161] [SLS][CXL] Change allocator's granularity in cxl case
+Subject: [PATCH 139/225] [SLS][CXL] Change allocator's granularity in cxl case
  to 2MB
 
 - Add parameter for granularity

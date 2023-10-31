@@ -1,7 +1,7 @@
 From d156f0a1ba979f72f06f10ac2b6abf391f3f24d1 Mon Sep 17 00:00:00 2001
 From: "y.lavrinenko" <y.lavrinenko@samsung.com>
 Date: Tue, 4 Jul 2023 00:40:39 -0400
-Subject: [PATCH 32/33] [pnm] Add option to select SLS device
+Subject: [PATCH 32/34] [pnm] Add option to select SLS device
 
 The `--sls_device_interface` option was added to select which type of
 device should be used for SLS operation. The possible option is:

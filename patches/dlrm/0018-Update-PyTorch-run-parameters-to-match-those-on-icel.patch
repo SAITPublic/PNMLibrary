@@ -1,7 +1,7 @@
 From 0fd90611b769a66bc6dfa1a13a6e70af8c075d9f Mon Sep 17 00:00:00 2001
 From: Sergei Makarov <serg.makarov@samsung.com>
 Date: Tue, 20 Dec 2022 17:05:17 +0000
-Subject: [PATCH 18/23] Update PyTorch run parameters to match those on
+Subject: [PATCH 18/24] Update PyTorch run parameters to match those on
  icelake1
 
 ---

@@ -1,0 +1,32 @@
+From a7972aa119b3d571ac03e9c8dd044ed3bdbe4b92 Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 15 Sep 2023 07:18:00 +0000
+Subject: [PATCH 184/225] [config-pnm] Enable
+ CONFIG_INTEL_UNCORE_FREQ_CONTROL=m
+
+This driver is needed to control uncore frequency (can be used for CXL
+performance emulator).
+
+Relates to: MCS23-1556.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ config-pnm | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/config-pnm b/config-pnm
+index d97b82bd2..c85d2c45f 100644
+--- a/config-pnm
++++ b/config-pnm
+@@ -9085,7 +9085,7 @@ CONFIG_INTEL_WMI_THUNDERBOLT=m
+ #
+ # Intel Uncore Frequency Control
+ #
+-# CONFIG_INTEL_UNCORE_FREQ_CONTROL is not set
++CONFIG_INTEL_UNCORE_FREQ_CONTROL=m
+ # end of Intel Uncore Frequency Control
+ 
+ CONFIG_INTEL_HID_EVENT=m
+-- 
+2.34.1
+

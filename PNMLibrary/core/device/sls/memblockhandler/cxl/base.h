@@ -16,17 +16,15 @@
 #include "core/device/sls/memblockhandler/base.h"
 #include "core/device/sls/memblockhandler/block_ops.h"
 
-#include "common/topology_constants.h"
-
 #include <linux/sls_resources.h>
 
 #include <cstdint>
 
 namespace pnm::sls::device {
 
-template <typename CXLMemBlockHandlerImpl>
-class CXLMemBlockHandler
-    : public SLSMemBlockHandlerImpl<CXLMemBlockHandlerImpl> {
+template <typename CxlMemBlockHandlerImpl>
+class CxlMemBlockHandler
+    : public SlsMemBlockHandlerImpl<CxlMemBlockHandlerImpl> {
 public:
   auto inst_writer() const { return RawBlockWriter{}; }
 
@@ -38,8 +36,6 @@ public:
 
   auto tags_writer() const { return UnsupportedBlockWriter{}; }
   /* tags_reader() must be implemented in derived class */
-
-  uint8_t num_compute_units_impl() const { return topo().NumOfChannels; }
 
   void *get_block_ptr_impl(sls_mem_blocks_e type, uint8_t compute_unit,
                            uint32_t offset) {

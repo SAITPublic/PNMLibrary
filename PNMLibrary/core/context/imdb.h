@@ -27,12 +27,11 @@
 #include <memory>
 
 namespace pnm {
-class IMDBContext : public Context {
+class ImdbContext : public Context {
 public:
-  IMDBContext()
-      : Context(Device::Type::IMDB_CXL,
-                Device::make_device(Device::Type::IMDB_CXL),
-                std::make_unique<pnm::memory::IMDBTransferManager>()) {
+  ImdbContext()
+      : Context(Device::Type::IMDB, Device::make_device(Device::Type::IMDB),
+                std::make_unique<pnm::memory::ImdbTransferManager>()) {
     init_allocator(
         std::make_unique<pnm::memory::SequentialAllocator>(device().get()));
     init_runner_core(std::make_unique<imdb::Runner>(device().get()));

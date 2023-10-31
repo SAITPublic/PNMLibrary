@@ -1,7 +1,7 @@
 From 32d6e7570726d418600cb79f8746853c66a5eb7d Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 29 Oct 2021 17:02:55 +0900
-Subject: [PATCH 002/128] [caffe2/core] Add dummy AXDIMMContext implementation
+Subject: [PATCH 002/135] [caffe2/core] Add dummy AXDIMMContext implementation
 
 Add dummy AXDIMMContext implementation, the actual content should be
 refined later (especially Copy* methods).

@@ -19,10 +19,9 @@
 
 pnm::DevicePointer pnm::Device::make_device(Type type) {
   switch (type) {
-  case Type::SLS_AXDIMM:
-  case Type::SLS_CXL:
-    return pnm::sls::device::BaseDevice::make_device(type);
-  case Type::IMDB_CXL:
+  case Type::SLS:
+    return pnm::sls::device::BaseDevice::make_device();
+  case Type::IMDB:
     return pnm::imdb::device::BaseDevice::make_device();
   }
   throw pnm::error::make_inval("Unknown device type {}.",

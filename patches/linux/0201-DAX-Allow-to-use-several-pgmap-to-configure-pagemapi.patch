@@ -1,0 +1,146 @@
+From 5bb379da72c3179b117b9f177ada8a49516e5be1 Mon Sep 17 00:00:00 2001
+From: Alex Antonov <alex.antonov@samsung.com>
+Date: Fri, 15 Sep 2023 19:08:11 +0300
+Subject: [PATCH 201/225] [DAX] Allow to use several pgmap to configure
+ pagemaping
+
+If we have several regions with different cache policy,
+we should be able to configure these regions separately.
+To make it in DAX device several pgmap are used.
+
+Signed-off-by: Alex Antonov <alex.antonov@samsung.com>
+---
+ drivers/dax/bus.c         |  3 ++-
+ drivers/dax/bus.h         |  1 +
+ drivers/dax/dax-private.h |  2 ++
+ drivers/dax/device.c      | 27 +++++++++++++++++++--------
+ drivers/dax/pmem.c        |  1 +
+ include/linux/memremap.h  |  1 +
+ 6 files changed, 26 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/dax/bus.c b/drivers/dax/bus.c
+index f6d109fc0..d47bc62d7 100644
+--- a/drivers/dax/bus.c
++++ b/drivers/dax/bus.c
+@@ -1344,8 +1344,9 @@ struct dev_dax *devm_create_dev_dax(struct dev_dax_data *data)
+ 		dev_WARN_ONCE(parent, !is_static(dax_region),
+ 			"custom dev_pagemap requires a static dax_region\n");
+ 
++		dev_dax->nr_pgmap = data->nr_pgmap;
+ 		dev_dax->pgmap = kmemdup(data->pgmap,
+-				sizeof(struct dev_pagemap), GFP_KERNEL);
++				sizeof(struct dev_pagemap) * data->nr_pgmap, GFP_KERNEL);
+ 		if (!dev_dax->pgmap) {
+ 			rc = -ENOMEM;
+ 			goto err_pgmap;
+diff --git a/drivers/dax/bus.h b/drivers/dax/bus.h
+index fbb940293..f7de7fb85 100644
+--- a/drivers/dax/bus.h
++++ b/drivers/dax/bus.h
+@@ -19,6 +19,7 @@ struct dax_region *alloc_dax_region(struct device *parent, int region_id,
+ struct dev_dax_data {
+ 	struct dax_region *dax_region;
+ 	struct dev_pagemap *pgmap;
++	int nr_pgmap;
+ 	resource_size_t size;
+ 	int id;
+ };
+diff --git a/drivers/dax/dax-private.h b/drivers/dax/dax-private.h
+index de98e3764..ffda7234e 100644
+--- a/drivers/dax/dax-private.h
++++ b/drivers/dax/dax-private.h
+@@ -55,6 +55,7 @@ struct dax_mapping {
+  * @id: ida allocated id
+  * @ida: mapping id allocator
+  * @dev - device core
++ * @nr_pgmap - size of @pgmap
+  * @pgmap - pgmap for memmap setup / lifetime (driver owned)
+  * @nr_range: size of @ranges
+  * @ranges: resource-span + pgoff tuples for the instance
+@@ -68,6 +69,7 @@ struct dev_dax {
+ 	int id;
+ 	struct ida ida;
+ 	struct device dev;
++	int nr_pgmap;
+ 	struct dev_pagemap *pgmap;
+ 	int nr_range;
+ 	struct dev_dax_range {
+diff --git a/drivers/dax/device.c b/drivers/dax/device.c
+index b3c609302..a4d41c72f 100644
+--- a/drivers/dax/device.c
++++ b/drivers/dax/device.c
+@@ -462,11 +462,13 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 		}
+ 		pgmap->nr_range = dev_dax->nr_range;
+ 		dev_dax->pgmap = pgmap;
++		dev_dax->nr_pgmap = 1;
+ 
+ 		for (i = 0; i < dev_dax->nr_range; i++) {
+ 			struct range *range = &dev_dax->ranges[i].range;
+ 			pgmap->ranges[i] = *range;
+ 		}
++		pgmap->type = MEMORY_DEVICE_GENERIC;
+ 	}
+ 
+ 	for (i = 0; i < dev_dax->nr_range; i++) {
+@@ -480,16 +482,25 @@ int dev_dax_probe(struct dev_dax *dev_dax)
+ 		}
+ 	}
+ 
+-	pgmap->type = MEMORY_DEVICE_GENERIC;
++	for (int i_pgmap = 0; i_pgmap < dev_dax->nr_pgmap; i_pgmap++) {
++		// to check that type was initialized
++		if (pgmap[i_pgmap].type == 0 ||
++			pgmap[i_pgmap].type >= MEMORY_DEVICE_MAX) {
++			dev_warn(dev, "pgmap[%d].type: %d not initialized\n",
++					 i_pgmap, pgmap[i_pgmap].type);
++			rc = -ERANGE;
++			goto out_err;
++		}
+ 
+-	if (dev_dax->align > PAGE_SIZE)
+-		pgmap->vmemmap_shift =
+-			order_base_2(dev_dax->align >> PAGE_SHIFT);
++		if (dev_dax->align > PAGE_SIZE)
++			pgmap[i_pgmap].vmemmap_shift =
++				order_base_2(dev_dax->align >> PAGE_SHIFT);
+ 
+-	if (!is_sls_device) {
+-		addr = devm_memremap_pages(dev, pgmap);
+-		if (IS_ERR(addr))
+-			return PTR_ERR(addr);
++		if (!is_sls_device) {
++			addr = devm_memremap_pages(dev, &pgmap[i_pgmap]);
++			if (IS_ERR(addr))
++				return PTR_ERR(addr);
++		}
+ 	}
+ 
+ 	inode = dax_inode(dax_dev);
+diff --git a/drivers/dax/pmem.c b/drivers/dax/pmem.c
+index f050ea78b..f3bc73274 100644
+--- a/drivers/dax/pmem.c
++++ b/drivers/dax/pmem.c
+@@ -64,6 +64,7 @@ static struct dev_dax *__dax_pmem_probe(struct device *dev)
+ 		.id = id,
+ 		.pgmap = &pgmap,
+ 		.size = range_len(&range),
++		.nr_pgmap = 1,
+ 	};
+ 	dev_dax = devm_create_dev_dax(&data);
+ 
+diff --git a/include/linux/memremap.h b/include/linux/memremap.h
+index 7fcaf3180..af975f443 100644
+--- a/include/linux/memremap.h
++++ b/include/linux/memremap.h
+@@ -72,6 +72,7 @@ enum memory_type {
+ 	MEMORY_DEVICE_FS_DAX,
+ 	MEMORY_DEVICE_GENERIC,
+ 	MEMORY_DEVICE_PCI_P2PDMA,
++	MEMORY_DEVICE_MAX, // to check correct initialization
+ };
+ 
+ struct dev_pagemap_ops {
+-- 
+2.34.1
+

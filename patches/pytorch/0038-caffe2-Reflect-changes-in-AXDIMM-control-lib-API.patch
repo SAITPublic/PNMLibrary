@@ -1,7 +1,7 @@
 From fd79f7b3c8d010a15ae5d8383f30d220b0cbb241 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 22 Apr 2022 18:25:22 +0900
-Subject: [PATCH 038/128] [caffe2] Reflect changes in AXDIMM control lib API
+Subject: [PATCH 038/135] [caffe2] Reflect changes in AXDIMM control lib API
 
 * starter/closer need device context pointer now. Handle this by creating
   device context in "axdimm_starter" freeing it in "axdimm_closer".

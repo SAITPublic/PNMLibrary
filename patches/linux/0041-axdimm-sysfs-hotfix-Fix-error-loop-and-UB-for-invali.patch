@@ -1,7 +1,7 @@
 From 2819e4477187618bd017ecd1fb569a14045cd12d Mon Sep 17 00:00:00 2001
 From: Aleksandr Korzun <a.korzun@partner.samsung.com>
 Date: Thu, 29 Sep 2022 17:45:10 +0300
-Subject: [PATCH 041/161] [axdimm][sysfs][hotfix] Fix error loop and UB for
+Subject: [PATCH 041/225] [axdimm][sysfs][hotfix] Fix error loop and UB for
  invalid acq_timeout
 
 This commit fixes three very closely related things.

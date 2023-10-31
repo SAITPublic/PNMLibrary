@@ -1,14 +1,17 @@
-set(exported_targets pnm sls_secure)
+set(exported_targets create_tables create_indices pnm pnm_ctl sls_secure)
 
 foreach(target ${exported_targets})
-  target_include_directories(${target} INTERFACE 
+  target_include_directories(${target} INTERFACE
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 endforeach()
 
 include(GNUInstallDirs)
 
-install(TARGETS ${exported_targets} DESTINATION ${CMAKE_INSTALL_LIBDIR} EXPORT PNMLibTargets)
+install(TARGETS ${exported_targets} EXPORT PNMLibTargets
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+)
 
 export(EXPORT PNMLibTargets
   FILE "${CMAKE_BINARY_DIR}/cmake/PNMLibTargets.cmake"
@@ -25,6 +28,10 @@ install(EXPORT PNMLibTargets
   NAMESPACE PNM::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PNMLib
 )
+
+install(FILES tools/pnm_ctl/pnm_ctl_completion.sh
+        DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/bash_completion.d
+        RENAME pnm_ctl)
 
 install(FILES ${CMAKE_CURRENT_LIST_DIR}/PNMLibConfig.cmake
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PNMLib)

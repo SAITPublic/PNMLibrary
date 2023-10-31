@@ -1,0 +1,131 @@
+From eda6458910057c36a39e649f75ad676702c1fd7c Mon Sep 17 00:00:00 2001
+From: Maxim Ostapenko <maxim.o@samsung.com>
+Date: Fri, 6 Oct 2023 02:12:01 +0000
+Subject: [PATCH 4/4] [accel/tcg] Reorder tracing points for loads/stores where
+ possible
+
+Trace loads **after** actual load happened and stores **before** actual
+value was written in memory. This is done to preserve a "poor man"
+visibility relation between loads and stores.
+
+Resolves: MCS23-1517.
+
+Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
+---
+ accel/tcg/atomic_template.h |  8 ++++----
+ accel/tcg/cputlb.c          | 32 +++++++++++++++++---------------
+ 2 files changed, 21 insertions(+), 19 deletions(-)
+
+diff --git a/accel/tcg/atomic_template.h b/accel/tcg/atomic_template.h
+index 0bdd04203..b8ca31410 100644
+--- a/accel/tcg/atomic_template.h
++++ b/accel/tcg/atomic_template.h
+@@ -78,8 +78,6 @@ ABI_TYPE ATOMIC_NAME(cmpxchg)(CPUArchState *env, target_ulong addr,
+                                          PAGE_READ | PAGE_WRITE, retaddr);
+     DATA_TYPE ret;
+ 
+-    pnm_tlb_trace_read_access((void *)haddr, DATA_SIZE);
+-
+ #if DATA_SIZE == 16
+     ret = atomic16_cmpxchg(haddr, cmpv, newv);
+ #else
+@@ -88,6 +86,8 @@ ABI_TYPE ATOMIC_NAME(cmpxchg)(CPUArchState *env, target_ulong addr,
+     ATOMIC_MMU_CLEANUP;
+     atomic_trace_rmw_post(env, addr, oi);
+ 
++    pnm_tlb_trace_read_access((void *)haddr, DATA_SIZE);
++
+     if (cmpv == ret) {
+         pnm_tlb_trace_write_access((void *)haddr, DATA_SIZE, newv);
+     }
+@@ -119,10 +119,10 @@ void ATOMIC_NAME(st)(CPUArchState *env, target_ulong addr, ABI_TYPE val,
+     DATA_TYPE *haddr = atomic_mmu_lookup(env, addr, oi, DATA_SIZE,
+                                          PAGE_WRITE, retaddr);
+ 
++    pnm_tlb_trace_write_access((void *)haddr, DATA_SIZE, val);
+     atomic16_set(haddr, val);
+     ATOMIC_MMU_CLEANUP;
+     atomic_trace_st_post(env, addr, oi);
+-    pnm_tlb_trace_write_access((void *)haddr, DATA_SIZE, val);
+ }
+ #endif
+ #else
+@@ -268,10 +268,10 @@ void ATOMIC_NAME(st)(CPUArchState *env, target_ulong addr, ABI_TYPE val,
+                                          PAGE_WRITE, retaddr);
+ 
+     val = BSWAP(val);
++    pnm_tlb_trace_write_access((void *)haddr, DATA_SIZE, val);
+     atomic16_set(haddr, val);
+     ATOMIC_MMU_CLEANUP;
+     atomic_trace_st_post(env, addr, oi);
+-    pnm_tlb_trace_write_access((void *)haddr, DATA_SIZE, val);
+ }
+ #endif
+ #else
+diff --git a/accel/tcg/cputlb.c b/accel/tcg/cputlb.c
+index 35e678ca9..1568f13c2 100644
+--- a/accel/tcg/cputlb.c
++++ b/accel/tcg/cputlb.c
+@@ -173,7 +173,8 @@ static bool do_print_physaddr(hwaddr addr, bool exclude_base_region)
+                                : pnm_do_print_physaddr(addr);
+ }
+ 
+-void pnm_tlb_trace_read_access(void *haddr, size_t size)
++static void pnm_print_tlb_access(void *haddr, size_t size, uint64_t val,
++                                 bool is_write)
+ {
+     if (!pnm_is_tracing()) {
+         return;
+@@ -183,24 +184,24 @@ void pnm_tlb_trace_read_access(void *haddr, size_t size)
+     physaddr = get_real_pnm_phys_addr(physaddr);
+ 
+     if (do_print_physaddr(physaddr, true)) {
+-        fprintf(pnm_tlb_trace_file, "READ addr: %p, size: %lu\n",
+-                (void *)physaddr, size);
++        if (is_write) {
++            fprintf(pnm_tlb_trace_file, "WRITE addr: %p, size: %lu, val: %p\n",
++                    (void *)physaddr, size, (void*)val);
++        } else {
++            fprintf(pnm_tlb_trace_file, "READ addr: %p, size: %lu\n",
++                   (void *)physaddr, size);
++        }
+     }
+ }
+ 
+-void pnm_tlb_trace_write_access(void *haddr, size_t size, uint64_t val)
++void pnm_tlb_trace_read_access(void *haddr, size_t size)
+ {
+-    if (!pnm_is_tracing()) {
+-        return;
+-    }
+-
+-    hwaddr physaddr = (hwaddr)qemu_ram_addr_from_host_nofail(haddr);
+-    physaddr = get_real_pnm_phys_addr(physaddr);
++    pnm_print_tlb_access(haddr, size, 0, false);
++}
+ 
+-    if (do_print_physaddr(physaddr, true)) {
+-        fprintf(pnm_tlb_trace_file, "WRITE addr: %p, size: %lu, val: %p\n",
+-                (void *)physaddr, size, (void*)val);
+-    }
++void pnm_tlb_trace_write_access(void *haddr, size_t size, uint64_t val)
++{
++    pnm_print_tlb_access(haddr, size, val, true);
+ }
+ 
+ void pnm_tlb_trace_start(void)
+@@ -2156,9 +2157,10 @@ load_helper(CPUArchState *env, target_ulong addr, MemOpIdx oi,
+ 
+     haddr = (void *)((uintptr_t)addr + entry->addend);
+ 
++    uint64_t result = load_memop(haddr, op);
+     pnm_tlb_trace_read_access(haddr, size);
+ 
+-    return load_memop(haddr, op);
++    return result;
+ }
+ 
+ /*
+-- 
+2.34.1
+

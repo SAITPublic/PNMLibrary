@@ -45,14 +45,14 @@
 #include <string>
 #include <vector>
 
-/*! \brief The info aboun structure of custom embedded tables. Use to simplify
+/*! \brief The info aboun structure of custom embedding tables. Use to simplify
  * debug process */
 struct TestEnv {
   constexpr static std::array batches_for_table = {5U, 11U, 128U, 56U};
   constexpr static uint64_t lookup_size = 32;
 
   //[TODO @y-lavrinenko] Use generic API
-  static auto fill_indices(const TablesInfo &emb_info) {
+  static auto fill_indices(const tools::gen::sls::TablesInfo &emb_info) {
     std::vector<uint32_t> indices;
     auto lookups_per_table = std::accumulate(batches_for_table.begin(),
                                              batches_for_table.end(), 0UL) *
@@ -77,8 +77,8 @@ struct TestEnv {
   }
 
   static auto table_sparse_sls(
-      pnm::rowwise_view<const uint32_t> table,
-      pnm::variable_row_view<const uint32_t, const uint32_t> indices,
+      pnm::views::rowwise<const uint32_t> table,
+      pnm::views::variable_row<const uint32_t, const uint32_t> indices,
       size_t cols) {
     auto plus = [](const auto &l, const auto &r)
                     NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW { return l + r; };
@@ -98,17 +98,17 @@ struct TestEnv {
     return psums;
   }
 
-  static auto
-  table_tag_sls(pnm::rowwise_view<const uint32_t> tags,
-                pnm::variable_row_view<const uint32_t, const uint32_t> indices)
+  static auto table_tag_sls(
+      pnm::views::rowwise<const uint32_t> tags,
+      pnm::views::variable_row<const uint32_t, const uint32_t> indices)
       NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW {
-    std::vector<pnm::uint128_t> sls_tag;
+    std::vector<pnm::types::uint128_t> sls_tag;
     sls_tag.reserve(indices.size());
 
     for (auto batch : indices) {
-      pnm::uint128_t tag_sum = 0;
+      pnm::types::uint128_t tag_sum = 0;
       for (auto index : batch) {
-        const auto tag = *reinterpret_cast<const pnm::uint128_t *>(
+        const auto tag = *reinterpret_cast<const pnm::types::uint128_t *>(
             (tags.begin() + index)->begin());
         tag_sum += tag;
       }
@@ -121,7 +121,7 @@ struct TestEnv {
   }
 };
 
-using namespace sls::secure;
+using namespace pnm::sls::secure;
 template <typename T, typename C> inline T &as(C *addr) {
   return *reinterpret_cast<T *>(addr);
 }
@@ -131,26 +131,27 @@ struct SecurePostprocessorArtificial : public ::testing::Test {
   std::string root;
   std::vector<uint32_t> data;
   std::vector<uint32_t> golden;
-  sls::tests::TablesMmap emb_table;
+  tools::gen::sls::TablesMmap emb_table;
 
-  sls::secure::indices_t indices_views;
+  pnm::sls::secure::indices_t indices_views;
   std::vector<uint32_t> indices;
   std::vector<uint32_t> lengths;
   void SetUp() override {
     constexpr static std::array rows = {50U, 100U, 129U, 1929U};
     constexpr static size_t sparse_feature_size = 4;
 
-    auto info = TablesInfo{
+    auto info = tools::gen::sls::TablesInfo{
         rows.size(), sparse_feature_size, {rows.begin(), rows.end()}};
 
     root = (std::filesystem::temp_directory_path() / "embXXXXXX").string();
     ASSERT_TRUE(mkdtemp(root.data()));
-    std::unique_ptr<ITablesGenerator> gen;
+    std::unique_ptr<tools::gen::sls::ITablesGenerator> gen;
     ASSERT_NO_THROW(
-        gen = TablesGeneratorFactory::default_factory().create("position"));
+        gen = tools::gen::sls::TablesGeneratorFactory::default_factory().create(
+            "position"));
     ASSERT_NO_THROW(gen->create_and_store(root, info));
 
-    emb_table = sls::tests::get_test_tables_mmap(root);
+    emb_table = tools::gen::sls::get_test_tables_mmap(root);
     auto emp_table_view = emb_table.mapped_file.get_view<uint32_t>();
     data = std::vector<uint32_t>(emp_table_view.begin(), emp_table_view.end());
 
@@ -165,14 +166,14 @@ struct SecurePostprocessorArtificial : public ::testing::Test {
     const auto *lengths_it = lengths.data();
 
     for (auto tid = 0UL; tid < emb_table.info.rows().size(); ++tid) {
-      auto table_view = pnm::make_rowwise_view(
+      auto table_view = pnm::views::make_rowwise_view(
           data_it, data_it + emb_table.info.rows()[tid] * emb_table.info.cols(),
           emb_table.info.cols());
-      auto indices_view = pnm::make_variable_row_view(
+      auto indices_view = pnm::views::make_variable_row_view(
           index_it,
           index_it + TestEnv::batches_for_table[tid] * TestEnv::lookup_size,
-          pnm::make_view(lengths_it,
-                         lengths_it + TestEnv::batches_for_table[tid]));
+          pnm::views::make_view(lengths_it,
+                                lengths_it + TestEnv::batches_for_table[tid]));
       indices_views.emplace_back(tid, indices_view);
 
       std::advance(data_it, emb_table.info.rows()[tid] * emb_table.info.cols());
@@ -189,7 +190,7 @@ struct SecurePostprocessorArtificial : public ::testing::Test {
 
 struct TablePreprocessing : public ::testing::Test {
   std::string root;
-  TablesInfo info;
+  tools::gen::sls::TablesInfo info;
 
   size_t rows() const {
     return std::accumulate(info.rows().begin(), info.rows().end(), 0ULL);
@@ -209,13 +210,15 @@ struct TablePreprocessing : public ::testing::Test {
   void SetUp() override {
     const std::vector<uint32_t> rows_count{15U, 20U, 50U, 25U, 50U, 1024};
     constexpr static size_t sparse_feature_size = 16;
-    info = TablesInfo{rows_count.size(), sparse_feature_size, rows_count};
+    info = tools::gen::sls::TablesInfo{rows_count.size(), sparse_feature_size,
+                                       rows_count};
 
     root = (std::filesystem::temp_directory_path() / "embXXXXXX").string();
     ASSERT_TRUE(mkdtemp(root.data()));
-    std::unique_ptr<ITablesGenerator> gen;
+    std::unique_ptr<tools::gen::sls::ITablesGenerator> gen;
     ASSERT_NO_THROW(
-        gen = TablesGeneratorFactory::default_factory().create("position"));
+        gen = tools::gen::sls::TablesGeneratorFactory::default_factory().create(
+            "position"));
     ASSERT_NO_THROW(gen->create_and_store(root, info));
   }
 

@@ -1,7 +1,7 @@
 From 73f847c4bcd140faef34ea234613994ea2974084 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 18 Apr 2023 17:17:04 +0300
-Subject: [PATCH 17/27] [application] Use release build of PNMLIB
+Subject: [PATCH 17/29] [application] Use release build of PNMLIB
 
 Update all paths for `build` directory to point to `build/release`
 instead.

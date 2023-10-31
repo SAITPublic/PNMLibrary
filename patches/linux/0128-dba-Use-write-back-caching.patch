@@ -1,7 +1,7 @@
 From 18fe0f6368e06d1b18bdca922333985dd67e1f63 Mon Sep 17 00:00:00 2001
 From: Valentin Iliushin <v.iliushin@partner.samsung.com>
 Date: Fri, 16 Jun 2023 14:49:13 +0000
-Subject: [PATCH 128/161] [dba] Use write-back caching
+Subject: [PATCH 128/225] [dba] Use write-back caching
 
 Remove special case for memory accelerator and use default
 write-back caching for DBA

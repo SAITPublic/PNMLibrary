@@ -28,6 +28,8 @@
 #include <string>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Interface for indices generators */
 class IIndicesGenerator {
 public:
@@ -52,7 +54,7 @@ public:
     } else {
       static const thread_local std::string error_message =
           std::string{
-              "Unable open embedded table file in write mode. Reason: "} +
+              "Unable open embedding table file in write mode. Reason: "} +
           strerror(errno);
       throw std::runtime_error(error_message.c_str());
     }
@@ -65,5 +67,7 @@ private:
   create_table_impl(const IndicesInfo &indices_info,
                     const TablesInfo &tables_info) = 0;
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_IBATCHES_GENERATOR_H

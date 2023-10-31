@@ -133,7 +133,6 @@ execute_process(
 
 # Find SLS headers
 check_kernel_header(SLS linux/sls_resources.h)
-check_kernel_header(SLS_MEM_TOPOLOGY linux/pnm_sls_mem_topology.h)
 
 # Find IMDB headers
 check_kernel_header(IMDB linux/imdb_resources.h)
@@ -217,3 +216,5 @@ if (PNM_ENABLE_COMMON_CHECKS)
   get_all_targets(targets)
   add_dependencies(Checker ${targets})
 endif()
+
+include (cmake/package.cmake)

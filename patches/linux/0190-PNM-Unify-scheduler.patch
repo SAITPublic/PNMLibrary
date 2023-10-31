@@ -1,0 +1,1127 @@
+From c126712f02c1e59c1083555fee5d4f90e6c15f72 Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Mon, 18 Sep 2023 00:56:28 +0300
+Subject: [PATCH 190/225] [PNM] Unify scheduler
+
+* Provide common PNM scheduler logic for SLS/IMDB
+
+Resolve: MCS23-1540
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/imdb_resource/sysfs.c          |   6 +-
+ drivers/pnm/imdb_resource/thread_sched.c   | 159 ++--------
+ drivers/pnm/imdb_resource/thread_sched.h   |  15 +-
+ drivers/pnm/sls_resource/cunit_scheduler.c | 350 ++++-----------------
+ drivers/pnm/sls_resource/cunit_scheduler.h |  16 +-
+ drivers/pnm/sls_resource/sysfs/cunits.c    |   5 +-
+ drivers/pnm/sls_resource/sysfs/sysfs.c     |   5 +-
+ include/linux/pnm_sched.h                  |  56 ++++
+ lib/pnm/Makefile                           |   1 +
+ lib/pnm/pnm_sched.c                        | 267 ++++++++++++++++
+ 10 files changed, 438 insertions(+), 442 deletions(-)
+ create mode 100644 include/linux/pnm_sched.h
+ create mode 100644 lib/pnm/pnm_sched.c
+
+diff --git a/drivers/pnm/imdb_resource/sysfs.c b/drivers/pnm/imdb_resource/sysfs.c
+index 822630162..84eda75ed 100644
+--- a/drivers/pnm/imdb_resource/sysfs.c
++++ b/drivers/pnm/imdb_resource/sysfs.c
+@@ -96,11 +96,7 @@ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ 			return rc;
+ 		}
+ 
+-		rc = reset_thread_sched();
+-		if (unlikely(rc)) {
+-			IMDB_ERR("IMDB threads scheduler reset failed\n");
+-			return rc;
+-		}
++		reset_thread_sched();
+ 
+ 		rc = imdb_reset_proc_manager();
+ 		if (unlikely(rc)) {
+diff --git a/drivers/pnm/imdb_resource/thread_sched.c b/drivers/pnm/imdb_resource/thread_sched.c
+index 3689266e1..877f402b6 100644
+--- a/drivers/pnm/imdb_resource/thread_sched.c
++++ b/drivers/pnm/imdb_resource/thread_sched.c
+@@ -8,164 +8,63 @@
+ #include <linux/fs.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/kernel.h>
++#include <linux/pnm_sched.h>
+ 
+-static struct thread_sched thread_sched = {
+-	.threads = {},
+-	.lock = __MUTEX_INITIALIZER(thread_sched.lock),
+-	.wq = __WAIT_QUEUE_HEAD_INITIALIZER(thread_sched.wq)
+-};
+-
+-/* When free engine found, return true, otherwise return false
+- * If engine not found, `out` parameter would be invalid
+- */
+-static bool imdb_find_free_thread(uint8_t *out)
+-{
+-	bool found_free_thread = false;
+-	uint8_t thread = 0;
+-
+-	mutex_lock(&thread_sched.lock);
+-
+-	for (; thread < IMDB_THREAD_NUM; ++thread) {
+-		if (thread_sched.threads[thread].state == IMDB_THREAD_IDLE) {
+-			thread_sched.threads[thread].state = IMDB_THREAD_BUSY;
+-			found_free_thread = true;
+-			break;
+-		}
+-	}
+-
+-	mutex_unlock(&thread_sched.lock);
+-
+-	*out = thread;
+-
+-	return found_free_thread;
+-}
+-
+-static int imdb_release_thread(unsigned long __user arg)
+-{
+-	int rc = 0;
+-	uint8_t thread = arg;
+-
+-	if (thread >= IMDB_THREAD_NUM) {
+-		IMDB_DBG("Invalid thread");
+-		return -EINVAL;
+-	}
+-
+-	mutex_lock(&thread_sched.lock);
+-
+-	if (thread_sched.threads[thread].state == IMDB_THREAD_BUSY) {
+-		thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
+-	} else {
+-		IMDB_ERR("Thread is already IDLE");
+-		rc = -EINVAL;
+-	}
+-
+-	mutex_unlock(&thread_sched.lock);
+-
+-	wake_up_interruptible(&thread_sched.wq);
+-
+-	return rc;
+-}
+-
+-static int imdb_get_thread(void)
+-{
+-	int rc = 0;
+-	uint8_t thread = 0;
+-
+-	rc = wait_event_interruptible(thread_sched.wq,
+-				      imdb_find_free_thread(&thread));
+-
+-	if (unlikely(rc)) {
+-		IMDB_WRN("Process interrupted, try to release thread");
+-		imdb_release_thread(thread);
+-		return rc;
+-	}
+-
+-	if (unlikely(thread >= IMDB_THREAD_NUM)) {
+-		IMDB_ERR("Invalid thread, skip acquiring");
+-		return -EFAULT;
+-	}
+-
+-	return thread;
+-}
++static struct pnm_sched thread_sched;
+ 
+ bool get_thread_state(uint8_t thread)
+ {
+-	bool state = false;
+-
+-	mutex_lock(&thread_sched.lock);
+-
+-	state = thread_sched.threads[thread].state == IMDB_THREAD_BUSY;
+-
+-	mutex_unlock(&thread_sched.lock);
+-
+-	return state;
++	return pnm_sched_get_cunit_state(&thread_sched, thread);
+ }
+ 
+-int reset_thread_sched(void)
++void reset_thread_sched(void)
+ {
+-	int rc = 0;
+-	uint8_t thread = 0;
+-
+-	IMDB_INF("Thread scheduler reset");
+-
+-	mutex_lock(&thread_sched.lock);
+-
+-	for (; thread < IMDB_THREAD_NUM; ++thread) {
+-		if (thread_sched.threads[thread].state == IMDB_THREAD_BUSY)
+-			IMDB_WRN("Busy thread hard reset %u", thread);
+-
+-		thread_sched.threads[thread].state = IMDB_THREAD_IDLE;
+-	}
+-
+-	mutex_unlock(&thread_sched.lock);
+-
+-	wake_up_interruptible(&thread_sched.wq);
+-
+-	return rc;
++	IMDB_DBG("Thread scheduler reset\n");
++	pnm_sched_reset(&thread_sched);
+ }
+ 
+ int init_thread_sched(void)
+ {
+-	return reset_thread_sched();
++	IMDB_DBG("Thread scheduler init\n");
++	return pnm_sched_init(&thread_sched, IMDB_THREAD_NUM,
++			      PNM_SCHED_NO_TIMEOUT);
+ }
+ 
+ void destroy_thread_sched(void)
+ {
+-	mutex_destroy(&thread_sched.lock);
++	IMDB_DBG("Thread scheduler destroy\n");
++	pnm_sched_cleanup(&thread_sched);
+ }
+ 
+-int thread_sched_ioctl(struct file *filp, unsigned int cmd,
+-		       unsigned long __user arg)
++int thread_sched_ioctl(struct file *filp, uint cmd, ulong __user arg)
+ {
+-	int rc = -EFAULT;
+-	int thread = 0;
++	uint8_t thread = 0;
++	int ret = -EINVAL;
+ 
+ 	switch (cmd) {
+ 	case IMDB_IOCTL_GET_THREAD: {
+-		rc = imdb_get_thread();
+-		if (rc < 0)
+-			break;
+-
+-		thread = rc;
+-
+-		rc = imdb_register_thread(filp, thread);
+-		if (likely(!rc))
+-			rc = thread;
+-
+-		break;
++		ret = pnm_sched_get_free_cunit(&thread_sched,
++					       GENMASK(IMDB_THREAD_NUM - 1, 0));
++		if (likely(ret >= 0)) {
++			thread = ret;
++			ret = imdb_register_thread(filp, thread);
++			if (likely(!ret))
++				return thread;
++			pnm_sched_release_and_wakeup(&thread_sched, thread);
++		}
++		return ret;
+ 	}
+ 	case IMDB_IOCTL_RELEASE_THREAD: {
+-		rc = imdb_release_thread(arg);
+-		if (likely(!rc))
+-			rc = imdb_unregister_thread(filp, arg);
+-		break;
++		ret = imdb_unregister_thread(filp, arg);
++		if (likely(!ret))
++			ret = pnm_sched_release_and_wakeup(&thread_sched, arg);
+ 	}
+ 	}
+ 
+-	return rc;
++	return ret;
+ }
+ 
+ int thread_sched_clear_res(uint8_t thread)
+ {
+-	return imdb_release_thread(thread);
++	return pnm_sched_release_and_wakeup(&thread_sched, thread);
+ }
+diff --git a/drivers/pnm/imdb_resource/thread_sched.h b/drivers/pnm/imdb_resource/thread_sched.h
+index 288035073..86bf13027 100644
+--- a/drivers/pnm/imdb_resource/thread_sched.h
++++ b/drivers/pnm/imdb_resource/thread_sched.h
+@@ -8,22 +8,11 @@
+ #include <linux/mutex.h>
+ #include <linux/wait.h>
+ 
+-struct thread_sched {
+-	struct {
+-		uint8_t state;
+-		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
+-	} threads[IMDB_THREAD_NUM];
+-	struct mutex lock;
+-	uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(struct mutex)];
+-	struct wait_queue_head wq;
+-};
+-
+ int init_thread_sched(void);
+ void destroy_thread_sched(void);
+-int reset_thread_sched(void);
++void reset_thread_sched(void);
+ 
+-int thread_sched_ioctl(struct file *filp, unsigned int cmd,
+-		       unsigned long __user arg);
++int thread_sched_ioctl(struct file *filp, uint cmd, ulong __user arg);
+ 
+ bool get_thread_state(uint8_t thread);
+ 
+diff --git a/drivers/pnm/sls_resource/cunit_scheduler.c b/drivers/pnm/sls_resource/cunit_scheduler.c
+index 1572274d5..ccc152743 100644
+--- a/drivers/pnm/sls_resource/cunit_scheduler.c
++++ b/drivers/pnm/sls_resource/cunit_scheduler.c
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "cunit_scheduler.h"
+ #include "log.h"
+@@ -7,353 +7,139 @@
+ #include "topo/params.h"
+ 
+ #include <linux/bitops.h>
++#include <linux/pnm_sched.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ #include <linux/wait.h>
+ 
+-#define BUSY_STATE (1)
+-#define IDLE_STATE (0)
+-
+ /* this timeout value was tunned for FPGA, in order to avoid hangs, which
+  * presumably come from userspace cunit acquire attempts in a loop
+  */
+ #define RETRY_TIMEOUT_NS (100000)
+ 
+-struct cunit_scheduler {
+-	/* struct for managing cunit read and write status */
+-	struct sls_cunit_stat_t {
+-		uint8_t wr_stat;
+-		uint8_t cacheline_padding_1[L1_CACHE_BYTES - sizeof(uint8_t)];
+-		uint8_t rd_stat;
+-		uint8_t cacheline_padding_2[L1_CACHE_BYTES - sizeof(uint8_t)];
+-		atomic64_t wr_acquisition_count;
+-		uint8_t cacheline_padding_3[L1_CACHE_BYTES - sizeof(atomic64_t)];
+-	} *cunit_stats;
+-	atomic64_t retry_timeout_ns;
+-	uint8_t cacheline_padding_4[L1_CACHE_BYTES - sizeof(atomic64_t)];
+-	struct mutex cunit_stat_lock;
++struct sls_sched {
++	struct pnm_sched wr_sched;
++	struct pnm_sched rd_sched;
+ };
+ 
+-static struct cunit_scheduler sls_cunit_sched;
+-
+-static atomic_t wr_flag = ATOMIC_INIT(0);
+-static atomic_t rd_flag = ATOMIC_INIT(0);
+-static DECLARE_WAIT_QUEUE_HEAD(wr_wq);
+-static DECLARE_WAIT_QUEUE_HEAD(rd_wq);
+-
+-static unsigned long
+-acquire_free_cunit_for_write(struct cunit_scheduler *cunit_sched,
+-			     unsigned int rw_msk, unsigned int wo_msk)
+-{
+-	unsigned long cunit;
+-	struct sls_cunit_stat_t *rs = cunit_sched->cunit_stats;
+-
+-	cunit = __ffs(rw_msk ? rw_msk : wo_msk);
+-
+-	rs[cunit].wr_stat = BUSY_STATE;
+-	atomic64_inc(&rs[cunit].wr_acquisition_count);
+-	return cunit;
+-}
+-
+-static void find_free_cunits(struct cunit_scheduler *cunit_sched,
+-			     unsigned int msk, unsigned int *rw_msk,
+-			     unsigned int *wo_msk)
+-{
+-	size_t cunit;
+-	struct sls_cunit_stat_t *rs = cunit_sched->cunit_stats;
+-
+-	/* fill wo_msk and rw_msk according to actual read and write
+-	 * cunit statuses and user requested mask
+-	 */
+-	for (cunit = 0; cunit < sls_topo()->nr_cunits; cunit++) {
+-		if (msk & (1 << cunit) && rs[cunit].wr_stat == IDLE_STATE) {
+-			if (rs[cunit].rd_stat == IDLE_STATE)
+-				*rw_msk |= (1 << cunit);
+-			else
+-				*wo_msk |= (1 << cunit);
+-		}
+-	}
+-
+-	SLS_DBG("Find free cunits: rw = 0x%x, wo = 0x%x for mask = 0x%x",
+-		*rw_msk, *wo_msk, msk);
+-}
++static struct sls_sched sls_sched;
+ 
+ void reset_cunit_scheduler(void)
+ {
+-	size_t cunit;
+-
+-	SLS_DBG("Resetting SLS cunit scheduler\n");
+-
+-	/* set all cunits as idle */
+-	for (cunit = 0; cunit < sls_topo()->nr_cunits; cunit++) {
+-		sls_cunit_sched.cunit_stats[cunit].wr_stat = IDLE_STATE;
+-		sls_cunit_sched.cunit_stats[cunit].rd_stat = IDLE_STATE;
+-		atomic64_set(
+-			&sls_cunit_sched.cunit_stats[cunit].wr_acquisition_count,
+-			0);
+-	}
+-
+-	atomic64_set(&sls_cunit_sched.retry_timeout_ns, RETRY_TIMEOUT_NS);
++	SLS_DBG("Resetting sls write scheduler\n");
++	pnm_sched_reset(&sls_sched.wr_sched);
++	SLS_DBG("Resetting sls read scheduler\n");
++	pnm_sched_reset(&sls_sched.rd_sched);
+ }
+ 
+ int init_cunit_scheduler(void)
+ {
+-	sls_cunit_sched.cunit_stats = kcalloc(sls_topo()->nr_cunits,
+-					      sizeof(struct sls_cunit_stat_t),
+-					      GFP_KERNEL);
+-
+-	if (!sls_cunit_sched.cunit_stats) {
+-		SLS_ERR("No free memory for cunit_stats\n");
+-		return -ENOMEM;
+-	}
+-
+-	atomic64_set(&sls_cunit_sched.retry_timeout_ns, RETRY_TIMEOUT_NS);
+-	mutex_init(&sls_cunit_sched.cunit_stat_lock);
+-
+-	return 0;
+-}
+-
+-void destroy_cunit_scheduler(void)
+-{
+-	kfree(sls_cunit_sched.cunit_stats);
+-	mutex_destroy(&sls_cunit_sched.cunit_stat_lock);
+-}
+-
+-static int get_cunit_write(struct cunit_scheduler *cunit_sched,
+-			   unsigned int msk)
+-{
+-	int ret = -1;
+-	/* masks for saving available cunits in corresponding bits */
+-	unsigned int rw_mask = 0;
+-	unsigned int wo_mask = 0;
+-	unsigned int max_msk_val = (1 << sls_topo()->nr_cunits) - 1;
+-
+-	SLS_DBG("Acquiring cunit for write (mask 0x%x)\n", msk);
+-
+-	if (msk > max_msk_val) {
+-		SLS_ERR("Invalid mask value: 0x%x\n", msk);
+-		return ret;
+-	}
+-
+-	mutex_lock(&cunit_sched->cunit_stat_lock);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(cunit_sched->cunit_stats);
+-		find_free_cunits(cunit_sched, msk, &rw_mask, &wo_mask);
+-
+-		if (rw_mask || wo_mask) {
+-			ret = acquire_free_cunit_for_write(cunit_sched, rw_mask,
+-							   wo_mask);
+-		}
+-	}
+-	mutex_unlock(&cunit_sched->cunit_stat_lock);
+-
+-	if (ret < 0)
+-		SLS_DBG("No free cunit for write\n");
+-	else
+-		SLS_DBG("Acquired cunit %d for write\n", ret);
+-
+-	return ret;
+-}
+-
+-static int get_cunit_read(struct cunit_scheduler *cunit_sched,
+-			  unsigned int cunit_id)
+-{
+-	int ret = -1;
+-
+-	SLS_DBG("Acquiring cunit %u for read\n", cunit_id);
+-
+-	if (cunit_id > (sls_topo()->nr_cunits - 1)) {
+-		SLS_ERR("Invalid cunit value: %u\n", cunit_id);
+-		return ret;
+-	}
+-
+-	mutex_lock(&cunit_sched->cunit_stat_lock);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(cunit_sched->cunit_stats);
+-		if (cunit_sched->cunit_stats[cunit_id].rd_stat == IDLE_STATE) {
+-			ret = cunit_id;
+-			cunit_sched->cunit_stats[cunit_id].rd_stat = BUSY_STATE;
+-		}
+-	}
+-	mutex_unlock(&cunit_sched->cunit_stat_lock);
+-
+-	if (ret < 0)
+-		SLS_DBG("Could not acquire cunit %u for read\n", cunit_id);
+-	else
+-		SLS_DBG("Acquired cunit %u for read\n", cunit_id);
+-
+-	return ret;
+-}
+-
+-int release_cunit_write(unsigned int cunit_id)
+-{
+-	int ret = cunit_id;
++	int err;
+ 
+-	SLS_DBG("Releasing cunit %u for write\n", cunit_id);
++	SLS_DBG("Initializing sls write scheduler\n");
++	err = pnm_sched_init(&sls_sched.wr_sched, sls_topo()->nr_cunits,
++			     RETRY_TIMEOUT_NS);
+ 
+-	if (cunit_id > (sls_topo()->nr_cunits - 1)) {
+-		SLS_ERR("Invalid cunit value: %u\n", cunit_id);
+-		return -1;
++	if (err) {
++		SLS_ERR("Failed to init sls write scheduler\n");
++		return err;
+ 	}
+ 
+-	mutex_lock(&sls_cunit_sched.cunit_stat_lock);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sls_cunit_sched.cunit_stats);
+-		sls_cunit_sched.cunit_stats[cunit_id].wr_stat = IDLE_STATE;
++	SLS_DBG("Initializing sls read scheduler\n");
++	err = pnm_sched_init(&sls_sched.rd_sched, sls_topo()->nr_cunits,
++			     RETRY_TIMEOUT_NS);
++	if (err) {
++		SLS_ERR("Failed to init sls read scheduler\n");
++		pnm_sched_cleanup(&sls_sched.wr_sched);
++		return err;
+ 	}
+-	mutex_unlock(&sls_cunit_sched.cunit_stat_lock);
+-
+-	return ret;
+-}
+-
+-int release_cunit_read(unsigned int cunit_id)
+-{
+-	int ret = cunit_id;
+-
+-	SLS_DBG("Releasing cunit %u for read\n", cunit_id);
+ 
+-	if (cunit_id > (sls_topo()->nr_cunits - 1)) {
+-		SLS_ERR("Invalid cunit value: %u\n", cunit_id);
+-		return -1;
+-	}
+-
+-	mutex_lock(&sls_cunit_sched.cunit_stat_lock);
+-	{
+-		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sls_cunit_sched.cunit_stats);
+-		sls_cunit_sched.cunit_stats[cunit_id].rd_stat = IDLE_STATE;
+-	}
+-	mutex_unlock(&sls_cunit_sched.cunit_stat_lock);
+-	return ret;
+-}
+-
+-// Here we disable kcsan checks due to unavoidable data race in
+-// wait_event_interruptible_hrtimeout. We can't replace that function because the
+-// HW is hanging
+-static __no_kcsan int wait_for_cunit(struct cunit_scheduler *cunit_sched,
+-				     atomic_t *flag, struct wait_queue_head *wq)
+-{
+-	atomic_set(flag, 0);
+-	/* timeout in nanoseconds */
+-	return wait_event_interruptible_hrtimeout(
+-		*wq, atomic_read(flag),
+-		atomic64_read(&cunit_sched->retry_timeout_ns));
++	return 0;
+ }
+ 
+-int get_retry_read(struct cunit_scheduler *cunit_sched, unsigned int arg)
++void destroy_cunit_scheduler(void)
+ {
+-	if (wait_for_cunit(cunit_sched, &rd_flag, &rd_wq) >= 0)
+-		return get_cunit_read(cunit_sched, arg);
+-
+-	return -1;
++	SLS_DBG("Destroy sls write scheduler\n");
++	pnm_sched_cleanup(&sls_sched.wr_sched);
++	SLS_DBG("Destroy sls read scheduler\n");
++	pnm_sched_cleanup(&sls_sched.rd_sched);
+ }
+ 
+-int get_retry_write(struct cunit_scheduler *cunit_sched, unsigned int arg)
+-{
+-	if (wait_for_cunit(cunit_sched, &wr_flag, &wr_wq) >= 0)
+-		return get_cunit_write(cunit_sched, arg);
+-
+-	return -1;
+-}
+-int get_cunit_retry(struct cunit_scheduler *cunit_sched, unsigned int cmd,
+-		    unsigned int arg)
++static int get_cunit(uint cmd, uint arg)
+ {
+ 	if (cmd == GET_CUNIT_FOR_READ)
+-		return get_retry_read(cunit_sched, arg);
++		return pnm_sched_get_free_cunit(&sls_sched.rd_sched,
++						BIT_MASK(arg));
+ 	else if (cmd == GET_CUNIT_FOR_WRITE)
+-		return get_retry_write(cunit_sched, arg);
+-
+-	SLS_ERR("Unknown cunit operation cmd [%d]\n", cmd);
+-	return -EINVAL;
+-}
+-
+-static int get_cunit(struct cunit_scheduler *cunit_sched, unsigned int cmd,
+-		     unsigned int arg)
+-{
+-	if (cmd == GET_CUNIT_FOR_WRITE)
+-		return get_cunit_write(cunit_sched, arg);
+-	if (cmd == GET_CUNIT_FOR_READ)
+-		return get_cunit_read(cunit_sched, arg);
++		return pnm_sched_get_free_cunit(&sls_sched.wr_sched, arg);
+ 
+ 	SLS_ERR("Unknown cunit operation cmd [%d]\n", cmd);
+ 	return -EINVAL;
+ }
+ 
+-int get_sls_cunit(struct file *filp, unsigned int cmd, unsigned int arg)
++int get_sls_cunit(struct file *filp, uint cmd, uint arg)
+ {
+-	int ret = get_cunit(&sls_cunit_sched, cmd, arg);
++	int ret = get_cunit(cmd, arg);
+ 
+-	if (ret < 0) /* was not able to get cunit for write, retry */
+-		ret = get_cunit_retry(&sls_cunit_sched, cmd, arg);
+-
+-	if (ret >= 0) /* finally got cunit, add to process resources */
++	if (ret >= 0) /* got cunit, add to process resources */
+ 		sls_proc_register_cunit(filp, ret, cmd);
+ 
+ 	return ret;
+ }
+ 
+-bool cunit_scheduler_cunit_state(uint8_t cunit)
++bool cunit_scheduler_write_state(uint8_t cunit)
+ {
+-	bool state;
+-
+-	mutex_lock(&sls_cunit_sched.cunit_stat_lock);
+-	state = sls_cunit_sched.cunit_stats[cunit].wr_stat == BUSY_STATE;
+-	mutex_unlock(&sls_cunit_sched.cunit_stat_lock);
+-	return state;
++	return pnm_sched_get_cunit_state(&sls_sched.wr_sched, cunit);
+ }
+ 
+-uint64_t cunit_scheduler_acquisition_count(uint8_t cunit)
++uint64_t cunit_scheduler_write_acquisition_cnt(uint8_t cunit)
+ {
+-	struct sls_cunit_stat_t *axd_rs = sls_cunit_sched.cunit_stats;
+-
+-	return atomic64_read(&axd_rs[cunit].wr_acquisition_count);
++	return pnm_sched_get_cunit_acquisition_cnt(&sls_sched.wr_sched, cunit);
+ }
+ 
+-uint64_t cunit_scheduler_acquisition_timeout(void)
++uint64_t cunit_scheduler_write_acquisition_timeout(void)
+ {
+-	return atomic64_read(&sls_cunit_sched.retry_timeout_ns);
++	return pnm_sched_get_acquisition_timeout(&sls_sched.wr_sched);
+ }
+ 
+-void cunit_scheduler_set_acquisition_timeout(uint64_t timeout)
++void cunit_scheduler_set_write_acquisition_timeout(uint64_t timeout)
+ {
+-	atomic64_set(&sls_cunit_sched.retry_timeout_ns, timeout);
++	pnm_sched_set_acquisition_timeout(&sls_sched.wr_sched, timeout);
++	pnm_sched_set_acquisition_timeout(&sls_sched.rd_sched, timeout);
+ }
+ 
+-static void wakeup_queue(struct cunit_scheduler *cunit_sched, int cunit,
+-			 atomic_t *flag, struct wait_queue_head *wq)
++static int release_and_wakeup(uint cmd, uint arg)
+ {
+-	if (cunit >= 0) { /* wake up someone */
+-		atomic_set(flag, 1);
+-		wake_up_interruptible(wq);
+-	}
+-}
+-
+-static int release_and_wakeup(struct cunit_scheduler *cunit_sched,
+-			      unsigned int cmd, unsigned int arg)
+-{
+-	int cunit;
++	int ret;
+ 
+-	if (cmd == RELEASE_WRITE_CUNIT) {
+-		cunit = release_cunit_write(arg);
+-		wakeup_queue(cunit_sched, cunit, &wr_flag, &wr_wq);
+-	} else if (cmd == RELEASE_READ_CUNIT) {
+-		cunit = release_cunit_read(arg);
+-		wakeup_queue(cunit_sched, cunit, &rd_flag, &rd_wq);
+-	} else {
++	if (cmd == RELEASE_WRITE_CUNIT)
++		ret = pnm_sched_release_and_wakeup(&sls_sched.wr_sched, arg);
++	else if (cmd == RELEASE_READ_CUNIT)
++		ret = pnm_sched_release_and_wakeup(&sls_sched.rd_sched, arg);
++	else {
+ 		SLS_ERR("Unknown cunit operation cmd [%d]\n", cmd);
+ 		return -EINVAL;
+ 	}
+ 
+-	return cunit;
++	return ret;
+ }
+ 
+-int release_sls_cunit(struct file *filp, unsigned int cmd, unsigned int arg)
++int release_sls_cunit(struct file *filp, uint cmd, uint arg)
+ {
+-	int cunit;
++	int ret = sls_proc_remove_cunit(filp, arg, cmd);
+ 
+-	cunit = release_and_wakeup(&sls_cunit_sched, cmd, arg);
++	if (likely(!ret))
++		ret = release_and_wakeup(cmd, arg);
+ 
+-	if (cunit >= 0)
+-		return sls_proc_remove_cunit(filp, cunit, cmd);
++	return ret;
++}
+ 
+-	return -1;
++int release_cunit_write(uint8_t cunit)
++{
++	return pnm_sched_release_cunit(&sls_sched.wr_sched, cunit);
++}
++
++int release_cunit_read(uint8_t cunit)
++{
++	return pnm_sched_release_cunit(&sls_sched.rd_sched, cunit);
+ }
+diff --git a/drivers/pnm/sls_resource/cunit_scheduler.h b/drivers/pnm/sls_resource/cunit_scheduler.h
+index 1f7967eb6..b3eaadf62 100644
+--- a/drivers/pnm/sls_resource/cunit_scheduler.h
++++ b/drivers/pnm/sls_resource/cunit_scheduler.h
+@@ -11,20 +11,20 @@
+ void reset_cunit_scheduler(void);
+ int init_cunit_scheduler(void);
+ void destroy_cunit_scheduler(void);
+-int get_sls_cunit(struct file *filp, unsigned int cmd, unsigned int arg);
+-int release_sls_cunit(struct file *filp, unsigned int cmd, unsigned int arg);
++int get_sls_cunit(struct file *filp, uint cmd, uint arg);
++int release_sls_cunit(struct file *filp, uint cmd, uint arg);
+ 
+ /* these functions are intended for direct cunit status manipulation from
+  * resource manager, in order to free resources which were not freed by
+  * user space process itself
+  */
+-int release_cunit_write(unsigned int cunit_id);
+-int release_cunit_read(unsigned int cunit_id);
++int release_cunit_write(uint8_t cunit);
++int release_cunit_read(uint8_t cunit);
+ 
+-bool cunit_scheduler_cunit_state(uint8_t cunit);
+-uint64_t cunit_scheduler_acquisition_count(uint8_t cunit);
++bool cunit_scheduler_write_state(uint8_t cunit);
++uint64_t cunit_scheduler_write_acquisition_cnt(uint8_t cunit);
+ 
+-uint64_t cunit_scheduler_acquisition_timeout(void);
+-void cunit_scheduler_set_acquisition_timeout(uint64_t timeout);
++uint64_t cunit_scheduler_write_acquisition_timeout(void);
++void cunit_scheduler_set_write_acquisition_timeout(uint64_t timeout);
+ 
+ #endif
+diff --git a/drivers/pnm/sls_resource/sysfs/cunits.c b/drivers/pnm/sls_resource/sysfs/cunits.c
+index 9213bfd8b..c2874a666 100644
+--- a/drivers/pnm/sls_resource/sysfs/cunits.c
++++ b/drivers/pnm/sls_resource/sysfs/cunits.c
+@@ -95,7 +95,7 @@ static ssize_t cunit_show(struct cunit_attribute *attr, char *buf)
+ 	uint64_t free_size, size, wr_acq_count;
+ 
+ 	if (strcmp(attr->attr.name, cunit_attr_name[0]) == 0) {
+-		state = cunit_scheduler_cunit_state(attr->cunit);
++		state = cunit_scheduler_write_state(attr->cunit);
+ 		return sysfs_emit(buf, "%u\n", state);
+ 	}
+ 
+@@ -110,7 +110,8 @@ static ssize_t cunit_show(struct cunit_attribute *attr, char *buf)
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, cunit_attr_name[3]) == 0) {
+-		wr_acq_count = cunit_scheduler_acquisition_count(attr->cunit);
++		wr_acq_count =
++			cunit_scheduler_write_acquisition_cnt(attr->cunit);
+ 		return sysfs_emit(buf, "%llu\n", wr_acq_count);
+ 	}
+ 
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs.c b/drivers/pnm/sls_resource/sysfs/sysfs.c
+index da38614db..19c4b609a 100644
+--- a/drivers/pnm/sls_resource/sysfs/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.c
+@@ -54,7 +54,8 @@ static DEVICE_ATTR_RW(cleanup);
+ static ssize_t acq_timeout_show(struct device *device,
+ 				struct device_attribute *attr, char *buf)
+ {
+-	uint64_t acquisition_count = cunit_scheduler_acquisition_timeout();
++	uint64_t acquisition_count =
++		cunit_scheduler_write_acquisition_timeout();
+ 
+ 	return sysfs_emit(buf, "%llu\n", acquisition_count);
+ }
+@@ -71,7 +72,7 @@ static ssize_t acq_timeout_store(struct device *device,
+ 		return -EINVAL;
+ 	}
+ 	SLS_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
+-	cunit_scheduler_set_acquisition_timeout(acq_timeout);
++	cunit_scheduler_set_write_acquisition_timeout(acq_timeout);
+ 	return count;
+ }
+ static DEVICE_ATTR_RW(acq_timeout);
+diff --git a/include/linux/pnm_sched.h b/include/linux/pnm_sched.h
+new file mode 100644
+index 000000000..e12d1c5ba
+--- /dev/null
++++ b/include/linux/pnm_sched.h
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#ifndef __PNM_SCHEDULER_H__
++#define __PNM_SCHEDULER_H__
++
++#include <linux/mutex.h>
++#include <linux/types.h>
++#include <linux/wait.h>
++
++/*
++ * If we initialize the PNM scheduler with a zero timeout,
++ * the timeout is not used internally while waiting.
++ */
++#define PNM_SCHED_NO_TIMEOUT 0
++
++/*
++ * Add padding for cache alignment for scheduler fields, especially for state
++ * counters to avoid false sharing. Surprisingly this solves FPGA hangs on
++ * workloads with high counters contentions.
++ * Perhaps this should be checked later more deeply with FPGA again.
++ */
++#define PNM_CACHE_ALIGN __aligned(L1_CACHE_BYTES)
++
++struct pnm_sched {
++	PNM_CACHE_ALIGN struct cunit_state {
++		PNM_CACHE_ALIGN uint8_t state;
++		PNM_CACHE_ALIGN atomic64_t acquisition_cnt;
++	} *states;
++	PNM_CACHE_ALIGN uint8_t nr_cunits;
++	PNM_CACHE_ALIGN wait_queue_head_t wq;
++	PNM_CACHE_ALIGN atomic_t wait_flag;
++	PNM_CACHE_ALIGN atomic64_t retry_timeout_ns;
++	PNM_CACHE_ALIGN struct mutex lock;
++};
++
++void pnm_sched_lock(struct pnm_sched *sched);
++void pnm_sched_unlock(struct pnm_sched *sched);
++void pnm_sched_reset_lock(struct pnm_sched *sched);
++
++int pnm_sched_init(struct pnm_sched *sched, uint8_t nr_cunits,
++		   uint64_t timeout);
++void pnm_sched_reset(struct pnm_sched *sched);
++void pnm_sched_cleanup(struct pnm_sched *sched);
++
++int pnm_sched_get_free_cunit(struct pnm_sched *sched, ulong req_msk);
++bool pnm_sched_get_cunit_state(struct pnm_sched *sched, uint8_t cunit);
++uint64_t pnm_sched_get_cunit_acquisition_cnt(const struct pnm_sched *sched,
++					     uint8_t cunit);
++uint64_t pnm_sched_get_acquisition_timeout(const struct pnm_sched *sched);
++void pnm_sched_set_acquisition_timeout(struct pnm_sched *sched,
++				       uint64_t timeout);
++int pnm_sched_release_cunit(struct pnm_sched *sched, uint8_t cunit);
++int pnm_sched_release_and_wakeup(struct pnm_sched *sched, uint8_t cunit);
++
++#endif /* __PNM_SCHEDULER_H__ */
+diff --git a/lib/pnm/Makefile b/lib/pnm/Makefile
+index 3d5000267..28220cb26 100644
+--- a/lib/pnm/Makefile
++++ b/lib/pnm/Makefile
+@@ -2,3 +2,4 @@
+ 
+ obj-$(CONFIG_PNM_LIB) += pnm_lib.o
+ pnm_lib-y := pnm_alloc.o
++pnm_lib-y += pnm_sched.o
+diff --git a/lib/pnm/pnm_sched.c b/lib/pnm/pnm_sched.c
+new file mode 100644
+index 000000000..91f012b7b
+--- /dev/null
++++ b/lib/pnm/pnm_sched.c
+@@ -0,0 +1,267 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2023 Samsung LTD. All rights reserved. */
++
++#include "log.h"
++
++#include <linux/mutex.h>
++#include <linux/pnm_sched.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/wait.h>
++
++#define BUSY_STATE (1)
++#define IDLE_STATE (0)
++
++void pnm_sched_lock(struct pnm_sched *sched)
++{
++	mutex_lock(&sched->lock);
++}
++EXPORT_SYMBOL(pnm_sched_lock);
++
++void pnm_sched_unlock(struct pnm_sched *sched)
++{
++	mutex_unlock(&sched->lock);
++}
++EXPORT_SYMBOL(pnm_sched_unlock);
++
++void pnm_sched_reset_lock(struct pnm_sched *sched)
++{
++	if (unlikely(mutex_is_locked(&sched->lock))) {
++		PNM_ERR("Mutex unlock forced.\n");
++		// [TODO: @p.bred] Question about UB exclusion, see pnm_alloc.c
++		pnm_sched_unlock(sched);
++	}
++}
++EXPORT_SYMBOL(pnm_sched_reset_lock);
++
++/* should be used under sched mutex only */
++static ulong pnm_sched_find_free_cunits(struct pnm_sched *sched, ulong req_msk)
++{
++	size_t cunit;
++	ulong msk = 0;
++
++	for (cunit = 0; cunit < sched->nr_cunits; cunit++) {
++		if (test_bit(cunit, &req_msk) &&
++		    sched->states[cunit].state == IDLE_STATE)
++			set_bit(cunit, &msk);
++	}
++
++	PNM_DBG("Find free cunits: msk = 0x%lx for req_msk = 0x%lx", msk,
++		req_msk);
++
++	return msk;
++}
++
++static void pnm_sched_reset_states(struct pnm_sched *sched)
++{
++	uint8_t cunit;
++
++	for (cunit = 0; cunit < sched->nr_cunits; cunit++) {
++		sched->states[cunit].state = IDLE_STATE;
++		atomic64_set(&sched->states[cunit].acquisition_cnt, 0);
++	}
++}
++
++static void pnm_sched_wakeup_queue(struct pnm_sched *sched)
++{
++	atomic_set(&sched->wait_flag, 1);
++	wake_up_interruptible(&sched->wq);
++}
++
++int pnm_sched_init(struct pnm_sched *sched, uint8_t nr_cunits, uint64_t timeout)
++{
++	PNM_DBG("Initializing pnm scheduler\n");
++
++	sched->nr_cunits = nr_cunits;
++
++	sched->states =
++		kcalloc(nr_cunits, sizeof(struct cunit_state), GFP_KERNEL);
++	if (!sched->states)
++		return -ENOMEM;
++	pnm_sched_reset_states(sched);
++
++	init_waitqueue_head(&sched->wq);
++	atomic_set(&sched->wait_flag, 0);
++	atomic64_set(&sched->retry_timeout_ns, timeout);
++	mutex_init(&sched->lock);
++
++	return 0;
++}
++EXPORT_SYMBOL(pnm_sched_init);
++
++void pnm_sched_reset(struct pnm_sched *sched)
++{
++	PNM_DBG("Resetting pnm scheduler\n");
++	pnm_sched_reset_lock(sched);
++	pnm_sched_reset_states(sched);
++	pnm_sched_wakeup_queue(sched);
++}
++EXPORT_SYMBOL(pnm_sched_reset);
++
++void pnm_sched_cleanup(struct pnm_sched *sched)
++{
++	PNM_DBG("Cleanup pnm scheduler\n");
++	pnm_sched_reset_lock(sched);
++	mutex_destroy(&sched->lock);
++	kfree(sched->states);
++}
++EXPORT_SYMBOL(pnm_sched_cleanup);
++
++/* should be used under sched mutex only */
++static uint8_t pnm_sched_acquire_free_cunit(struct pnm_sched *sched, ulong msk)
++{
++	const uint8_t cunit = __ffs(msk);
++	struct cunit_state *cstate = &sched->states[cunit];
++
++	cstate->state = BUSY_STATE;
++	atomic64_inc(&cstate->acquisition_cnt);
++
++	return cunit;
++}
++
++static int pnm_sched_find_acquire_free_cunit(struct pnm_sched *sched,
++					     ulong req_msk)
++{
++	int ret = -1;
++	ulong msk = 0, max_msk_val = BIT_MASK(sched->nr_cunits);
++
++	PNM_DBG("Acquiring cunit for req_msk 0x%lx\n", req_msk);
++
++	if (req_msk >= max_msk_val) {
++		PNM_ERR("Invalid req_msk value: 0x%lx\n", req_msk);
++		return -1;
++	}
++
++	pnm_sched_lock(sched);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sched->states);
++		msk = pnm_sched_find_free_cunits(sched, req_msk);
++		if (msk)
++			ret = pnm_sched_acquire_free_cunit(sched, msk);
++	}
++	pnm_sched_unlock(sched);
++
++	if (ret < 0)
++		PNM_DBG("No free cunit\n");
++	else
++		PNM_DBG("Acquired cunit %d\n", ret);
++
++	return ret;
++}
++
++// Here we disable kcsan checks due to unavoidable data race in
++// wait_event_interruptible_hrtimeout. We can't replace that function because the
++// HW is hanging
++static __no_kcsan int pnm_sched_wait_for_cunit_timeout(struct pnm_sched *sched)
++{
++	atomic_set(&sched->wait_flag, 0);
++	/* timeout in nanoseconds */
++	return wait_event_interruptible_hrtimeout(
++		sched->wq, atomic_read(&sched->wait_flag),
++		atomic64_read(&sched->retry_timeout_ns));
++}
++
++static int pnm_sched_wait_for_cunit_no_timeout(struct pnm_sched *sched)
++{
++	atomic_set(&sched->wait_flag, 0);
++	return wait_event_interruptible(sched->wq,
++					atomic_read(&sched->wait_flag));
++}
++
++static int pnm_sched_wait_for_cunit(struct pnm_sched *sched)
++{
++	if (atomic64_read(&sched->retry_timeout_ns) != PNM_SCHED_NO_TIMEOUT)
++		return pnm_sched_wait_for_cunit_timeout(sched);
++
++	return pnm_sched_wait_for_cunit_no_timeout(sched);
++}
++
++static int pnm_sched_retry_get_free_cunit(struct pnm_sched *sched,
++					  ulong req_msk)
++{
++	int cunit = -1;
++
++	while (cunit < 0)
++		if (pnm_sched_wait_for_cunit(sched) >= 0)
++			cunit = pnm_sched_find_acquire_free_cunit(sched,
++								  req_msk);
++		else
++			return -1;
++
++	return cunit;
++}
++
++int pnm_sched_get_free_cunit(struct pnm_sched *sched, ulong req_msk)
++{
++	int ret = pnm_sched_find_acquire_free_cunit(sched, req_msk);
++
++	if (ret < 0) // was not able to get cunit, schedule retries
++		return pnm_sched_retry_get_free_cunit(sched, req_msk);
++
++	return ret;
++}
++EXPORT_SYMBOL(pnm_sched_get_free_cunit);
++
++bool pnm_sched_get_cunit_state(struct pnm_sched *sched, uint8_t cunit)
++{
++	bool state;
++
++	pnm_sched_lock(sched);
++	state = sched->states[cunit].state == BUSY_STATE;
++	pnm_sched_unlock(sched);
++	return state;
++}
++EXPORT_SYMBOL(pnm_sched_get_cunit_state);
++
++uint64_t pnm_sched_get_cunit_acquisition_cnt(const struct pnm_sched *sched,
++					     uint8_t cunit)
++{
++	return atomic64_read(&sched->states[cunit].acquisition_cnt);
++}
++EXPORT_SYMBOL(pnm_sched_get_cunit_acquisition_cnt);
++
++uint64_t pnm_sched_get_acquisition_timeout(const struct pnm_sched *sched)
++{
++	return atomic64_read(&sched->retry_timeout_ns);
++}
++EXPORT_SYMBOL(pnm_sched_get_acquisition_timeout);
++
++void pnm_sched_set_acquisition_timeout(struct pnm_sched *sched,
++				       uint64_t timeout)
++{
++	atomic64_set(&sched->retry_timeout_ns, timeout);
++}
++EXPORT_SYMBOL(pnm_sched_set_acquisition_timeout);
++
++int pnm_sched_release_cunit(struct pnm_sched *sched, uint8_t cunit)
++{
++	int ret = cunit;
++
++	PNM_DBG("Releasing cunit %hhu\n", cunit);
++
++	if (cunit >= sched->nr_cunits) {
++		PNM_ERR("Invalid cunit value: %hhu\n", cunit);
++		return -1;
++	}
++
++	pnm_sched_lock(sched);
++	{
++		ASSERT_EXCLUSIVE_ACCESS_SCOPED(sched->states);
++		sched->states[cunit].state = IDLE_STATE;
++	}
++	pnm_sched_unlock(sched);
++
++	return ret;
++}
++EXPORT_SYMBOL(pnm_sched_release_cunit);
++
++int pnm_sched_release_and_wakeup(struct pnm_sched *sched, uint8_t cunit)
++{
++	int ret = pnm_sched_release_cunit(sched, cunit);
++
++	if (ret > 0)
++		pnm_sched_wakeup_queue(sched);
++
++	return ret;
++}
++EXPORT_SYMBOL(pnm_sched_release_and_wakeup);
+-- 
+2.34.1
+

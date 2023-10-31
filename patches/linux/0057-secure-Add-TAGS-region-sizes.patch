@@ -1,7 +1,7 @@
 From bcdb0b2b17bf084435ffbf9cd33666d30a2d0cbb Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Tue, 18 Oct 2022 16:55:44 +0300
-Subject: [PATCH 057/161] [secure] Add TAGS region sizes
+Subject: [PATCH 057/225] [secure] Add TAGS region sizes
 
 Add size of TAGS region and number of TAGS region for single/double
 modes.

@@ -1,7 +1,7 @@
 From 1f020112a4fd0ce591d8f152ff36fc7fe1bb8f5c Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Tue, 7 Dec 2021 10:35:46 +0900
-Subject: [PATCH 013/161] [drivers/dax/axdimm] Support 'axdimm_meminfo' and HW
+Subject: [PATCH 013/225] [drivers/dax/axdimm] Support 'axdimm_meminfo' and HW
  specifics export to userspace
 
 * setup '/dev/axdimm_meminfo' device to provide calculated axdimm_meminfo to

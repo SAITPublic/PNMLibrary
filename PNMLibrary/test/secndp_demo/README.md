@@ -14,6 +14,6 @@ To run app use next command:
 ```
 
 `num_instances` -- number of thread of processes for multithread/process tests
-`root_path` -- path to a folder with embedded tables
+`root_path` -- path to a folder with embedding tables
 `indices_name` -- name of indices set that located in the root_path
 `tag` -- is this args is set the app. will use MAC to verifies SLS result.

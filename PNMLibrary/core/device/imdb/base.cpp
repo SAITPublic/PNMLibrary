@@ -21,12 +21,12 @@
 #include "common/compiler_internal.h"
 #include "common/error_message.h"
 #include "common/make_error.h"
+#include "common/memory/atomic.h"
+#include "common/topology_constants.h"
 
 #include "pnmlib/imdb/libimdb.h"
 
 #include "pnmlib/core/device.h"
-
-#include "pnmlib/common/misc_utils.h"
 
 #include <fmt/core.h>
 
@@ -35,7 +35,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 
-#include <atomic>
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -46,6 +46,8 @@
 #include <type_traits>
 
 namespace pnm::imdb::device {
+
+using pnm::imdb::device::topo;
 
 namespace {
 template <typename T> T *drop_volatile(volatile T *ptr) {
@@ -77,7 +79,8 @@ void BaseDevice::reset_impl(ResetOptions options) {
 
 void BaseDevice::dump_thread_csr(uint8_t thread_id) const {
   // [TODO: @e-kutovoi] Print this in a structured manner
-  for (auto reg : regs_as_ints(drop_volatile(regs_.thread.at(thread_id)))) {
+  assert(thread_id < topo().NumOfThreads);
+  for (auto reg : regs_as_ints(drop_volatile(regs_.thread[thread_id]))) {
     fmt::print("{} ", reg);
   }
 
@@ -85,11 +88,13 @@ void BaseDevice::dump_thread_csr(uint8_t thread_id) const {
 }
 
 volatile ThreadCSR *BaseDevice::get_csr(uint8_t thread_id) {
-  return regs_.thread.at(thread_id);
+  assert(thread_id < topo().NumOfThreads);
+  return regs_.thread[thread_id];
 }
 
 const volatile ThreadCSR *BaseDevice::get_csr(uint8_t thread_id) const {
-  return regs_.thread.at(thread_id);
+  assert(thread_id < topo().NumOfThreads);
+  return regs_.thread[thread_id];
 }
 
 BaseDevice::BaseDevice(const std::filesystem::path &devcontrol_path,
@@ -98,11 +103,16 @@ BaseDevice::BaseDevice(const std::filesystem::path &devcontrol_path,
       resmanager_(IMDB_RESOURCE_DEVICE_PATH, O_RDWR) {
   regs_.common = get_regs_section<CommonCSR>(0);
   regs_.status = get_regs_section<StatusCSR>(THREAD_STATUS_OFFSET);
+  regs_.thread = std::shared_ptr<volatile ThreadCSR *[]>(
+      new volatile ThreadCSR *[topo().NumOfThreads]);
 
-  for (std::size_t thread_id = 0; thread_id < MAX_THREADS; ++thread_id) {
+  for (std::size_t thread_id = 0; thread_id < topo().NumOfThreads;
+       ++thread_id) {
     auto offset = THREAD_CSR_BASE_OFFSET + THREAD_CSR_SIZE * thread_id;
     regs_.thread[thread_id] = get_regs_section<ThreadCSR>(offset);
   }
+
+  tsan_mutexes_.resize(topo().NumOfThreads);
 }
 
 uint8_t BaseDevice::lock_thread() { return lock_thread_impl(); }
@@ -142,12 +152,11 @@ void BaseDevice::release_thread_impl(uint8_t thread_id) {
 void BaseDevice::software_reset() { control_.reset(); }
 
 void BaseDevice::hardware_reset() const {
-  pnm::utils::as_vatomic<uint32_t>(&regs_.common->IMDB_RESET)
-      ->store(IMDB_RESET_ENABLE);
+  pnm::memory::hw_atomic_store(&regs_.common->IMDB_RESET, IMDB_RESET_ENABLE);
+
   // [TODO: @e-kutovoi] Investigate whether we need this
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  utils::as_vatomic<uint32_t>(&regs_.common->IMDB_RESET)
-      ->store(IMDB_RESET_DISABLE);
+  pnm::memory::hw_atomic_store(&regs_.common->IMDB_RESET, IMDB_RESET_DISABLE);
 }
 
 } // namespace pnm::imdb::device

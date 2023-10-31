@@ -1,7 +1,7 @@
 From f54d9632a6127ba5fd315ff680a59c83dd707dfc Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Tue, 11 Jul 2023 04:09:04 -0400
-Subject: [PATCH 137/161] [sls_resource][proc_mgr] Make process manager more
+Subject: [PATCH 137/225] [sls_resource][proc_mgr] Make process manager more
  independent
 
 Related-to: MCS23-1300

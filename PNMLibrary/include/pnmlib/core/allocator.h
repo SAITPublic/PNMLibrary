@@ -31,6 +31,14 @@ public:
 
   void deallocate(const DeviceRegion &region) { deallocate_impl(region); }
 
+  DeviceRegion share_region(const DeviceRegion &region) {
+    return share_region_impl(region);
+  }
+
+  DeviceRegion get_shared_alloc(const DeviceRegion &region) {
+    return get_shared_alloc_impl(region);
+  }
+
   virtual ~Allocator() = default;
 
 private:
@@ -38,6 +46,10 @@ private:
                                      const property::PropertiesList &props) = 0;
 
   virtual void deallocate_impl(const DeviceRegion &region) = 0;
+
+  virtual DeviceRegion share_region_impl(const DeviceRegion &region) = 0;
+
+  virtual DeviceRegion get_shared_alloc_impl(const DeviceRegion &region) = 0;
 };
 
 namespace property {
@@ -45,11 +57,11 @@ namespace property {
  * used for data storage. */
 struct PNM_API CURegion
     : pnm::property::Base<pnm::property::PropertiesTypes::MEM_LOCATION> {
-  explicit CURegion(uint32_t rank) : rank_{rank} {}
-  auto rank() const { return rank_; }
+  explicit CURegion(uint32_t cunit) : cunit_{cunit} {}
+  auto cunit() const { return cunit_; }
 
 private:
-  uint32_t rank_;
+  uint32_t cunit_;
 };
 
 struct PNM_API AllocPolicy

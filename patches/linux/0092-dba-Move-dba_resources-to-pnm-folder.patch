@@ -1,7 +1,7 @@
 From 1d3289a119f59cc7c8684fe02b8c3ac2985408f7 Mon Sep 17 00:00:00 2001
 From: Savelii Motov <s.motov@samsung.com>
 Date: Wed, 29 Mar 2023 16:03:05 +0300
-Subject: [PATCH 092/161] [dba] Move dba_resources to pnm folder
+Subject: [PATCH 092/225] [dba] Move dba_resources to pnm folder
 
 Signed-off-by: Savelii Motov <s.motov@samsung.com>
 ---

@@ -11,7 +11,7 @@
 
 #include "channel_transfer_manager.h"
 
-#include "core/memory/barrier.h"
+#include "common/memory/barrier.h"
 
 #include "pnmlib/core/transfer_manager.h"
 
@@ -22,7 +22,7 @@
 #include <iterator>
 
 uint64_t pnm::memory::ChannelTransferManager::copy_to_device_impl(
-    pnm::common_view<const uint8_t> host_region,
+    pnm::views::common<const uint8_t> host_region,
     const pnm::memory::TransferManager::DeviceRegionInfo &dev_region) {
   const auto &vregions = std::get<VRegionType>(dev_region.virt);
 
@@ -31,7 +31,7 @@ uint64_t pnm::memory::ChannelTransferManager::copy_to_device_impl(
     if (!vchannel_region.empty()) {
       auto *it = std::copy(host_region.begin(), host_region.end(),
                            vchannel_region.begin());
-      mfence();
+      pnm::memory::mfence();
       copied = std::distance(vchannel_region.begin(), it);
     }
   }
@@ -40,7 +40,7 @@ uint64_t pnm::memory::ChannelTransferManager::copy_to_device_impl(
 
 uint64_t pnm::memory::ChannelTransferManager::copy_from_device_impl(
     const pnm::memory::TransferManager::DeviceRegionInfo &dev_region,
-    pnm::common_view<uint8_t> host_region) {
+    pnm::views::common<uint8_t> host_region) {
   const auto &vregions = std::get<VRegionType>(dev_region.virt);
 
   uint64_t copied = 0;
@@ -48,7 +48,7 @@ uint64_t pnm::memory::ChannelTransferManager::copy_from_device_impl(
     if (!vchannel_region.empty()) {
       auto *it = std::copy(vchannel_region.begin(), vchannel_region.end(),
                            host_region.begin());
-      mfence();
+      pnm::memory::mfence();
       copied = std::distance(host_region.begin(), it);
 
       // Here we assume that all regions contain same data

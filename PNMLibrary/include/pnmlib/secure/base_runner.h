@@ -19,7 +19,7 @@
 
 #include <cstdint>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 
 /*! Base interface of Secure Runners*/
 class IRunner {
@@ -29,17 +29,17 @@ public:
   void init(const DeviceArguments *args) { init_impl(args); }
 
   void load_tables(const void *data,
-                   pnm::common_view<const uint32_t> num_entries,
+                   pnm::views::common<const uint32_t> num_entries,
                    uint32_t sparse_feature_size, bool include_tag) {
     load_tables_impl(data, num_entries, sparse_feature_size, include_tag);
   }
 
   // [TODO:] drop 'with_tag' parameter once DLRM will be ready to call this
   // method without tag
-  bool run(uint64_t minibatch_size, pnm::common_view<const uint32_t> lengths,
-           pnm::common_view<const uint32_t> indices,
-           pnm::common_view<uint8_t> psum,
-           pnm::common_view<uint8_t> checks = {},
+  bool run(uint64_t minibatch_size, pnm::views::common<const uint32_t> lengths,
+           pnm::views::common<const uint32_t> indices,
+           pnm::views::common<uint8_t> psum,
+           pnm::views::common<uint8_t> checks = {},
            [[maybe_unused]] bool with_tag = false) {
     return run_impl(minibatch_size, lengths, indices, psum, checks);
   }
@@ -48,16 +48,16 @@ private:
   virtual void init_impl(const DeviceArguments *args) = 0;
 
   virtual void load_tables_impl(const void *data,
-                                pnm::common_view<const uint32_t> num_entries,
+                                pnm::views::common<const uint32_t> num_entries,
                                 uint32_t sparse_feature_size,
                                 bool include_tag) = 0;
 
   virtual bool run_impl(uint64_t minibatch_size,
-                        pnm::common_view<const uint32_t> lengths,
-                        pnm::common_view<const uint32_t> indices,
-                        pnm::common_view<uint8_t> psum,
-                        pnm::common_view<uint8_t> checks) = 0;
+                        pnm::views::common<const uint32_t> lengths,
+                        pnm::views::common<const uint32_t> indices,
+                        pnm::views::common<uint8_t> psum,
+                        pnm::views::common<uint8_t> checks) = 0;
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif //_SLS_SECURE_RUNNER_BASE_H_

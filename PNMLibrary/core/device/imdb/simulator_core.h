@@ -15,39 +15,18 @@
 
 #include "reg_mem.h"
 
-#include "common/compiler_internal.h"
+#include "core/device/simulator/base_simulator.h"
+
 #include "common/profile.h"
-#include "common/threads/producer_consumer.h"
-#include "common/threads/workers_storage.h"
 
 #include "pnmlib/imdb/bit_views.h"
 #include "pnmlib/imdb/libimdb.h"
 #include "pnmlib/imdb/scan_types.h"
 
-#include <linux/imdb_resources.h>
-
-#include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <future>
-#include <optional>
 
 namespace pnm::imdb::device {
-
-namespace detail {
-/** @brief Wrapper around `std::atomic_bool` aligned to be friendly with CPU
- * cache.
- *
- * The alignment is done by `hardware_destructive_interference_size`, which
- * ensures that cache conflicts do not happen for atomic operations on
- * neighboring values.
- */
-struct AlignedAtomicBool {
-  CACHE_ALIGNED std::atomic<bool> inner;
-};
-} // namespace detail
-
 /** @brief The core of the IMDB device simulator
  *
  * Simulates engine threads and register I/O handling as a freestanding
@@ -88,7 +67,7 @@ struct AlignedAtomicBool {
  * the same time. See the `enable_thread()` and `disable_thread()` methods for
  * additional information.
  */
-class SimulatorCore {
+class SimulatorCore : public pnm::sls::device::BaseAsyncSimulator {
 public:
   SimulatorCore(const RegisterPointers &regs, uint8_t *memory);
 
@@ -97,57 +76,13 @@ public:
    *
    * Stops all the threads that are currently waiting for a scan operation.
    */
-  ~SimulatorCore();
-
-  /** @brief Enable a simulated IMDB thread.
-   *
-   * The simulated IMDB thread with specified id becomes active and
-   * starts polling per-thread registers. In order to do this, it
-   * allocates a vacant thread from an internal thread pool and runs on it.
-   * The thread continues running until deactivated with `disable_thread()`.
-   *
-   * This function must only be called if enabling the specified thread would
-   * not cause any race conditions. If system-wide register memory is used,
-   * (e.g. simulated or hardware register memory), this means the current
-   * application thread must hold a lock on the corresponding IMDB thread
-   * obtained from the IMDB resource manager. The lock must not be released
-   * until this simulator thread is disabled.
-   *
-   * Does not block, returns immediately.
-   *
-   * @throws pnm::error::InvalidArguments if the specified thread is already
-   * enabled or if the thread id is invalid.
-   */
-  void enable_thread(size_t thread_id);
-
-  /** @brief Stop and disable a simulated IMDB thread.
-   *
-   * The simulated IMDB thread is stopped gracefully, waiting for completion of
-   * the scan operation in progress, if any. After being stopped, this simulated
-   * engine thread would no longer access IMDB registers until re-enabled.
-   *
-   * This function blocks until the simulated engine thread is fully stopped. It
-   * is thus safe to release any lock on the IMDB thread after this function
-   * returns.
-   *
-   * @throws pnm::error::InvalidArguments if the specified thread is disabled or
-   * if the thread id is invalid.
-   */
-  void disable_thread(size_t thread_id);
-
-  /** @brief Check if the simulated IMDB thread is enabled.
-   *
-   * @returns true if the thread is enabled, false otherwise.
-   *
-   * @throws pnm::error::InvalidArguments if the thread id is invalid.
-   */
-  bool is_thread_enabled(size_t thread_id) const;
+  ~SimulatorCore() override;
 
 private:
   using ClockTimerType = pnm::profile::TimerMsT;
 
   /** @brief Status of an engine thread. */
-  enum class ThreadStatus {
+  enum class ThreadStatus : uint8_t {
     /** The thread is busy and is executing a scan operation. */
     Working = 0,
     /** The thread is idle and is waiting for tasks. */
@@ -165,23 +100,14 @@ private:
   /** @brief Common parameters for all scan operations. */
   struct CommonParams {
     /** The input data column view. */
-    pnm::views::bit_compressed_view<const pnm::imdb::compressed_element_type>
+    pnm::views::bit_compressed<const pnm::imdb::compressed_element_type>
         column_view;
     /** Reference to the output column size. */
     volatile uint64_t &column_result_size_ref;
   };
 
-  /** @brief Controls to interact with worker threads. */
-  struct ThreadControls {
-    /** Flag that signals the thread to stop. */
-    detail::AlignedAtomicBool stop_flag;
-    /** Future that completes when the thread actually stops, if the thread is
-     * enabled. `std::nullopt` if the thread is disabled. */
-    std::optional<std::future<void>> future;
-  };
-
   /** @brief Worker thread entry point. */
-  void worker_job(size_t thread_id);
+  void worker_job(size_t thread_id) override;
 
   /** @brief Set the thread status in the `IMDB_COM_STATUS` register. */
   void set_imdb_com_status(size_t thread_id, ThreadStatus status);
@@ -207,18 +133,11 @@ private:
                                pnm::imdb::OperationType operation_type,
                                const CommonParams &common_params,
                                const ThreadContext &thread_context);
-
-  /** Thread controls for each simulated IMDB thread. */
-  std::array<ThreadControls, IMDB_THREAD_NUM> thread_controls_;
-
   /** Pointer to IMDB memory */
   uint8_t *memory_;
 
   /** Pointers to IMDB registers. */
   RegisterPointers regs_;
-
-  /** Thread pool for scan operations. */
-  pnm::threads::ProducerConsumer<pnm::threads::Manager> thread_pool_;
 };
 
 } // namespace pnm::imdb::device

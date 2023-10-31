@@ -13,6 +13,8 @@
 
 #include "common.h"
 
+#include "common/topology_constants.h"
+
 #include "pnmlib/imdb/scan.h"
 #include "pnmlib/imdb/scan_types.h"
 
@@ -26,11 +28,9 @@
 
 #include <benchmark/benchmark.h>
 
-#include <linux/imdb_resources.h>
-
-#include <array>
 #include <cstdint>
 #include <type_traits>
+#include <vector>
 
 // Data must be on different ranks for HW parallelism (rank 1 = lower 16GB, rank
 // 2 = upper 16GB)
@@ -47,18 +47,20 @@
 using namespace pnm::imdb;
 using namespace pnm::memory;
 
+using pnm::imdb::device::topo;
+
 namespace {
 
-std::array<Buffer<uint32_t>, IMDB_NUM_OF_RANK> column_buffer;
+std::vector<Buffer<uint32_t>> column_buffer(topo().NumOfRanks);
 
 template <typename BitContainer> auto make_view(BitContainer &c) {
-  return pnm::make_view(c.container());
+  return pnm::views::make_view(c.container());
 }
 
-template <> auto make_view(index_vector &c) { return pnm::make_view(c); }
+template <> auto make_view(index_vector &c) { return pnm::views::make_view(c); }
 
-void release_column_buffer_if(int thread_idx) {
-  if (thread_idx < IMDB_NUM_OF_RANK) {
+void release_column_buffer_if(uint32_t thread_idx) {
+  if (thread_idx < topo().NumOfRanks) {
     column_buffer[thread_idx] = Buffer<uint32_t>();
   }
 }
@@ -69,20 +71,20 @@ template <OutputType output_type> void imdb_in_range(benchmark::State &state) {
   const uint64_t bit_size = state.range(0);
   const uint64_t column_size = state.range(1);
   const double selectivity = 1.0 / state.range(2);
-  const uint8_t rank = state.thread_index() % IMDB_NUM_OF_RANK;
-  const uint8_t other_rank = (rank + 1) % IMDB_NUM_OF_RANK;
-  const auto thread_idx = state.thread_index();
+  const uint8_t rank = state.thread_index() % topo().NumOfRanks;
+  const uint8_t other_rank = (rank + 1) % topo().NumOfRanks;
+  const uint32_t thread_idx = state.thread_index();
   auto &column_buf = column_buffer[rank];
 
   const auto &[column, input] =
       ::make_input_data_cached<OperationType::InRange, output_type>(
           bit_size, column_size, selectivity, thread_idx);
 
-  static auto context = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  static auto context = pnm::make_context(pnm::Device::Type::IMDB);
 
   release_column_buffer_if(thread_idx);
 
-  if (thread_idx < IMDB_NUM_OF_RANK) {
+  if (thread_idx < topo().NumOfRanks) {
     column_buf = Buffer(::make_view(column), context, property::CURegion(rank));
   }
 
@@ -117,20 +119,20 @@ template <OutputType output_type> void imdb_in_list(benchmark::State &state) {
   const uint64_t bit_size = state.range(0);
   const uint64_t column_size = state.range(1);
   const double selectivity = 1.0 / state.range(2);
-  const uint8_t rank = state.thread_index() % IMDB_NUM_OF_RANK;
-  const uint8_t other_rank = (rank + 1) % IMDB_NUM_OF_RANK;
-  const auto thread_idx = state.thread_index();
+  const uint8_t rank = state.thread_index() % topo().NumOfRanks;
+  const uint8_t other_rank = (rank + 1) % topo().NumOfRanks;
+  const uint32_t thread_idx = state.thread_index();
   auto &column_buf = column_buffer[rank];
 
   const auto &[column, input] =
       ::make_input_data_cached<OperationType::InList, OutputType::BitVector>(
           bit_size, column_size, selectivity, state.thread_index());
 
-  static auto context = pnm::make_context(pnm::Device::Type::IMDB_CXL);
+  static auto context = pnm::make_context(pnm::Device::Type::IMDB);
 
   release_column_buffer_if(thread_idx);
 
-  if (thread_idx < IMDB_NUM_OF_RANK) {
+  if (thread_idx < topo().NumOfRanks) {
     column_buf = Buffer(::make_view(column), context, property::CURegion(rank));
   }
 
@@ -141,8 +143,8 @@ template <OutputType output_type> void imdb_in_list(benchmark::State &state) {
       Buffer(::make_view(result), context, property::CURegion(other_rank));
 
   bit_vector predictor(1U << bit_size);
-  auto predictor_buf = Buffer(pnm::make_view(predictor.container()), context,
-                              property::CURegion(other_rank));
+  auto predictor_buf = Buffer(pnm::views::make_view(predictor.container()),
+                              context, property::CURegion(other_rank));
 
   const pnm::Runner runner(context);
 
@@ -150,8 +152,8 @@ template <OutputType output_type> void imdb_in_list(benchmark::State &state) {
 
   auto request_id = 0;
   for ([[maybe_unused]] auto _ : state) {
-    predictor_buf.bind_user_region(pnm::view_const_cast<uint32_t>(
-        pnm::make_view(input[request_id].container())));
+    predictor_buf.bind_user_region(pnm::views::view_const_cast<uint32_t>(
+        pnm::views::make_view(input[request_id].container())));
     predictor_buf.copy_to_device();
 
     pnm::operations::Scan op({bit_size, column.size(), &column_buf},

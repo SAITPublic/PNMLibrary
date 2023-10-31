@@ -17,6 +17,9 @@
 
 #include "tools/pnm_ctl/command_interface.h"
 
+#include "pnmlib/sls/control.h"
+
+#include "pnmlib/imdb/control.h"
 #include "pnmlib/imdb/libimdb.h"
 
 #include "pnmlib/common/error.h"
@@ -24,6 +27,9 @@
 #include "CLI/App.hpp"
 #include "CLI/Option.hpp"
 #include "CLI/Validators.hpp"
+
+#include <linux/imdb_resources.h>
+#include <linux/sls_resources.h>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -33,6 +39,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 
 using namespace tools::ctl;
 
@@ -43,15 +50,13 @@ void DestroySharedMemory::add_subcommand(CLI::App &app) {
   auto *device_type =
       sub->add_option_group("dev_type", "Device type")->required();
 
-  CLI::Option *sls =
-      device_type->add_flag("-s,--sls", is_sls_,
-                            "Destroy memory for SLS. i.e. one region "
-                            "for both memory and registers");
-  device_type
-      ->add_flag("-i,--imdb", is_imdb_,
-                 "Destroy memory for IMDB. i.e. two regions - "
-                 "one for memory and one for registers")
-      ->excludes(sls);
+  device_type->add_flag("-s,--sls", is_sls_,
+                        "Destroy memory for SLS. i.e. one region "
+                        "for both memory and registers");
+
+  device_type->add_flag("-i,--imdb", is_imdb_,
+                        "Destroy memory for IMDB. i.e. two regions - "
+                        "one for memory and one for registers");
 
   sub->callback([this]() { execute(); });
 }
@@ -59,7 +64,7 @@ void DestroySharedMemory::add_subcommand(CLI::App &app) {
 void DestroySharedMemory::destroy_shm(const char *name) {
   if (shm_unlink(name) == -1) {
     if (errno == ENOENT) {
-      print_err("Shared memory file {} doesn't exist, skpping!\n", name);
+      print_err("Shared memory file {} doesn't exist, skipping!\n", name);
       return;
     }
 
@@ -72,10 +77,12 @@ void DestroySharedMemory::destroy_shm(const char *name) {
 void DestroySharedMemory::execute() {
   if (is_sls_) {
     destroy_shm(SLS_SHMEM);
-  } else if (is_imdb_) {
+  }
+  if (is_imdb_) {
     destroy_shm(IMDB_CSR_DEVICE_SIM_NAME);
     destroy_shm(IMDB_DEVMEMORY_PATH_SIM_NAME);
-  } else {
+  }
+  if (!is_sls_ && !is_imdb_) {
     throw pnm::error::InvalidArguments("Bad state.");
   }
 }
@@ -87,36 +94,63 @@ void SetupSharedMemory::add_subcommand(CLI::App &app) {
   auto *device_type =
       sub->add_option_group("dev_type", "Device type")->required();
 
-  CLI::Option *sls =
-      device_type->add_flag("-s,--sls", is_sls_,
-                            "Setup memory for SLS. i.e. one region "
-                            "for both memory and registers");
-  CLI::Option *imdb =
-      device_type
-          ->add_flag("-i,--imdb", is_imdb_,
-                     "Setup memory for IMDB. i.e. two regions - "
-                     "one for memory and one for registers")
-          ->excludes(sls);
+  device_type->add_flag("-s,--sls", is_sls_,
+                        "Setup memory for SLS. i.e. one region "
+                        "for both memory and registers");
 
-  sub->add_option("-m,--mem", mem_size_, "Device memory size")
-      ->transform(CLI::AsSizeValue(false))
-      ->default_val("16GB");
+  CLI::Option *imdb =
+      device_type->add_flag("-i,--imdb", is_imdb_,
+                            "Setup memory for IMDB. i.e. two regions - "
+                            "one for memory and one for registers");
 
   sub->add_option("-r,--regs", regs_size_, "Device registers size")
       ->transform(CLI::AsSizeValue(false))
       ->default_val("0x1900B")
       ->needs(imdb);
 
+  sub->add_option("-m,--mem", mem_size_,
+                  "Device memory size. Cannot be used when initializing "
+                  "shm both sls and imdb at the same time")
+      ->transform(CLI::AsSizeValue(false));
+
   sub->callback([this]() { execute(); });
 }
 
 void SetupSharedMemory::execute() {
+  if (is_sls_ && is_imdb_ && (mem_size_ != 0 || regs_size_ != REG_AREA_SIZE)) {
+    throw pnm::error::InvalidArguments(
+        "The use of options in case of setup of sls and imdb at the same time "
+        "is prohibited.");
+  }
+
   if (is_sls_) {
+    if (mem_size_ == 0) {
+      if (!std::filesystem::exists(SLS_SYSFS_ROOT)) {
+        throw pnm::error::InvalidArguments(
+            "Memory size should be specified if module not loaded");
+      }
+
+      mem_size_ = pnm::sls::device::Control{}.memory_size();
+    }
+
     make_shm(SLS_SHMEM, mem_size_);
-  } else if (is_imdb_) {
+  }
+
+  if (is_imdb_) {
+    if (mem_size_ == 0) {
+      if (!std::filesystem::exists(IMDB_SYSFS_PATH)) {
+        throw pnm::error::InvalidArguments(
+            "Memory size should be specified if module not loaded");
+      }
+
+      mem_size_ = pnm::imdb::device::Control{}.memory_size();
+    }
+
     make_shm(IMDB_CSR_DEVICE_SIM_NAME, regs_size_);
     make_shm(IMDB_DEVMEMORY_PATH_SIM_NAME, mem_size_);
-  } else {
+  }
+
+  if (!is_sls_ && !is_imdb_) {
     throw pnm::error::InvalidArguments("Bad state.");
   }
 }

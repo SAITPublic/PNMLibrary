@@ -56,7 +56,7 @@ class ImdbGoldenStoreLoad : public ::testing::Test {
 protected:
   void SetUp() override {
     root_path = std::filesystem::path(root.name());
-    fmt::print("The temporary embedded tables will be saved at {}\n",
+    fmt::print("The temporary embedding tables will be saved at {}\n",
                root.name());
     column_params.common_params_ = CommonGeneratorParams{
         .root_ = root_path,
@@ -142,7 +142,7 @@ TEST_F(ImdbGoldenStoreLoad, GoldenTestScanRanges) {
       bit_vector bitvec(column.size());
       pnm::imdb::internal::avx2::scan(column_view, ranges[i], bitvec.view());
       const auto indexvec_size = pnm::imdb::internal::avx2::scan(
-          column_view, ranges[i], pnm::make_view(indexvec));
+          column_view, ranges[i], pnm::views::make_view(indexvec));
       indexvec.resize(indexvec_size);
 
       ASSERT_EQ(indexvec, loaded_indexvecs[i]);
@@ -204,7 +204,7 @@ TEST_F(ImdbGoldenStoreLoad, GoldenTestPredicateVectors) {
       pnm::imdb::internal::avx2::scan(column_view, predictor_view,
                                       bitvec.view());
       const auto indexvec_size = pnm::imdb::internal::avx2::scan(
-          column_view, predictor_view, pnm::make_view(indexvec));
+          column_view, predictor_view, pnm::views::make_view(indexvec));
       indexvec.resize(indexvec_size);
 
       ASSERT_EQ(indexvec, loaded_indexvecs[i]);

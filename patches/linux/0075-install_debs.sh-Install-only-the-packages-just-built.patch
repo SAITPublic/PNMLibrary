@@ -1,7 +1,7 @@
 From 8051067d87f45dc688439dfef9091f4b8f5ee61d Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Tue, 10 Jan 2023 16:09:39 +0300
-Subject: [PATCH 075/161] [install_debs.sh] Install only the packages just
+Subject: [PATCH 075/225] [install_debs.sh] Install only the packages just
  built
 
 Previously it was possible that after building a kernel with a bigger

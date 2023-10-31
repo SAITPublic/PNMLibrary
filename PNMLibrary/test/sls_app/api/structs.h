@@ -30,7 +30,7 @@ namespace test_app {
 struct HelperRunParams {
   HelperRunParams(
       int mini_batch_size, int num_requests,
-      test::mock::ContextType context_type = test::mock::ContextType::DEFAULT)
+      test::mock::ContextType context_type = test::mock::ContextType::SLS)
       : mini_batch_size(mini_batch_size), num_requests(num_requests),
         context_type(context_type) {}
 
@@ -78,7 +78,7 @@ struct SlsModelParams {
 // tables. This can be replaced with strategy object if needed.
 template <typename T> struct SlsTableFillParams {
   SlsTableFillParams(int num_idx_values) : num_idx_values(num_idx_values) {
-    value_type = DataTypeTraits<T>().name;
+    value_type = tools::gen::sls::DataTypeTraits<T>().name;
   }
 
   void print() const {
@@ -100,9 +100,9 @@ struct SlsOpParams {
 };
 
 /** @brief Base test parameters generator */
-class SLSParamsGenerator {
+class SlsParamsGenerator {
 public:
-  virtual ~SLSParamsGenerator() = default;
+  virtual ~SlsParamsGenerator() = default;
 
   template <typename T>
   std::vector<T> generate_psum(const HelperRunParams &run_params,

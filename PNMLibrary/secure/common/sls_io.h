@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <iterator>
 
-namespace sls::secure {
+namespace pnm::sls::secure {
 class TrivialMemoryReader {
 public:
   explicit TrivialMemoryReader(const void *ptr)
@@ -65,6 +65,6 @@ struct io_traits<MemoryWriter>
   }
 };
 
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 
 #endif // SLS_SECURE_IO_H

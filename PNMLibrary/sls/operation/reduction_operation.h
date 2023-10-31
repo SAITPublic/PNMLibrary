@@ -46,8 +46,8 @@ public:
   /*
    @ brief: get temporary output buffer
   */
-  virtual common_view<uint8_t> get_tmp_buffer(uint8_t pack,
-                                              uint32_t exec_no) const = 0;
+  virtual pnm::views::common<uint8_t>
+  get_tmp_buffer(uint8_t pack, uint32_t exec_no) const = 0;
 
   /*
    @ brief: write results to user output buffer

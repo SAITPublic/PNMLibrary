@@ -1,7 +1,7 @@
 From 7e00eeecbb1cb35deec1b0bae88582fb08cea2b6 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Fri, 11 Aug 2023 04:06:17 +0000
-Subject: [PATCH 23/23] [DLRM] Add two new options to run_test.sh and
+Subject: [PATCH 23/24] [DLRM] Add two new options to run_test.sh and
  dlrm_s_pytorch.py
 
 * "--num_batches": to contol number of inferences from run_test.sh.

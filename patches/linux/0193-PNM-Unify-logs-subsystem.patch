@@ -1,0 +1,2402 @@
+From 97317281843b3ad0c21e6fe66a0a5c7943152d7a Mon Sep 17 00:00:00 2001
+From: Petr Bred <p.bred@samsung.com>
+Date: Tue, 19 Sep 2023 18:56:47 +0300
+Subject: [PATCH 193/225] [PNM] Unify logs subsystem
+
+* Make a single point for control.
+* All PNM parts: common, library, SLS, IMDB and ZSWAP
+use their own log marks.
+
+Resolve: MCS23-1586
+
+Signed-off-by: Petr Bred <p.bred@samsung.com>
+---
+ drivers/pnm/Makefile                         |  3 +
+ drivers/pnm/class_resource.c                 |  2 +-
+ drivers/pnm/imdb_resource/Makefile           |  2 +
+ drivers/pnm/imdb_resource/allocator.c        |  8 +-
+ drivers/pnm/imdb_resource/log.h              | 19 -----
+ drivers/pnm/imdb_resource/proc_mgr.c         | 34 ++++----
+ drivers/pnm/imdb_resource/resource_device.c  | 24 +++---
+ drivers/pnm/imdb_resource/sysfs.c            | 14 ++--
+ drivers/pnm/imdb_resource/thread_sched.c     |  8 +-
+ drivers/pnm/sls_resource/Makefile            |  1 +
+ drivers/pnm/sls_resource/allocator.c         | 22 ++---
+ drivers/pnm/sls_resource/cunit_scheduler.c   | 22 ++---
+ drivers/pnm/sls_resource/log.h               | 19 -----
+ drivers/pnm/sls_resource/mem_info.c          |  6 +-
+ drivers/pnm/sls_resource/private.h           |  5 +-
+ drivers/pnm/sls_resource/process_manager.c   | 42 +++++-----
+ drivers/pnm/sls_resource/sls.c               | 30 +++----
+ drivers/pnm/sls_resource/sysfs/cunits.c      | 14 ++--
+ drivers/pnm/sls_resource/sysfs/mappings.c    | 20 ++---
+ drivers/pnm/sls_resource/sysfs/sysfs.c       | 34 ++++----
+ drivers/pnm/sls_resource/sysfs/topology.c    | 17 ++--
+ drivers/pnm/sls_resource/topo/params.c       |  6 +-
+ drivers/pnm/zswap/Makefile                   |  2 +
+ drivers/pnm/zswap/device.c                   | 47 +++++------
+ drivers/pnm/zswap/fs_compression.c           | 13 +--
+ drivers/pnm/zswap/ps_compression.c           | 21 +++--
+ drivers/pnm/zswap/sim.c                      | 85 ++++++++++----------
+ drivers/pnm/log.h => include/linux/pnm_log.h | 11 ++-
+ lib/pnm/Makefile                             |  3 +
+ lib/pnm/log.h                                | 20 -----
+ lib/pnm/pnm_alloc.c                          |  3 +-
+ lib/pnm/pnm_sched.c                          |  3 +-
+ lib/pnm/zswap/Makefile                       |  3 +
+ lib/pnm/zswap/pnm_zswap_lib.c                | 29 +++----
+ 34 files changed, 274 insertions(+), 318 deletions(-)
+ delete mode 100644 drivers/pnm/imdb_resource/log.h
+ delete mode 100644 drivers/pnm/sls_resource/log.h
+ rename drivers/pnm/log.h => include/linux/pnm_log.h (64%)
+ delete mode 100644 lib/pnm/log.h
+
+diff --git a/drivers/pnm/Makefile b/drivers/pnm/Makefile
+index 870a076b6..51775eb05 100644
+--- a/drivers/pnm/Makefile
++++ b/drivers/pnm/Makefile
+@@ -1,6 +1,9 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+ obj-$(CONFIG_PNM_CLASS_RESOURCE) += pnm_class_resource.o
++
++ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[RESOURCE_MGR]\"
++
+ pnm_class_resource-y := class_resource.o
+ 
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource/
+diff --git a/drivers/pnm/class_resource.c b/drivers/pnm/class_resource.c
+index 5fee84129..1aec7d870 100644
+--- a/drivers/pnm/class_resource.c
++++ b/drivers/pnm/class_resource.c
+@@ -2,13 +2,13 @@
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+ #include "device_resource.h"
+-#include "log.h"
+ 
+ #include <linux/cdev.h>
+ #include <linux/device.h>
+ #include <linux/device/class.h>
+ #include <linux/fs.h>
+ #include <linux/module.h>
++#include <linux/pnm_log.h>
+ #include <linux/pnm_resources.h>
+ 
+ #define RESOURCE_ACCESS_MODE 0666
+diff --git a/drivers/pnm/imdb_resource/Makefile b/drivers/pnm/imdb_resource/Makefile
+index df64424c3..668431ebf 100644
+--- a/drivers/pnm/imdb_resource/Makefile
++++ b/drivers/pnm/imdb_resource/Makefile
+@@ -2,7 +2,9 @@
+ 
+ obj-$(CONFIG_IMDB_RESOURCE) += imdb_resource.o
+ 
++ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[IMDB]\"
+ subdir-ccflags-y := -I $(srctree)/$(src)/..
++
+ imdb_resource-y := resource_device.o
+ imdb_resource-y += allocator.o
+ imdb_resource-y += thread_sched.o
+diff --git a/drivers/pnm/imdb_resource/allocator.c b/drivers/pnm/imdb_resource/allocator.c
+index 8ab7c5ae5..bad0c4421 100644
+--- a/drivers/pnm/imdb_resource/allocator.c
++++ b/drivers/pnm/imdb_resource/allocator.c
+@@ -2,7 +2,6 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "allocator.h"
+-#include "log.h"
+ #include "private.h"
+ #include "proc_mgr.h"
+ 
+@@ -14,6 +13,7 @@
+ #include <linux/mutex.h>
+ #include <linux/numa.h>
+ #include <linux/pnm_alloc.h>
++#include <linux/pnm_log.h>
+ #include <linux/uaccess.h>
+ 
+ static struct pnm_alloc alloc;
+@@ -126,7 +126,7 @@ int initialize_memory_allocator(void)
+ 		kcalloc(nr_pools, sizeof(struct range), GFP_KERNEL);
+ 	int err_code;
+ 
+-	IMDB_DBG("Initializing IMDB allocator\n");
++	PNM_DBG("Initializing IMDB allocator\n");
+ 
+ 	if (!ranges)
+ 		return -ENOMEM;
+@@ -145,12 +145,12 @@ int initialize_memory_allocator(void)
+ 
+ void destroy_memory_allocator(void)
+ {
+-	IMDB_DBG("Destroy IMDB allocator\n");
++	PNM_DBG("Destroy IMDB allocator\n");
+ 	pnm_alloc_cleanup(&alloc);
+ }
+ 
+ int reset_memory_allocator(void)
+ {
+-	IMDB_INF("Reset allocator");
++	PNM_INF("Reset allocator");
+ 	return pnm_alloc_reset(&alloc);
+ }
+diff --git a/drivers/pnm/imdb_resource/log.h b/drivers/pnm/imdb_resource/log.h
+deleted file mode 100644
+index c3be6370e..000000000
+--- a/drivers/pnm/imdb_resource/log.h
++++ /dev/null
+@@ -1,19 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __IMDB_LOG_H__
+-#define __IMDB_LOG_H__
+-
+-#include <linux/kernel.h>
+-
+-#define IMDB_DD_MARK "[IMDB_RESOURCE_MGR]"
+-
+-#define IMDB_PRINT(level, fmt, ...)                                 \
+-	pr_##level(IMDB_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
+-		   ##__VA_ARGS__)
+-#define IMDB_ERR(fmt, ...) IMDB_PRINT(err, fmt, ##__VA_ARGS__)
+-#define IMDB_WRN(fmt, ...) IMDB_PRINT(warn, fmt, ##__VA_ARGS__)
+-#define IMDB_INF(fmt, ...) IMDB_PRINT(info, fmt, ##__VA_ARGS__)
+-#define IMDB_DBG(fmt, ...) IMDB_PRINT(debug, fmt, ##__VA_ARGS__)
+-
+-#endif /* __IMDB_LOG_H__ */
+diff --git a/drivers/pnm/imdb_resource/proc_mgr.c b/drivers/pnm/imdb_resource/proc_mgr.c
+index bdef8efc4..0d946b47a 100644
+--- a/drivers/pnm/imdb_resource/proc_mgr.c
++++ b/drivers/pnm/imdb_resource/proc_mgr.c
+@@ -4,7 +4,6 @@
+ #include "proc_mgr.h"
+ 
+ #include "allocator.h"
+-#include "log.h"
+ #include "thread_sched.h"
+ 
+ #include "linux/imdb_resources.h"
+@@ -12,6 +11,7 @@
+ #include "linux/stddef.h"
+ #include <linux/list.h>
+ #include <linux/mutex.h>
++#include <linux/pnm_log.h>
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+ #include <linux/types.h>
+@@ -133,8 +133,8 @@ static int clear_allocations(struct imdb_proc_res *proc_res)
+ 		alloc = &alloc_res_node->alloc;
+ 		begin = alloc->addr;
+ 		end = begin + alloc->size;
+-		IMDB_DBG("Process manager release allocation [%llx, %llx]\n",
+-			 begin, end);
++		PNM_DBG("Process manager release allocation [%llx, %llx]\n",
++			begin, end);
+ 
+ 		/*
+ 		 * Same as for sls_resource. We should work with allocator
+@@ -151,7 +151,7 @@ static int clear_allocations(struct imdb_proc_res *proc_res)
+ 	}
+ 
+ 	if (rc) {
+-		IMDB_ERR("Can't clear allocations\n");
++		PNM_ERR("Can't clear allocations\n");
+ 		rc = -EINVAL;
+ 	}
+ 
+@@ -166,12 +166,12 @@ static int clear_threads(struct imdb_proc_res *proc_res)
+ 	for (it = 0; it < IMDB_THREAD_NUM; ++it) {
+ 		if (proc_res->threads_mask & (1 << it)) {
+ 			rc |= thread_sched_clear_res(it);
+-			IMDB_DBG("Process manager release thread[%d]\n", it);
++			PNM_DBG("Process manager release thread[%d]\n", it);
+ 		}
+ 	}
+ 
+ 	if (rc) {
+-		IMDB_ERR("Can't clear threads\n");
++		PNM_ERR("Can't clear threads\n");
+ 		return -EINVAL;
+ 	}
+ 
+@@ -209,11 +209,11 @@ int imdb_register_allocation(struct file *filp,
+ 
+ 	if (likely(proc_res)) {
+ 		if (!desc_insert(&proc_res->alloc_res_tree, alloc)) {
+-			IMDB_ERR("Can't register allocation\n");
++			PNM_ERR("Can't register allocation\n");
+ 			rc = -ENOMEM;
+ 		}
+ 	} else {
+-		IMDB_ERR("Can't find resources\n");
++		PNM_ERR("Can't find resources\n");
+ 		rc = -ESRCH;
+ 	}
+ 
+@@ -234,10 +234,10 @@ int imdb_unregister_allocation(struct file *filp,
+ 	if (likely(proc_res)) {
+ 		if (!desc_delete(&proc_res->alloc_res_tree, alloc)) {
+ 			rc = -EINVAL;
+-			IMDB_ERR("Allocation not found\n");
++			PNM_ERR("Allocation not found\n");
+ 		}
+ 	} else {
+-		IMDB_ERR("Can't find resources\n");
++		PNM_ERR("Can't find resources\n");
+ 		rc = -ESRCH;
+ 	}
+ 
+@@ -260,7 +260,7 @@ int imdb_register_thread(struct file *filp, uint8_t thread)
+ 		proc_res->threads_mask |= thread_mask;
+ 		mutex_unlock(&proc_res->imdb_proc_lock);
+ 	} else {
+-		IMDB_ERR("Can't find resources\n");
++		PNM_ERR("Can't find resources\n");
+ 		rc = -ESRCH;
+ 	};
+ 
+@@ -283,7 +283,7 @@ int imdb_unregister_thread(struct file *filp, uint8_t thread)
+ 		proc_res->threads_mask &= thread_mask;
+ 		mutex_unlock(&proc_res->imdb_proc_lock);
+ 	} else {
+-		IMDB_ERR("Can't find resources\n");
++		PNM_ERR("Can't find resources\n");
+ 		rc = -ESRCH;
+ 	}
+ 
+@@ -305,12 +305,12 @@ int imdb_register_process(struct file *filp)
+ 
+ 		if (unlikely(!proc_res)) {
+ 			rc = -ENOMEM;
+-			IMDB_ERR("Can't allocate memory\n");
++			PNM_ERR("Can't allocate memory\n");
+ 		} else {
+ 			proc_res->alloc_res_tree = RB_ROOT;
+ 			mutex_init(&proc_res->imdb_proc_lock);
+ 			filp->private_data = proc_res;
+-			IMDB_DBG("Registered process\n");
++			PNM_DBG("Registered process\n");
+ 		}
+ 	}
+ 
+@@ -328,7 +328,7 @@ int imdb_release_process(struct file *filp)
+ 	proc_res = (struct imdb_proc_res *)filp->private_data;
+ 
+ 	if (unlikely(!proc_res)) {
+-		IMDB_ERR("Can't find resources\n");
++		PNM_ERR("Can't find resources\n");
+ 		return -ESRCH;
+ 	}
+ 
+@@ -340,7 +340,7 @@ int imdb_release_process(struct file *filp)
+ 	if (atomic64_read(&proc_mgr.enable_cleanup)) {
+ 		rc = clear_process_resource(proc_res);
+ 		if (rc)
+-			IMDB_ERR("Can't clear process resources\n");
++			PNM_ERR("Can't clear process resources\n");
+ 		return rc;
+ 	}
+ 
+@@ -348,7 +348,7 @@ int imdb_release_process(struct file *filp)
+ 	{
+ 		atomic64_inc(&proc_mgr.leaked);
+ 		list_add(&proc_res->list, &proc_mgr.leaked_process_list);
+-		IMDB_DBG("Tracking leakage\n");
++		PNM_DBG("Tracking leakage\n");
+ 	}
+ 	mutex_unlock(&proc_mgr.lock);
+ 
+diff --git a/drivers/pnm/imdb_resource/resource_device.c b/drivers/pnm/imdb_resource/resource_device.c
+index ac7ea494b..34a787459 100644
+--- a/drivers/pnm/imdb_resource/resource_device.c
++++ b/drivers/pnm/imdb_resource/resource_device.c
+@@ -2,7 +2,6 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "allocator.h"
+-#include "log.h"
+ #include "private.h"
+ #include "proc_mgr.h"
+ #include "sysfs.h"
+@@ -17,6 +16,7 @@
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
++#include <linux/pnm_log.h>
+ 
+ static long imdb_ioctl(struct file *file, unsigned int cmd,
+ 		       unsigned long __user arg)
+@@ -24,7 +24,7 @@ static long imdb_ioctl(struct file *file, unsigned int cmd,
+ 	int result = 0;
+ 
+ 	if (_IOC_TYPE(cmd) != IMDB_RESOURCE_IOC_MAGIC) {
+-		IMDB_ERR("Wrong ioctl request: %d", cmd);
++		PNM_ERR("Wrong ioctl request: %d", cmd);
+ 		return -ENOTTY;
+ 	}
+ 
+@@ -39,7 +39,7 @@ static long imdb_ioctl(struct file *file, unsigned int cmd,
+ 		break;
+ 	default:
+ 		result = -ENOTTY;
+-		IMDB_ERR("Unknown ioctl: %d", cmd);
++		PNM_ERR("Unknown ioctl: %d", cmd);
+ 	}
+ 
+ 	return result;
+@@ -94,12 +94,12 @@ static int __init init_imdb_resource_module(void)
+ {
+ 	int result = 0;
+ 
+-	IMDB_INF("Begin IMDB Resource Manager initialization...");
++	PNM_INF("Begin IMDB Resource Manager initialization...");
+ 
+ 	result = imdb_alloc_chrdev_region();
+ 
+ 	if (unlikely(result)) {
+-		IMDB_ERR("Fail to allocate chrdev region");
++		PNM_ERR("Fail to allocate chrdev region");
+ 		goto alloc_chrdev_fail;
+ 	}
+ 
+@@ -108,39 +108,39 @@ static int __init init_imdb_resource_module(void)
+ 					    &imdb_resource_device);
+ 
+ 	if (unlikely(result)) {
+-		IMDB_ERR("IMDB Resource Manager initialization failed");
++		PNM_ERR("IMDB Resource Manager initialization failed");
+ 		goto resource_device_fail;
+ 	}
+ 
+ 	result = imdb_init_cdev();
+ 
+ 	if (unlikely(result)) {
+-		IMDB_ERR("Fail to add %s cdev.", IMDB_RESOURCE_DEVICE_NAME);
++		PNM_ERR("Fail to add %s cdev.", IMDB_RESOURCE_DEVICE_NAME);
+ 		goto init_cdev_fail;
+ 	}
+ 
+ 	result = initialize_memory_allocator();
+ 
+ 	if (unlikely(result)) {
+-		IMDB_ERR("Fail to initialize memory allocator.");
++		PNM_ERR("Fail to initialize memory allocator.");
+ 		goto allocator_fail;
+ 	}
+ 
+ 	result = init_thread_sched();
+ 
+ 	if (unlikely(result)) {
+-		IMDB_ERR("Fail to initialize memory threads scheduler.");
++		PNM_ERR("Fail to initialize memory threads scheduler.");
+ 		goto thread_sched_fail;
+ 	}
+ 
+ 	result = imdb_build_sysfs(imdb_resource_device);
+ 
+ 	if (unlikely(result)) {
+-		IMDB_ERR("Fail to build sysfs.");
++		PNM_ERR("Fail to build sysfs.");
+ 		goto build_sysfs_fail;
+ 	}
+ 
+-	IMDB_INF("Initialization is done");
++	PNM_INF("Initialization is done");
+ 	return 0;
+ 
+ build_sysfs_fail:
+@@ -173,7 +173,7 @@ static void __exit exit_imdb_resource_module(void)
+ 
+ 	imdb_destroy_proc_manager();
+ 
+-	IMDB_INF("IMDB Resource Manager unloaded.");
++	PNM_INF("IMDB Resource Manager unloaded.");
+ }
+ 
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/pnm/imdb_resource/sysfs.c b/drivers/pnm/imdb_resource/sysfs.c
+index 84eda75ed..fce55cdd0 100644
+--- a/drivers/pnm/imdb_resource/sysfs.c
++++ b/drivers/pnm/imdb_resource/sysfs.c
+@@ -4,7 +4,6 @@
+ #include "sysfs.h"
+ 
+ #include "allocator.h"
+-#include "log.h"
+ #include "proc_mgr.h"
+ #include "thread_sched.h"
+ 
+@@ -12,6 +11,7 @@
+ #include <linux/device.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/kobject.h>
++#include <linux/pnm_log.h>
+ #include <linux/stringify.h>
+ #include <linux/sysfs.h>
+ 
+@@ -38,7 +38,7 @@ static ssize_t cleanup_store(struct device *device,
+ 	} else if (sysfs_streq(buf, __stringify(IMDB_ENABLE_CLEANUP))) {
+ 		rc = imdb_enable_cleanup();
+ 		if (rc) {
+-			IMDB_ERR("Can't enable process manager\n");
++			PNM_ERR("Can't enable process manager\n");
+ 			return rc;
+ 		}
+ 	}
+@@ -92,7 +92,7 @@ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ 	if (sysfs_streq(buf, __stringify(IMDB_RESET))) {
+ 		rc = reset_memory_allocator();
+ 		if (unlikely(rc)) {
+-			IMDB_ERR("IMDB allocator reset failed\n");
++			PNM_ERR("IMDB allocator reset failed\n");
+ 			return rc;
+ 		}
+ 
+@@ -100,7 +100,7 @@ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ 
+ 		rc = imdb_reset_proc_manager();
+ 		if (unlikely(rc)) {
+-			IMDB_ERR("IMDB process manager reset failed\n");
++			PNM_ERR("IMDB process manager reset failed\n");
+ 			return rc;
+ 		}
+ 	}
+@@ -155,7 +155,7 @@ ssize_t thread_show(struct thread_attribute *attr, char *buf)
+ 		return sprintf(buf, "%d\n", state);
+ 	}
+ 
+-	IMDB_ERR("Invalid Thread attribute\n");
++	PNM_ERR("Invalid Thread attribute\n");
+ 
+ 	return 0;
+ }
+@@ -220,7 +220,7 @@ static int build_thread_sysfs(struct kobject *parent)
+ 		tsysfs = &thread_sysfs[thread];
+ 		rc = create_thread_kobject(tsysfs, parent, thread);
+ 		if (unlikely(rc)) {
+-			IMDB_ERR("Can't create thread kobject\n");
++			PNM_ERR("Can't create thread kobject\n");
+ 			return -EFAULT;
+ 		}
+ 
+@@ -232,7 +232,7 @@ static int build_thread_sysfs(struct kobject *parent)
+ 
+ 		rc = sysfs_create_groups(&tsysfs->thread_kobj, tsysfs->groups);
+ 		if (unlikely(rc)) {
+-			IMDB_ERR("Can't create thread group\n");
++			PNM_ERR("Can't create thread group\n");
+ 			return -EFAULT;
+ 		}
+ 	}
+diff --git a/drivers/pnm/imdb_resource/thread_sched.c b/drivers/pnm/imdb_resource/thread_sched.c
+index 877f402b6..c9caf8dce 100644
+--- a/drivers/pnm/imdb_resource/thread_sched.c
++++ b/drivers/pnm/imdb_resource/thread_sched.c
+@@ -2,12 +2,12 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "thread_sched.h"
+-#include "log.h"
+ #include "proc_mgr.h"
+ 
+ #include <linux/fs.h>
+ #include <linux/imdb_resources.h>
+ #include <linux/kernel.h>
++#include <linux/pnm_log.h>
+ #include <linux/pnm_sched.h>
+ 
+ static struct pnm_sched thread_sched;
+@@ -19,20 +19,20 @@ bool get_thread_state(uint8_t thread)
+ 
+ void reset_thread_sched(void)
+ {
+-	IMDB_DBG("Thread scheduler reset\n");
++	PNM_DBG("Thread scheduler reset\n");
+ 	pnm_sched_reset(&thread_sched);
+ }
+ 
+ int init_thread_sched(void)
+ {
+-	IMDB_DBG("Thread scheduler init\n");
++	PNM_DBG("Thread scheduler init\n");
+ 	return pnm_sched_init(&thread_sched, IMDB_THREAD_NUM,
+ 			      PNM_SCHED_NO_TIMEOUT);
+ }
+ 
+ void destroy_thread_sched(void)
+ {
+-	IMDB_DBG("Thread scheduler destroy\n");
++	PNM_DBG("Thread scheduler destroy\n");
+ 	pnm_sched_cleanup(&thread_sched);
+ }
+ 
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index cdbf479d0..e75619099 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -1,5 +1,6 @@
+ obj-$(CONFIG_SLS_RESOURCE) += sls_resource.o
+ 
++ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[SLS]\"
+ CFLAGS_sls.o += -DSLS_DRIVER_VERSION=\"$(shell git rev-parse --short HEAD)\"
+ subdir-ccflags-y += -I $(srctree)/$(src)/ -I $(srctree)/$(src)/..
+ 
+diff --git a/drivers/pnm/sls_resource/allocator.c b/drivers/pnm/sls_resource/allocator.c
+index 8701fc716..326ecd7f3 100644
+--- a/drivers/pnm/sls_resource/allocator.c
++++ b/drivers/pnm/sls_resource/allocator.c
+@@ -2,7 +2,6 @@
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "allocator.h"
+-#include "log.h"
+ #include "private.h"
+ #include "process_manager.h"
+ #include "topo/params.h"
+@@ -12,6 +11,7 @@
+ #include <linux/math.h>
+ #include <linux/numa.h>
+ #include <linux/pnm_alloc.h>
++#include <linux/pnm_log.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ 
+@@ -41,7 +41,7 @@ static uint64_t get_cunit_size(uint8_t cunit)
+ 		if (cunit_regions[idx].type == SLS_BLOCK_BASE)
+ 			return range_len(&cunit_regions[idx].range);
+ 
+-	SLS_ERR("There is no BASE region for cunit[%hhu]\n", cunit);
++	PNM_ERR("There is no BASE region for cunit[%hhu]\n", cunit);
+ 	return 0;
+ }
+ 
+@@ -53,9 +53,9 @@ int init_sls_allocator(const struct sls_mem_cunit_info *cunit_info)
+ 		kcalloc(nr_cunits, sizeof(struct range), GFP_KERNEL);
+ 	int err_code;
+ 
+-	SLS_DBG("Initializing SLS allocator\n");
++	PNM_DBG("Initializing SLS allocator\n");
+ 	if (!cunit_info) {
+-		SLS_ERR("cunit_info is NULL!\n");
++		PNM_ERR("cunit_info is NULL!\n");
+ 		return -EINVAL;
+ 	}
+ 	mem_cunit_info = cunit_info;
+@@ -73,13 +73,13 @@ int init_sls_allocator(const struct sls_mem_cunit_info *cunit_info)
+ 
+ int reset_sls_allocator(void)
+ {
+-	SLS_DBG("Resetting SLS allocator\n");
++	PNM_DBG("Resetting SLS allocator\n");
+ 	return pnm_alloc_reset(&alloc);
+ }
+ 
+ void cleanup_sls_allocator(void)
+ {
+-	SLS_DBG("Cleaning up SLS allocator\n");
++	PNM_DBG("Cleaning up SLS allocator\n");
+ 	pnm_alloc_cleanup(&alloc);
+ }
+ 
+@@ -92,7 +92,7 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 
+ 	SLS_COPY_FROM_USER(err, &kreq, ureq, sizeof(struct pnm_allocation));
+ 	if (unlikely(err)) {
+-		SLS_ERR("Failed to read user alloc request. Ptr = %p.\n", ureq);
++		PNM_ERR("Failed to read user alloc request. Ptr = %p.\n", ureq);
+ 		return err;
+ 	}
+ 
+@@ -113,7 +113,7 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 		SLS_COPY_TO_USER(err, ureq, &kreq,
+ 				 sizeof(struct pnm_allocation));
+ 		if (unlikely(err)) {
+-			SLS_ERR("Failed to write user alloc request. Ptr = %p.\n",
++			PNM_ERR("Failed to write user alloc request. Ptr = %p.\n",
+ 				ureq);
+ 			unlock_sls_allocator();
+ 			return err;
+@@ -122,7 +122,7 @@ static int allocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 		err = sls_proc_register_alloc(filp, kreq);
+ 
+ 		if (!err) {
+-			SLS_DBG("Allocated obj: pool[%u], cunit_offset = [0x%llx], size = [%llu]\n",
++			PNM_DBG("Allocated obj: pool[%u], cunit_offset = [0x%llx], size = [%llu]\n",
+ 				kreq.memory_pool, kreq.addr, kreq.size);
+ 		}
+ 	}
+@@ -146,7 +146,7 @@ static int deallocate_memory_ioctl(struct file *filp, unsigned long __user arg)
+ 
+ 	SLS_COPY_FROM_USER(err, &kreq, ureq, sizeof(struct pnm_allocation));
+ 	if (unlikely(err)) {
+-		SLS_ERR("Failed to read user dealloc request. Ptr = %p.\n",
++		PNM_ERR("Failed to read user dealloc request. Ptr = %p.\n",
+ 			ureq);
+ 		return err;
+ 	}
+@@ -187,7 +187,7 @@ int mem_process_ioctl(struct file *filp, unsigned int cmd,
+ 	case DEALLOCATE_MEMORY:
+ 		return deallocate_memory_ioctl(filp, arg);
+ 	default:
+-		SLS_ERR("Unknown memory operation [%u], with argument [%lu]\n",
++		PNM_ERR("Unknown memory operation [%u], with argument [%lu]\n",
+ 			cmd, arg);
+ 	}
+ 
+diff --git a/drivers/pnm/sls_resource/cunit_scheduler.c b/drivers/pnm/sls_resource/cunit_scheduler.c
+index ccc152743..54112b9bc 100644
+--- a/drivers/pnm/sls_resource/cunit_scheduler.c
++++ b/drivers/pnm/sls_resource/cunit_scheduler.c
+@@ -2,11 +2,11 @@
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "cunit_scheduler.h"
+-#include "log.h"
+ #include "process_manager.h"
+ #include "topo/params.h"
+ 
+ #include <linux/bitops.h>
++#include <linux/pnm_log.h>
+ #include <linux/pnm_sched.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+@@ -26,9 +26,9 @@ static struct sls_sched sls_sched;
+ 
+ void reset_cunit_scheduler(void)
+ {
+-	SLS_DBG("Resetting sls write scheduler\n");
++	PNM_DBG("Resetting sls write scheduler\n");
+ 	pnm_sched_reset(&sls_sched.wr_sched);
+-	SLS_DBG("Resetting sls read scheduler\n");
++	PNM_DBG("Resetting sls read scheduler\n");
+ 	pnm_sched_reset(&sls_sched.rd_sched);
+ }
+ 
+@@ -36,20 +36,20 @@ int init_cunit_scheduler(void)
+ {
+ 	int err;
+ 
+-	SLS_DBG("Initializing sls write scheduler\n");
++	PNM_DBG("Initializing sls write scheduler\n");
+ 	err = pnm_sched_init(&sls_sched.wr_sched, sls_topo()->nr_cunits,
+ 			     RETRY_TIMEOUT_NS);
+ 
+ 	if (err) {
+-		SLS_ERR("Failed to init sls write scheduler\n");
++		PNM_ERR("Failed to init sls write scheduler\n");
+ 		return err;
+ 	}
+ 
+-	SLS_DBG("Initializing sls read scheduler\n");
++	PNM_DBG("Initializing sls read scheduler\n");
+ 	err = pnm_sched_init(&sls_sched.rd_sched, sls_topo()->nr_cunits,
+ 			     RETRY_TIMEOUT_NS);
+ 	if (err) {
+-		SLS_ERR("Failed to init sls read scheduler\n");
++		PNM_ERR("Failed to init sls read scheduler\n");
+ 		pnm_sched_cleanup(&sls_sched.wr_sched);
+ 		return err;
+ 	}
+@@ -59,9 +59,9 @@ int init_cunit_scheduler(void)
+ 
+ void destroy_cunit_scheduler(void)
+ {
+-	SLS_DBG("Destroy sls write scheduler\n");
++	PNM_DBG("Destroy sls write scheduler\n");
+ 	pnm_sched_cleanup(&sls_sched.wr_sched);
+-	SLS_DBG("Destroy sls read scheduler\n");
++	PNM_DBG("Destroy sls read scheduler\n");
+ 	pnm_sched_cleanup(&sls_sched.rd_sched);
+ }
+ 
+@@ -73,7 +73,7 @@ static int get_cunit(uint cmd, uint arg)
+ 	else if (cmd == GET_CUNIT_FOR_WRITE)
+ 		return pnm_sched_get_free_cunit(&sls_sched.wr_sched, arg);
+ 
+-	SLS_ERR("Unknown cunit operation cmd [%d]\n", cmd);
++	PNM_ERR("Unknown cunit operation cmd [%d]\n", cmd);
+ 	return -EINVAL;
+ }
+ 
+@@ -117,7 +117,7 @@ static int release_and_wakeup(uint cmd, uint arg)
+ 	else if (cmd == RELEASE_READ_CUNIT)
+ 		ret = pnm_sched_release_and_wakeup(&sls_sched.rd_sched, arg);
+ 	else {
+-		SLS_ERR("Unknown cunit operation cmd [%d]\n", cmd);
++		PNM_ERR("Unknown cunit operation cmd [%d]\n", cmd);
+ 		return -EINVAL;
+ 	}
+ 
+diff --git a/drivers/pnm/sls_resource/log.h b/drivers/pnm/sls_resource/log.h
+deleted file mode 100644
+index 89f095942..000000000
+--- a/drivers/pnm/sls_resource/log.h
++++ /dev/null
+@@ -1,19 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+-
+-#ifndef __SLS_LOG_H__
+-#define __SLS_LOG_H__
+-
+-#include <linux/kernel.h>
+-
+-#define SLS_DD_MARK "[DAX_SLS_DD]"
+-
+-#define SLS_PRINT(level, fmt, ...)                                 \
+-	pr_##level(SLS_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
+-		   ##__VA_ARGS__)
+-#define SLS_ERR(fmt, ...) SLS_PRINT(err, fmt, ##__VA_ARGS__)
+-#define SLS_WRN(fmt, ...) SLS_PRINT(warn, fmt, ##__VA_ARGS__)
+-#define SLS_INF(fmt, ...) SLS_PRINT(info, fmt, ##__VA_ARGS__)
+-#define SLS_DBG(fmt, ...) SLS_PRINT(debug, fmt, ##__VA_ARGS__)
+-
+-#endif /* __SLS_LOG_H__ */
+diff --git a/drivers/pnm/sls_resource/mem_info.c b/drivers/pnm/sls_resource/mem_info.c
+index ad1b92771..8ddd2a308 100644
+--- a/drivers/pnm/sls_resource/mem_info.c
++++ b/drivers/pnm/sls_resource/mem_info.c
+@@ -2,10 +2,10 @@
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "mem_info.h"
+-#include "log.h"
+ #include "topo/params.h"
+ 
+ #include <linux/module.h>
++#include <linux/pnm_log.h>
+ #include <linux/slab.h>
+ 
+ #define NR_REGIONS_TOPO_EXPR(nr_regions_per_cunit)                      \
+@@ -21,7 +21,7 @@ const struct sls_mem_info *sls_create_mem_info(void)
+ 	enum sls_mem_blocks_e type;
+ 	uint8_t idx;
+ 
+-	SLS_DBG("Building sls mem_info\n");
++	PNM_DBG("Building sls mem_info\n");
+ 
+ 	mem_info =
+ 		kzalloc(struct_size(mem_info, regions, nr_regions), GFP_KERNEL);
+@@ -127,7 +127,7 @@ sls_create_mem_cunit_info(const struct sls_mem_info *mem_info)
+ 	const uint64_t nr_regions = nr_regions_per_cunit * nr_cunits;
+ 	struct sls_mem_cunit_info *mem_cunit_info = NULL;
+ 
+-	SLS_DBG("Building sls mem cunit info\n");
++	PNM_DBG("Building sls mem cunit info\n");
+ 
+ 	mem_cunit_info = kzalloc(
+ 		struct_size(mem_cunit_info, regions, nr_regions), GFP_KERNEL);
+diff --git a/drivers/pnm/sls_resource/private.h b/drivers/pnm/sls_resource/private.h
+index 10b6cb184..47b10b5e1 100644
+--- a/drivers/pnm/sls_resource/private.h
++++ b/drivers/pnm/sls_resource/private.h
+@@ -4,13 +4,12 @@
+ #ifndef __SLS_PRIVATE_H__
+ #define __SLS_PRIVATE_H__
+ 
+-#include "log.h"
+-
+ #include <linux/cdev.h>
+ #include <linux/compiler.h>
+ #include <linux/device.h>
+ #include <linux/fs.h>
+ #include <linux/kobject.h>
++#include <linux/pnm_log.h>
+ #include <linux/semaphore.h>
+ #include <linux/sls_common.h>
+ #include <linux/types.h>
+@@ -19,7 +18,7 @@
+ 	do {                                                      \
+ 		error = func(dst, src, size) ? -EFAULT : 0;       \
+ 		if (unlikely(error)) {                            \
+-			SLS_ERR("Can't copy '" #src "' to '" #dst \
++			PNM_ERR("Can't copy '" #src "' to '" #dst \
+ 				"' in '" #func "'\n");            \
+ 		}                                                 \
+ 	} while (0)
+diff --git a/drivers/pnm/sls_resource/process_manager.c b/drivers/pnm/sls_resource/process_manager.c
+index 5d1e22b40..94ce1fa58 100644
+--- a/drivers/pnm/sls_resource/process_manager.c
++++ b/drivers/pnm/sls_resource/process_manager.c
+@@ -4,8 +4,8 @@
+ #include "process_manager.h"
+ #include "allocator.h"
+ #include "cunit_scheduler.h"
+-#include "log.h"
+ 
++#include <linux/pnm_log.h>
+ #include <linux/sched.h>
+ #include <linux/sched/signal.h>
+ #include <linux/slab.h>
+@@ -150,14 +150,14 @@ static void track_leaked_resources(struct process_manager *mgr,
+ 	atomic64_inc(&mgr->leaked);
+ 	list_add(&proc_res->list, &mgr->leaked_process_list);
+ 
+-	SLS_DBG("Tracked leakage by pid: %d, tid: %d; cunit_rw_mask: %lu, cunit_rd_mask: %lu\n",
++	PNM_DBG("Tracked leakage by pid: %d, tid: %d; cunit_rw_mask: %lu, cunit_rd_mask: %lu\n",
+ 		get_current_process_id(), current->pid,
+ 		proc_res->cunit_write_mask, proc_res->cunit_read_mask);
+ 
+ 	for (node = rb_first(&proc_res->alloc_desc_tree); node;
+ 	     node = rb_next(node)) {
+ 		desc = rb_entry(node, struct sls_proc_desc, node);
+-		SLS_DBG("Leaked memory under desc[cunit = %u, addr = %llu]\n",
++		PNM_DBG("Leaked memory under desc[cunit = %u, addr = %llu]\n",
+ 			desc->alloc.memory_pool, desc->alloc.addr);
+ 	}
+ }
+@@ -175,7 +175,7 @@ static bool release_cunit_mask(unsigned long *cunit_mask,
+ 		else
+ 			failed |= (release_cunit_read(bit_index) != bit_index);
+ 		clear_bit(bit_index, cunit_mask);
+-		SLS_INF("Abnormal release cunit_%s[%lu], pid: %d, tid: %d\n",
++		PNM_INF("Abnormal release cunit_%s[%lu], pid: %d, tid: %d\n",
+ 			cunit_access_type_to_str(type), bit_index,
+ 			get_current_process_id(), current->pid);
+ 	}
+@@ -216,7 +216,7 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 
+ 			failed |= deallocate_memory_unsafe(desc_node->alloc) !=
+ 				  0;
+-			SLS_INF("Abnormal release desc[cunit=%u, offset=%llu],pid:%d,tid:%d\n",
++			PNM_INF("Abnormal release desc[cunit=%u, offset=%llu],pid:%d,tid:%d\n",
+ 				desc_node->alloc.memory_pool,
+ 				desc_node->alloc.addr, get_current_process_id(),
+ 				current->pid);
+@@ -244,7 +244,7 @@ int release_sls_process(struct file *filp)
+ 	proc_res = (struct sls_proc_resources *)filp->private_data;
+ 
+ 	if (!proc_res) {
+-		SLS_ERR("Tried to release already released process by pid: %d, tid: %d\n",
++		PNM_ERR("Tried to release already released process by pid: %d, tid: %d\n",
+ 			get_current_process_id(), current->pid);
+ 		return -EINVAL;
+ 	}
+@@ -260,7 +260,7 @@ int release_sls_process(struct file *filp)
+ 	 *   - process got finished abnormally
+ 	 */
+ 	if (free_res) {
+-		SLS_DBG("Releasing process pid: %d, tid: %d\n",
++		PNM_DBG("Releasing process pid: %d, tid: %d\n",
+ 			get_current_process_id(), current->pid);
+ 
+ 		res_leaked = has_resources_leaked(proc_res);
+@@ -319,15 +319,15 @@ int sls_proc_register_cunit(struct file *filp, int cunit, unsigned int cmd)
+ 	enum cunit_access_type cunit_type = get_cunit_access_type(cmd);
+ 
+ 	if (unlikely(cunit_type == CUNIT_ACCESS_INVAL)) {
+-		SLS_ERR("Unknown cunit type\n");
++		PNM_ERR("Unknown cunit type\n");
+ 		return -1;
+ 	}
+ 
+-	SLS_DBG("Registering cunit_%s[%d], pid: %d, tid: %d\n",
++	PNM_DBG("Registering cunit_%s[%d], pid: %d, tid: %d\n",
+ 		cunit_access_type_to_str(cunit_type), cunit,
+ 		get_current_process_id(), current->pid);
+ 	if (set_cunit_status(filp, &proc_mgr, cunit_type, cunit, true)) {
+-		SLS_ERR("Fail to register cunit_%s[%d], pid: %d, tid: %d\n",
++		PNM_ERR("Fail to register cunit_%s[%d], pid: %d, tid: %d\n",
+ 			cunit_access_type_to_str(cunit_type), cunit,
+ 			get_current_process_id(), current->pid);
+ 		return -1;
+@@ -340,15 +340,15 @@ int sls_proc_remove_cunit(struct file *filp, int cunit, unsigned int cmd)
+ 	int cunit_type = get_cunit_access_type(cmd);
+ 
+ 	if (unlikely(cunit_type == CUNIT_ACCESS_INVAL)) {
+-		SLS_ERR("Unknown cunit type\n");
++		PNM_ERR("Unknown cunit type\n");
+ 		return -1;
+ 	}
+ 
+-	SLS_DBG("Removing cunit_%s[%d], pid: %d, tid: %d\n",
++	PNM_DBG("Removing cunit_%s[%d], pid: %d, tid: %d\n",
+ 		cunit_access_type_to_str(cunit_type), cunit,
+ 		get_current_process_id(), current->pid);
+ 	if (set_cunit_status(filp, &proc_mgr, cunit_type, cunit, false)) {
+-		SLS_ERR("Fail to remove cunit_%s[%d], pid: %d, tid: %d\n",
++		PNM_ERR("Fail to remove cunit_%s[%d], pid: %d, tid: %d\n",
+ 			cunit_access_type_to_str(cunit_type), cunit,
+ 			get_current_process_id(), current->pid);
+ 		return -1;
+@@ -407,11 +407,11 @@ static int unregister_allocation(struct file *filp, struct process_manager *mgr,
+ 
+ int sls_proc_register_alloc(struct file *filp, struct pnm_allocation alloc)
+ {
+-	SLS_DBG("Registering allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
++	PNM_DBG("Registering allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
+ 		alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 		current->pid);
+ 	if (register_allocation(filp, &proc_mgr, alloc)) {
+-		SLS_ERR("Fail to register cunit: %u, addr: %llu, pid: %d, tid: %d\n",
++		PNM_ERR("Fail to register cunit: %u, addr: %llu, pid: %d, tid: %d\n",
+ 			alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 			current->pid);
+ 		return -1;
+@@ -421,11 +421,11 @@ int sls_proc_register_alloc(struct file *filp, struct pnm_allocation alloc)
+ 
+ int sls_proc_remove_alloc(struct file *filp, struct pnm_allocation alloc)
+ {
+-	SLS_DBG("Removing allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
++	PNM_DBG("Removing allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
+ 		alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 		current->pid);
+ 	if (unregister_allocation(filp, &proc_mgr, alloc)) {
+-		SLS_ERR("Fail to remove cunit: %u, addr: %llu, pid: %d, tid: %d\n",
++		PNM_ERR("Fail to remove cunit: %u, addr: %llu, pid: %d, tid: %d\n",
+ 			alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 			current->pid);
+ 		return -1;
+@@ -449,7 +449,7 @@ int register_sls_process(struct file *filp)
+ 	proc_res = kzalloc(sizeof(struct sls_proc_resources), GFP_KERNEL);
+ 
+ 	if (!proc_res) {
+-		SLS_ERR("Failed to register process, pid: %d, tid: %d\n", pid,
++		PNM_ERR("Failed to register process, pid: %d, tid: %d\n", pid,
+ 			current->pid);
+ 		return -ENOMEM;
+ 	}
+@@ -458,7 +458,7 @@ int register_sls_process(struct file *filp)
+ 	mutex_init(&proc_res->sls_proc_lock);
+ 	filp->private_data = proc_res;
+ 
+-	SLS_DBG("Registered process, pid: %d, tid: %d\n", pid, current->pid);
++	PNM_DBG("Registered process, pid: %d, tid: %d\n", pid, current->pid);
+ inc_ref_count:
+ 	mutex_lock(&proc_res->sls_proc_lock);
+ 	proc_res->ref_cnt++;
+@@ -473,7 +473,7 @@ int sls_proc_manager_cleanup_on(void)
+ 	struct sls_proc_resources *proc_res;
+ 	int err_code = 0;
+ 
+-	SLS_DBG("Enabling cleanup\n");
++	PNM_DBG("Enabling cleanup\n");
+ 
+ 	atomic64_set(&proc_mgr.enable_cleanup, 1);
+ 
+@@ -497,7 +497,7 @@ int sls_proc_manager_cleanup_on(void)
+ 
+ void sls_proc_manager_cleanup_off(void)
+ {
+-	SLS_DBG("Disabling cleanup\n");
++	PNM_DBG("Disabling cleanup\n");
+ 	atomic64_set(&proc_mgr.enable_cleanup, 0);
+ }
+ 
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index 5407406ec..a7f6adf34 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -1,7 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "log.h"
+ #include "mem_info.h"
+ #include "private.h"
+ #include "process_manager.h"
+@@ -16,6 +15,7 @@
+ #include <linux/mm.h>
+ #include <linux/mman.h>
+ #include <linux/module.h>
++#include <linux/pnm_log.h>
+ #include <linux/slab.h>
+ #include <linux/sls_resources.h>
+ 
+@@ -43,7 +43,7 @@ int sls_open(struct inode *inode, struct file *filp)
+ 
+ static void dump_ioctl_err(unsigned int cmd)
+ {
+-	SLS_ERR(" ioctl cmd: magic %u, direction %u, size %u, number %u\n",
++	PNM_ERR(" ioctl cmd: magic %u, direction %u, size %u, number %u\n",
+ 		_IOC_TYPE(cmd), _IOC_DIR(cmd), _IOC_SIZE(cmd), _IOC_NR(cmd));
+ }
+ 
+@@ -56,19 +56,19 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	 * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
+ 	 */
+ 	if (_IOC_TYPE(cmd) != SLS_IOC_MAGIC) {
+-		SLS_ERR("Wrong ioctl magic. Aborting ioctl:\n");
++		PNM_ERR("Wrong ioctl magic. Aborting ioctl:\n");
+ 		dump_ioctl_err(cmd);
+-		SLS_ERR(" expected magic: %u\n", SLS_IOC_MAGIC);
++		PNM_ERR(" expected magic: %u\n", SLS_IOC_MAGIC);
+ 		return -ENOTTY;
+ 	}
+ 	if (_IOC_NR(cmd) > SLS_IOC_MAXNR) {
+-		SLS_ERR("Ioctl number too large. Aborting ioctl:\n");
++		PNM_ERR("Ioctl number too large. Aborting ioctl:\n");
+ 		dump_ioctl_err(cmd);
+-		SLS_ERR(" maximum ioctl number: %u\n", SLS_IOC_MAXNR);
++		PNM_ERR(" maximum ioctl number: %u\n", SLS_IOC_MAXNR);
+ 		return -ENOTTY;
+ 	}
+ 
+-	SLS_DBG("Handling SLS ioctl %u with arg 0x%lx\n", _IOC_NR(cmd), arg);
++	PNM_DBG("Handling SLS ioctl %u with arg 0x%lx\n", _IOC_NR(cmd), arg);
+ 
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+@@ -92,12 +92,12 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 		// Do nothing. We need it only for context switch
+ 		break;
+ 	default:
+-		SLS_ERR("Unknown ioctl command:\n");
++		PNM_ERR("Unknown ioctl command:\n");
+ 		dump_ioctl_err(cmd);
+ 		retval = -ENOTTY;
+ 	}
+ 
+-	SLS_DBG("Returning %d from ioctl\n", retval);
++	PNM_DBG("Returning %d from ioctl\n", retval);
+ 	return retval;
+ }
+ 
+@@ -137,7 +137,7 @@ int init_sls_device(void)
+ {
+ 	int err;
+ 
+-	SLS_INF("Initializing SLS device\n");
++	PNM_INF("Initializing SLS device\n");
+ 
+ 	err = init_topology();
+ 
+@@ -148,10 +148,10 @@ int init_sls_device(void)
+ 	err = sls_alloc_cdev_region();
+ 
+ 	if (unlikely(err)) {
+-		SLS_ERR("Failed to allocate chrdev region\n");
++		PNM_ERR("Failed to allocate chrdev region\n");
+ 		goto alloc_chrdev_fail;
+ 	}
+-	SLS_DBG("sls_resource chrdev region: major %d, minor %d\n",
++	PNM_DBG("sls_resource chrdev region: major %d, minor %d\n",
+ 		MAJOR(sls_resource_device_number),
+ 		MINOR(sls_resource_device_number));
+ 
+@@ -165,7 +165,7 @@ int init_sls_device(void)
+ 	err = sls_init_cdev();
+ 
+ 	if (unlikely(err)) {
+-		SLS_ERR("Failed to add %s cdev\n", SLS_RESOURCE_DEVICE_NAME);
++		PNM_ERR("Failed to add %s cdev\n", SLS_RESOURCE_DEVICE_NAME);
+ 		goto init_cdev_fail;
+ 	}
+ 
+@@ -194,7 +194,7 @@ int init_sls_device(void)
+ 	if (unlikely(err))
+ 		goto build_sysfs_fail;
+ 
+-	SLS_INF("Initialization is done");
++	PNM_INF("Initialization is done");
+ 	return 0;
+ 
+ build_sysfs_fail:
+@@ -218,7 +218,7 @@ int init_sls_device(void)
+ 
+ void cleanup_sls_device(void)
+ {
+-	SLS_INF("Cleaning up SLS device\n");
++	PNM_INF("Cleaning up SLS device\n");
+ 
+ 	/* Free allocated memory */
+ 	cleanup_sls_allocator();
+diff --git a/drivers/pnm/sls_resource/sysfs/cunits.c b/drivers/pnm/sls_resource/sysfs/cunits.c
+index c2874a666..75b1feb10 100644
+--- a/drivers/pnm/sls_resource/sysfs/cunits.c
++++ b/drivers/pnm/sls_resource/sysfs/cunits.c
+@@ -3,13 +3,13 @@
+ 
+ #include "allocator.h"
+ #include "cunit_scheduler.h"
+-#include "log.h"
+ #include "private.h"
+ #include "sysfs-private.h"
+ #include "topo/params.h"
+ 
+ #include <linux/device.h>
+ #include <linux/kernel.h>
++#include <linux/pnm_log.h>
+ #include <linux/sls_resources.h>
+ #include <linux/string.h>
+ #include <linux/types.h>
+@@ -285,7 +285,7 @@ static int build_cunit_sysfs(struct kobject *kobj, uint8_t cunit)
+ 	char buf[4];
+ 	int err;
+ 
+-	SLS_DBG("Building SLS sysfs for cunit %hhu\n", cunit);
++	PNM_DBG("Building SLS sysfs for cunit %hhu\n", cunit);
+ 
+ 	kobject_init(&cunits_fs[cunit].cunit_idx_kobj, &cunit_type);
+ 	sprintf(buf, "%hhu", cunit);
+@@ -318,28 +318,28 @@ int sls_build_cunits_sysfs(struct kobject *parent,
+ 	int rc = 0;
+ 	uint8_t cunit;
+ 
+-	SLS_DBG("Start building sls cunits sysfs\n");
++	PNM_DBG("Start building sls cunits sysfs\n");
+ 
+ 	mem_cunit_info = memcunit_info;
+ 
+ 	cunits_kobj = kobject_create_and_add(DEVICE_CUNITS_PATH, parent);
+ 
+ 	if (unlikely(!cunits_kobj)) {
+-		SLS_ERR("Failed to create cunits kobject\n");
++		PNM_ERR("Failed to create cunits kobject\n");
+ 		rc = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+ 	rc = sysfs_create_groups(cunits_kobj, cunits_attr_groups);
+ 	if (unlikely(rc)) {
+-		SLS_ERR("Failed to add attributes to cunits entry\n");
++		PNM_ERR("Failed to add attributes to cunits entry\n");
+ 		goto cunits_kobj_free;
+ 	}
+ 
+ 	cunits_fs = kcalloc(sls_topo()->nr_cunits, sizeof(struct cunit_sysfs),
+ 			    GFP_KERNEL);
+ 	if (unlikely(!cunits_fs)) {
+-		SLS_ERR("No free memory for cunits directories\n");
++		PNM_ERR("No free memory for cunits directories\n");
+ 		goto cunits_groups_free;
+ 	}
+ 
+@@ -348,7 +348,7 @@ int sls_build_cunits_sysfs(struct kobject *parent,
+ 		if (likely(rc == 0))
+ 			continue;
+ 
+-		SLS_ERR("Failed to build sysfs for cunit [%d]\n", cunit);
++		PNM_ERR("Failed to build sysfs for cunit [%d]\n", cunit);
+ 		while (--cunit >= 0) {
+ 			sysfs_remove_groups(
+ 				&cunits_fs[cunit].regions_fs.regions_kobj,
+diff --git a/drivers/pnm/sls_resource/sysfs/mappings.c b/drivers/pnm/sls_resource/sysfs/mappings.c
+index 485e08f59..e6e153551 100644
+--- a/drivers/pnm/sls_resource/sysfs/mappings.c
++++ b/drivers/pnm/sls_resource/sysfs/mappings.c
+@@ -1,13 +1,13 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "log.h"
+ #include "private.h"
+ #include "sysfs-private.h"
+ #include "topo/params.h"
+ 
+ #include <linux/device.h>
+ #include <linux/kernel.h>
++#include <linux/pnm_log.h>
+ #include <linux/sls_resources.h>
+ #include <linux/string.h>
+ #include <linux/types.h>
+@@ -134,7 +134,7 @@ static int build_raw_region_sysfs(struct kobject *kobj, uint8_t region)
+ 	char buf[4];
+ 	int err;
+ 
+-	SLS_DBG("Building SLS sysfs for mappings region %hhu\n", region);
++	PNM_DBG("Building SLS sysfs for mappings region %hhu\n", region);
+ 
+ 	kobject_init(&raw_regions_fs[region].idx_kobj, &raw_region_type);
+ 	sprintf(buf, "%hhu", region);
+@@ -165,28 +165,28 @@ int sls_build_mappings_sysfs(struct kobject *parent,
+ 	int err = 0;
+ 	uint8_t region;
+ 
+-	SLS_DBG("Building SLS memory mappings sysfs\n");
++	PNM_DBG("Building SLS memory mappings sysfs\n");
+ 
+ 	mem_info = meminfo;
+ 
+ 	mappings_kobj = kobject_create_and_add(DEVICE_MAPPINGS_PATH, parent);
+ 
+ 	if (!mappings_kobj) {
+-		SLS_ERR("Unable to create mappings sysfs kobject\n");
++		PNM_ERR("Unable to create mappings sysfs kobject\n");
+ 		err = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+ 	err = sysfs_create_groups(mappings_kobj, mappings_attr_groups);
+ 	if (err) {
+-		SLS_ERR("Failed to create mappings sysfs groups\n");
++		PNM_ERR("Failed to create mappings sysfs groups\n");
+ 		goto mappings_kobj_free;
+ 	}
+ 
+ 	raw_regions_fs = kcalloc(mem_info->nr_regions,
+ 				 sizeof(struct raw_region_sysfs), GFP_KERNEL);
+ 	if (!raw_regions_fs) {
+-		SLS_ERR("No free memory for raw regions directories\n");
++		PNM_ERR("No free memory for raw regions directories\n");
+ 		goto mappings_groups_free;
+ 	}
+ 
+@@ -195,7 +195,7 @@ int sls_build_mappings_sysfs(struct kobject *parent,
+ 		if (err == 0)
+ 			continue;
+ 
+-		SLS_ERR("Failed to build sysfs for mappings region [%hhu]\n",
++		PNM_ERR("Failed to build sysfs for mappings region [%hhu]\n",
+ 			region);
+ 		while (--region >= 0) {
+ 			sysfs_remove_groups(&raw_regions_fs[region].idx_kobj,
+@@ -204,7 +204,7 @@ int sls_build_mappings_sysfs(struct kobject *parent,
+ 		goto mappings_fs_free;
+ 	}
+ 
+-	SLS_DBG("Built SLS mappings sysfs\n");
++	PNM_DBG("Built SLS mappings sysfs\n");
+ 	return err;
+ 
+ mappings_fs_free:
+@@ -219,10 +219,10 @@ int sls_build_mappings_sysfs(struct kobject *parent,
+ 
+ void sls_destroy_mappings_sysfs(void)
+ {
+-	SLS_DBG("Destroying SLS memory mappings sysfs\n");
++	PNM_DBG("Destroying SLS memory mappings sysfs\n");
+ 
+ 	sysfs_remove_groups(mappings_kobj, mappings_attr_groups);
+ 	kobject_del(mappings_kobj);
+ 
+-	SLS_DBG("Destroyed SLS memory mappings sysfs\n");
++	PNM_DBG("Destroyed SLS memory mappings sysfs\n");
+ }
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs.c b/drivers/pnm/sls_resource/sysfs/sysfs.c
+index 19c4b609a..4fc5885ba 100644
+--- a/drivers/pnm/sls_resource/sysfs/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.c
+@@ -4,7 +4,6 @@
+ #include "sysfs.h"
+ #include "allocator.h"
+ #include "cunit_scheduler.h"
+-#include "log.h"
+ #include "mem_info.h"
+ #include "private.h"
+ #include "process_manager.h"
+@@ -12,6 +11,7 @@
+ #include "topo/params.h"
+ 
+ #include <linux/kernel.h>
++#include <linux/pnm_log.h>
+ #include <linux/sls_resources.h>
+ #include <linux/string.h>
+ #include <linux/types.h>
+@@ -39,11 +39,11 @@ static ssize_t cleanup_store(struct device *device,
+ {
+ 	if (sysfs_streq(buf, "1")) {
+ 		if (sls_proc_manager_cleanup_on())
+-			SLS_ERR("Failed to enable resource manager\n");
++			PNM_ERR("Failed to enable resource manager\n");
+ 	} else if (sysfs_streq(buf, "0")) {
+ 		sls_proc_manager_cleanup_off();
+ 	} else {
+-		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
++		PNM_DBG("Ignoring invalid value ('%s') written into sysfs 'cleanup' file\n",
+ 			buf);
+ 	}
+ 
+@@ -67,11 +67,11 @@ static ssize_t acq_timeout_store(struct device *device,
+ 	uint64_t acq_timeout;
+ 
+ 	if (kstrtoull(buf, 10, &acq_timeout)) {
+-		SLS_ERR("Failed to convert cunit acquisition timeout string ('%s') to integer.\n",
++		PNM_ERR("Failed to convert cunit acquisition timeout string ('%s') to integer.\n",
+ 			buf);
+ 		return -EINVAL;
+ 	}
+-	SLS_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
++	PNM_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
+ 	cunit_scheduler_set_write_acquisition_timeout(acq_timeout);
+ 	return count;
+ }
+@@ -81,13 +81,13 @@ static ssize_t reset_store(struct device *device, struct device_attribute *attr,
+ 			   const char *buf, size_t count)
+ {
+ 	if (sysfs_streq(buf, "1")) {
+-		SLS_DBG("Resetting SLS device via sysfs\n");
++		PNM_DBG("Resetting SLS device via sysfs\n");
+ 		if (sls_ioctl(NULL, DEVICE_IOCRESET, 0))
+-			SLS_ERR("Failed to reset device via sysfs.\n");
++			PNM_ERR("Failed to reset device via sysfs.\n");
+ 	} else {
+ 		// Usual behavior is to silently ignore this, so there is no reason
+-		// to make it as SLS_WRN.
+-		SLS_DBG("Ignoring invalid value ('%s') written into sysfs 'reset' file\n",
++		// to make it as PNM_WRN.
++		PNM_DBG("Ignoring invalid value ('%s') written into sysfs 'reset' file\n",
+ 			buf);
+ 	}
+ 
+@@ -125,37 +125,37 @@ int sls_build_sysfs(const struct sls_mem_cunit_info *mem_cunit_info,
+ 	struct kobject *const parent = &resource_dev->kobj;
+ 	int rc = 0;
+ 
+-	SLS_DBG("Building SLS sysfs\n");
++	PNM_DBG("Building SLS sysfs\n");
+ 
+ 	/* create statistics files */
+ 	rc = sysfs_create_groups(parent, dev_attr_groups);
+ 	if (unlikely(rc)) {
+-		SLS_ERR("Failed to create sysfs groups\n");
++		PNM_ERR("Failed to create sysfs groups\n");
+ 		goto out;
+ 	}
+ 
+ 	/* create cunits entry */
+ 	rc = sls_build_cunits_sysfs(parent, mem_cunit_info);
+ 	if (unlikely(rc)) {
+-		SLS_ERR("Failed to build cunits sysfs\n");
++		PNM_ERR("Failed to build cunits sysfs\n");
+ 		goto group_cleanup;
+ 	}
+ 
+ 	/* create mappings */
+ 	rc = sls_build_mappings_sysfs(parent, mem_info);
+ 	if (unlikely(rc)) {
+-		SLS_ERR("Failed to build mappings sysfs\n");
++		PNM_ERR("Failed to build mappings sysfs\n");
+ 		goto cunits_cleanup;
+ 	}
+ 
+ 	/* create topology entry */
+ 	rc = sls_build_topology_sysfs(parent);
+ 	if (unlikely(rc)) {
+-		SLS_ERR("Failed to build topology sysfs\n");
++		PNM_ERR("Failed to build topology sysfs\n");
+ 		goto mappings_free;
+ 	}
+ 
+-	SLS_DBG("SLS sysfs is built\n");
++	PNM_DBG("SLS sysfs is built\n");
+ 	return rc;
+ 
+ mappings_free:
+@@ -170,7 +170,7 @@ int sls_build_sysfs(const struct sls_mem_cunit_info *mem_cunit_info,
+ 
+ void sls_destroy_sysfs(struct device *dev)
+ {
+-	SLS_DBG("Destroying SLS sysfs\n");
++	PNM_DBG("Destroying SLS sysfs\n");
+ 
+ 	sysfs_remove_groups(&dev->kobj, dev_attr_groups);
+ 
+@@ -180,5 +180,5 @@ void sls_destroy_sysfs(struct device *dev)
+ 
+ 	sls_destroy_topology_sysfs();
+ 
+-	SLS_DBG("SLS sysfs is destroyed\n");
++	PNM_DBG("SLS sysfs is destroyed\n");
+ }
+diff --git a/drivers/pnm/sls_resource/sysfs/topology.c b/drivers/pnm/sls_resource/sysfs/topology.c
+index d0a84ed39..a07e19cc1 100644
+--- a/drivers/pnm/sls_resource/sysfs/topology.c
++++ b/drivers/pnm/sls_resource/sysfs/topology.c
+@@ -1,14 +1,13 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+-#include "log.h"
+ #include "sysfs-private.h"
+ #include "topo/params.h"
+ 
+-#include <linux/sls_resources.h>
+-
+ #include <linux/device.h>
+ #include <linux/kernel.h>
++#include <linux/pnm_log.h>
++#include <linux/sls_resources.h>
+ 
+ #define SINGLE_VALUE_ATTR(param, value)                                       \
+ 	static ssize_t param##_show(struct device *device,                    \
+@@ -87,24 +86,24 @@ int sls_build_topology_sysfs(struct kobject *resource_kobj)
+ {
+ 	int rc = 0;
+ 
+-	SLS_DBG("Building SLS memory topology sysfs\n");
++	PNM_DBG("Building SLS memory topology sysfs\n");
+ 
+ 	mem_topo_kobj =
+ 		kobject_create_and_add(DEVICE_TOPOLOGY_PATH, resource_kobj);
+ 
+ 	if (unlikely(!mem_topo_kobj)) {
+-		SLS_ERR("Unable to create topology sysfs kobject\n");
++		PNM_ERR("Unable to create topology sysfs kobject\n");
+ 		rc = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+ 	rc = sysfs_create_groups(mem_topo_kobj, mem_topo_attr_groups);
+ 	if (unlikely(rc)) {
+-		SLS_ERR("Unable to create topology sysfs groups\n");
++		PNM_ERR("Unable to create topology sysfs groups\n");
+ 		goto sysfs_group_free;
+ 	}
+ 
+-	SLS_DBG("Built SLS memory topology sysfs\n");
++	PNM_DBG("Built SLS memory topology sysfs\n");
+ 
+ 	return rc;
+ 
+@@ -116,10 +115,10 @@ int sls_build_topology_sysfs(struct kobject *resource_kobj)
+ 
+ void sls_destroy_topology_sysfs(void)
+ {
+-	SLS_DBG("Destroying SLS memory topology sysfs\n");
++	PNM_DBG("Destroying SLS memory topology sysfs\n");
+ 
+ 	sysfs_remove_groups(mem_topo_kobj, mem_topo_attr_groups);
+ 	kobject_del(mem_topo_kobj);
+ 
+-	SLS_DBG("Destroyed SLS memory topology sysfs\n");
++	PNM_DBG("Destroyed SLS memory topology sysfs\n");
+ }
+diff --git a/drivers/pnm/sls_resource/topo/params.c b/drivers/pnm/sls_resource/topo/params.c
+index d10851955..16e856244 100644
+--- a/drivers/pnm/sls_resource/topo/params.c
++++ b/drivers/pnm/sls_resource/topo/params.c
+@@ -4,11 +4,11 @@
+ #include "params.h"
+ #include "axdimm.h"
+ #include "cxl.h"
+-#include "log.h"
+ 
+ #include <linux/bitfield.h>
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
++#include <linux/pnm_log.h>
+ #include <linux/sls_common.h>
+ 
+ // [TODO:] Get rid of kconfig dev_type parameter
+@@ -190,7 +190,7 @@ static int set_dev_type(const char *val, const struct kernel_param *kp)
+ 	}
+ 
+ 	if (rc) {
+-		SLS_ERR("Unknown device name: %s\n", val);
++		PNM_ERR("Unknown device name: %s\n", val);
+ 		return rc;
+ 	}
+ 
+@@ -214,7 +214,7 @@ static int get_dev_type(char *buffer, const struct kernel_param *kp)
+ 		break;
+ 	}
+ 
+-	SLS_ERR("Unknown device name: %d\n", param->value);
++	PNM_ERR("Unknown device name: %d\n", param->value);
+ 
+ 	return -EINVAL;
+ }
+diff --git a/drivers/pnm/zswap/Makefile b/drivers/pnm/zswap/Makefile
+index a665a7241..1a882eade 100644
+--- a/drivers/pnm/zswap/Makefile
++++ b/drivers/pnm/zswap/Makefile
+@@ -2,6 +2,8 @@
+ 
+ obj-$(CONFIG_PNM_ZSWAP_SIM) += pnm_zswap_sim.o
+ 
++ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[ZSWAP]\"
++
+ pnm_zswap_sim-y := device.o
+ pnm_zswap_sim-y += sim.o
+ pnm_zswap_sim-y += ps_compression.o
+diff --git a/drivers/pnm/zswap/device.c b/drivers/pnm/zswap/device.c
+index 874e7f8af..ea03290be 100644
+--- a/drivers/pnm/zswap/device.c
++++ b/drivers/pnm/zswap/device.c
+@@ -13,6 +13,7 @@
+ #include <linux/mm_types.h>
+ #include <linux/module.h>
+ #include <linux/pnm/cxl_zswap_driver.h>
++#include <linux/pnm_log.h>
+ #include <linux/slab.h>
+ #include <linux/spinlock.h>
+ #include <linux/types.h>
+@@ -80,7 +81,7 @@ static int pnm_memory_init(struct pnm_device *dev)
+ 	dev->cache_mem_base_addr = ioremap_cache(
+ 		dev->hw_info.base_addr + CACHE_MEM_OFFSET, CACHE_MEM_SIZE);
+ 	if (!dev->uncache_mem_base_addr || !dev->cache_mem_base_addr) {
+-		pr_err("[pnm_drv]: failed to ioremap memory for pnm device\n");
++		PNM_ERR("[pnm_drv]: failed to ioremap memory for pnm device\n");
+ 		ret = -1;
+ 	}
+ 
+@@ -263,12 +264,12 @@ static long pnm_ioctl(struct file *filp, unsigned int cmd, unsigned long args)
+ 
+ 	if (_IOC_TYPE(cmd) != PNM_IOC_MAGIC || _IOC_NR(cmd) < PNM_IOC_MIN_NR ||
+ 	    _IOC_NR(cmd) > PNM_IOC_MAX_NR) {
+-		pr_err("[pnm_drv]: invalid ioctl req:%d\n", _IOC_NR(cmd));
++		PNM_ERR("[pnm_drv]: invalid ioctl req:%d\n", _IOC_NR(cmd));
+ 		return -EINVAL;
+ 	}
+ 
+ 	if (copy_from_user(data, (void __user *)args, _IOC_SIZE(cmd))) {
+-		pr_info("[pnm_drv]: copy_from_user failed\n");
++		PNM_INF("[pnm_drv]: copy_from_user failed\n");
+ 		return -EFAULT;
+ 	}
+ 	switch (cmd) {
+@@ -282,9 +283,9 @@ static long pnm_ioctl(struct file *filp, unsigned int cmd, unsigned long args)
+ 		// int ret = zcxl_frontswap_store(type, data->in_offset, src_page);
+ 		// finished = rdtsc_ordered();
+ 		// if (ret != 0) {
+-		//     pr_err("err: failed zcxl_frontswap_store.\n");
++		//     PNM_ERR("err: failed zcxl_frontswap_store.\n");
+ 		// }
+-		// pr_info("[PNM] zcxl_frontswap_store %lld cycles, Offset[%ld]\n",
++		// PNM_INF("[PNM] zcxl_frontswap_store %lld cycles, Offset[%ld]\n",
+ 		//             finished - started, data->in_offset);
+ 		// __free_page(src_page);
+ 		break;
+@@ -300,14 +301,14 @@ static long pnm_ioctl(struct file *filp, unsigned int cmd, unsigned long args)
+ 		// int ret = zcxl_frontswap_load(type, data->in_offset, src_page);
+ 		// finished = rdtsc_ordered();
+ 		// if (ret != 0) {
+-		//     pr_err("err: failed zcxl_frontswap_load.\n");
++		//     PNM_ERR("err: failed zcxl_frontswap_load.\n");
+ 		// }
+-		// pr_info("[PNM] zcxl_frontswap_load %lld cycles, Offset[%ld]\n",
++		// PNM_INF("[PNM] zcxl_frontswap_load %lld cycles, Offset[%ld]\n",
+ 		//             finished - started, data->in_offset);
+ 		// u8 *ptr = page_address(src_page);
+ 		// for (i = 0; i < PAGE_SIZE; i++) {
+ 		//     if (ptr[i] != 1) {
+-		//         pr_err("err: failed zcxl_frontswap_load.\n");
++		//         PNM_ERR("err: failed zcxl_frontswap_load.\n");
+ 		//         break;
+ 		//     }
+ 		// }
+@@ -363,7 +364,7 @@ static long pnm_ioctl(struct file *filp, unsigned int cmd, unsigned long args)
+ 
+ 	if (ioctl_dir & _IOC_READ) {
+ 		if (copy_to_user((void __user *)args, data, _IOC_SIZE(cmd))) {
+-			pr_err("[pnm_drv]: copy to user failed\n");
++			PNM_ERR("[pnm_drv]: copy to user failed\n");
+ 			return -EFAULT;
+ 		}
+ 	}
+@@ -423,17 +424,17 @@ static int _cxl_pnm_drv_run(void)
+ 	pnmdev->mdev.parent = NULL;
+ 	ret = misc_register(&pnmdev->mdev);
+ 	if (ret) {
+-		pr_err("[pnm_drv]: failed to register pnm misc device\n");
++		PNM_ERR("[pnm_drv]: failed to register pnm misc device\n");
+ 		goto reg_error;
+ 	}
+-	pr_info("[pnm_drv]: successfully register pnm misc device\n");
++	PNM_INF("[pnm_drv]: successfully register pnm misc device\n");
+ 
+ 	// create and run daemon thread
+ 	exec_daemon = kthread_create(kt_daemon, NULL, "kt-pnm-drv-daemon");
+ 	if (!IS_ERR(exec_daemon)) {
+-		pr_err("[pnm_drv]: kthread_bind\n");
++		PNM_ERR("[pnm_drv]: kthread_bind\n");
+ 		kthread_bind(exec_daemon, DRV_CPU);
+-		pr_err("[pnm_drv]: wake_up_process\n");
++		PNM_ERR("[pnm_drv]: wake_up_process\n");
+ 		wake_up_process(exec_daemon);
+ 	} else {
+ 		WARN_ON(1);
+@@ -442,13 +443,13 @@ static int _cxl_pnm_drv_run(void)
+ 	// create debug fs
+ 	pnmdev->debug_fs = debugfs_create_dir("pnm", NULL);
+ 	if (!pnmdev->debug_fs)
+-		pr_err("[pnm_drv]: failed to create debug fs for pnm\n");
++		PNM_ERR("[pnm_drv]: failed to create debug fs for pnm\n");
+ 	pnm_debug(pnmdev->mdev.this_device, "[pnm_drv]: init done\n");
+ 	internal_dev = pnmdev;
+ 
+ 	// init memory for pnm device
+ 	if (pnm_memory_init(pnmdev)) {
+-		pr_err("[pnm_drv]: failed to init pnm memory info\n");
++		PNM_ERR("[pnm_drv]: failed to init pnm memory info\n");
+ 		goto mem_error;
+ 	}
+ 
+@@ -495,7 +496,7 @@ static int cxl_pnm_drv_run(const char *val, const struct kernel_param *kp)
+ 	int ret = param_set_bool(val, kp);
+ 
+ 	if (ret) {
+-		pr_info("[pnm_drv] wrong string value:  %s",
++		PNM_INF("[pnm_drv] wrong string value:  %s",
+ 			val ? val : "null");
+ 		return ret;
+ 	}
+@@ -509,21 +510,21 @@ static int cxl_pnm_drv_run(const char *val, const struct kernel_param *kp)
+ 		return 0;
+ 	}
+ 
+-	pr_info("[pnm_drv]: %s\n", __func__);
++	PNM_INF("[pnm_drv]: %s\n", __func__);
+ 
+ 	// init cxl pnm device
+ 	ret = _cxl_pnm_drv_run();
+ 	if (ret < 0)
+-		pr_err("[pnm_drv]: %s failed\n", __func__);
++		PNM_ERR("[pnm_drv]: %s failed\n", __func__);
+ 
+ 	// register pnm_driver
+ 	pnm_register_driver(&pnm_zcxl_driver);
+-	pr_info("[pnm_drv]: cxl_pnm_drv loaded\n");
++	PNM_INF("[pnm_drv]: cxl_pnm_drv loaded\n");
+ 
+ 	// request dma chann
+ #ifdef IOAT_DMA
+ 	if (dma_request_chann() == -1)
+-		pr_err("[pnm_drv]: dma_request_chann failed\n");
++		PNM_ERR("[pnm_drv]: dma_request_chann failed\n");
+ #endif
+ 
+ 	return 0;
+@@ -531,7 +532,7 @@ static int cxl_pnm_drv_run(const char *val, const struct kernel_param *kp)
+ 
+ static int __init pnm_drv_init(void)
+ {
+-	pr_info("[pnm_drv]: %s\n", __func__);
++	PNM_INF("[pnm_drv]: %s\n", __func__);
+ 
+ 	return 0;
+ }
+@@ -564,10 +565,10 @@ static void __exit pnm_drv_exit(void)
+ 	// release dma chan
+ #ifdef IOAT_DMA
+ 	if (dma_release_chann() == -1)
+-		pr_err("[pnm_drv]: dma_release_chann failed\n");
++		PNM_ERR("[pnm_drv]: dma_release_chann failed\n");
+ #endif
+ 
+-	pr_info("unloaded.\n");
++	PNM_INF("unloaded.\n");
+ }
+ 
+ MODULE_AUTHOR("Samsung");
+diff --git a/drivers/pnm/zswap/fs_compression.c b/drivers/pnm/zswap/fs_compression.c
+index 717a26ffd..fe283791e 100644
+--- a/drivers/pnm/zswap/fs_compression.c
++++ b/drivers/pnm/zswap/fs_compression.c
+@@ -6,6 +6,7 @@
+ #include "sim.h"
+ 
+ #include <linux/crypto.h>
++#include <linux/pnm_log.h>
+ #include <linux/printk.h>
+ #include <linux/slab.h>
+ #include <linux/types.h>
+@@ -13,7 +14,7 @@
+ #define FS_LOG(fmt, arg...)                          \
+ 	do {                                         \
+ 		if (log_enabled)                     \
+-			pr_info("[FS] " fmt, ##arg); \
++			PNM_INF("[FS] " fmt, ##arg); \
+ 	} while (0)
+ 
+ static int compress_page(struct compression_core *self, struct unit_info *unit)
+@@ -28,7 +29,7 @@ static int compress_page(struct compression_core *self, struct unit_info *unit)
+ 				   &compressed_size);
+ 
+ 	if (ret != 0) {
+-		pr_err("Fail to compress page. Error code: %d\n", ret);
++		PNM_ERR("Fail to compress page. Error code: %d\n", ret);
+ 		return ret;
+ 	}
+ 
+@@ -54,8 +55,8 @@ static int decompress_page(struct compression_core *self,
+ 				     &decompressed_size);
+ 
+ 	if (ret != 0) {
+-		pr_err("Fail to decompress %u bytes. Error code: %d\n",
+-		       unit->inst.src_size, ret);
++		PNM_ERR("Fail to decompress %u bytes. Error code: %d\n",
++			unit->inst.src_size, ret);
+ 		return ret;
+ 	}
+ 
+@@ -85,7 +86,7 @@ struct compression_core *create_fsim_core(const char *compressor)
+ 	fs_core->comp = crypto_alloc_comp(compressor, 0, 0);
+ 
+ 	if (!fs_core->comp) {
+-		pr_err("[FS] Failed to initialize compression core\n");
++		PNM_ERR("[FS] Failed to initialize compression core\n");
+ 		kfree(fs_core);
+ 		return NULL;
+ 	}
+@@ -101,7 +102,7 @@ void destroy_fsim_core(struct compression_core *core)
+ 	struct fs_compression_core *base;
+ 
+ 	if (core == NULL) {
+-		pr_err("[FS] Release NULL copression core\n");
++		PNM_ERR("[FS] Release NULL copression core\n");
+ 		return;
+ 	}
+ 
+diff --git a/drivers/pnm/zswap/ps_compression.c b/drivers/pnm/zswap/ps_compression.c
+index acab36a4a..f98ef1422 100644
+--- a/drivers/pnm/zswap/ps_compression.c
++++ b/drivers/pnm/zswap/ps_compression.c
+@@ -1,8 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+-
+ #include "ps_compression.h"
+ #include "sim.h"
+ 
+@@ -11,6 +9,7 @@
+ #include <linux/log2.h>
+ #include <linux/math64.h>
+ #include <linux/module.h>
++#include <linux/pnm_log.h>
+ #include <linux/slab.h>
+ #include <linux/smp.h>
+ 
+@@ -179,7 +178,7 @@ static int lz77_compress_page(struct unit_info *unit)
+ 	unit->dst_size = lz_output;
+ 	unit->consumed_cycles += cycle_lz77_compress;
+ 
+-	// pr_info("[PNM] LZ77 COMPRESS, CYCLES %ld  SIZE %d\n",
++	// PNM_INF("[PNM] LZ77 COMPRESS, CYCLES %ld  SIZE %d\n",
+ 	// cycle_lz77_compress, unit->dst_size);
+ 
+ 	return ret;
+@@ -206,7 +205,7 @@ static int lz77_decompress_page(struct unit_info *unit)
+ 	unit->delay_cycles = div_u64(unit->consumed_cycles * host_cpu_clk_freq,
+ 				     cxl_pnm_clk_freq);
+ 
+-	// pr_info("[PNM] LZ77 DECOMPRESS, CYCLES %ld  SIZE %d\n",
++	// PNM_INF("[PNM] LZ77 DECOMPRESS, CYCLES %ld  SIZE %d\n",
+ 	//         cycle_lz77_decompress, unit->dst_size);
+ 
+ 	return ret;
+@@ -243,7 +242,7 @@ static int encode_huffman(struct unit_info *unit)
+ 	unit->delay_cycles = div_u64(unit->consumed_cycles * host_cpu_clk_freq,
+ 				     cxl_pnm_clk_freq);
+ 
+-	// pr_info("[PNM] HUFFMAN ENCODE, CYCLES %ld  SIZE %d\n",
++	// PNM_INF("[PNM] HUFFMAN ENCODE, CYCLES %ld  SIZE %d\n",
+ 	//         cycle_huffman_encode, unit->dst_size);
+ 
+ 	return ret;
+@@ -275,7 +274,7 @@ static int decode_huffman(struct unit_info *unit)
+ 	unit->dst_size = in_len;
+ 	unit->consumed_cycles += cycle_huffman_decode;
+ 
+-	// pr_info("[PNM] HUFFMAN DECODE, CYCLES %ld  SIZE %d\n",
++	// PNM_INF("[PNM] HUFFMAN DECODE, CYCLES %ld  SIZE %d\n",
+ 	//         cycle_huffman_decode, unit->dst_size);
+ 
+ 	return ret;
+@@ -342,7 +341,7 @@ static int pnm_compress_sim(struct compression_core *self,
+ 	}
+ 
+ 	if (unlikely(log_enabled))
+-		pr_info("[PNM] COMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
++		PNM_INF("[PNM] COMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
+ 			fetched_inst->offset, unit->dst_size,
+ 			unit->consumed_cycles, unit->delay_cycles,
+ 			finished - started, memcpy_end - memcpy_start);
+@@ -391,7 +390,7 @@ static int pnm_decompress_sim(struct compression_core *self,
+ 	}
+ 
+ 	if (unlikely(log_enabled))
+-		pr_info("[PNM] DECOMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
++		PNM_INF("[PNM] DECOMPRESS  %ld  %d  %ld  %ld  %lld  %lld\n",
+ 			fetched_inst->offset, unit->dst_size,
+ 			unit->consumed_cycles, unit->delay_cycles,
+ 			finished - started, memcpy_end - memcpy_start);
+@@ -416,7 +415,7 @@ struct compression_core *create_psim_core(void __iomem *hidden_pool)
+ 	ps_core->hidden_pool = hidden_pool;
+ 
+ 	if (log_enabled)
+-		pr_info("[PS] Initialize performance simulator");
++		PNM_INF("[PS] Initialize performance simulator");
+ 
+ 	return &ps_core->core;
+ }
+@@ -426,14 +425,14 @@ void destroy_psim_core(struct compression_core *core)
+ 	struct ps_compression_core *base;
+ 
+ 	if (core == NULL) {
+-		pr_err("[PS] Release NULL copression core\n");
++		PNM_ERR("[PS] Release NULL copression core\n");
+ 		return;
+ 	}
+ 
+ 	base = container_of(core, struct ps_compression_core, core);
+ 
+ 	if (log_enabled)
+-		pr_info("[PS] Finalize performance simulator");
++		PNM_INF("[PS] Finalize performance simulator");
+ 
+ 	kfree(base);
+ }
+diff --git a/drivers/pnm/zswap/sim.c b/drivers/pnm/zswap/sim.c
+index cf09368be..17002895d 100644
+--- a/drivers/pnm/zswap/sim.c
++++ b/drivers/pnm/zswap/sim.c
+@@ -1,8 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
+ 
+-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+-
+ #include <asm/barrier.h>
+ #include <asm/msr.h>
+ #include <asm/timer.h>
+@@ -19,6 +17,7 @@
+ #include <linux/module.h>
+ #include <linux/pnm/cxl_zswap.h>
+ #include <linux/pnm/cxl_zswap_driver.h>
++#include <linux/pnm_log.h>
+ #include <linux/sched.h>
+ #include <linux/semaphore.h>
+ #include <linux/slab.h>
+@@ -115,12 +114,12 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 	//  3.  change the state of pnm selected
+ 	spin_lock(&pnm_ctrl->compress_lock);
+ 	if (unlikely(log_enabled))
+-		pr_info("[HOST-C][%d] IDLE UNITs %d\n", tid,
++		PNM_INF("[HOST-C][%d] IDLE UNITs %d\n", tid,
+ 			atomic_read(&pnm_ctrl->num_idle_comp_unit));
+ 
+ 	if (atomic_read(&pnm_ctrl->num_idle_comp_unit) == 0) {
+ 		spin_unlock(&pnm_ctrl->compress_lock);
+-		pr_info("all compress unit is utilized\n");
++		PNM_INF("all compress unit is utilized\n");
+ 		return status;
+ 	}
+ 
+@@ -139,7 +138,7 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 		return status;
+ 
+ 	if (unlikely(log_enabled))
+-		pr_info("[HOST-C][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
++		PNM_INF("[HOST-C][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
+ 			tid, pnm_id, pnm_ctrl->compress[pnm_id].state,
+ 			atomic_read(&pnm_ctrl->num_idle_comp_unit));
+ 
+@@ -160,7 +159,7 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 			*out_len = pnm_ctrl->compress[pnm_id].dst_size;
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[HOST-C][%d] READ RESULT [%d] [%ld]\n",
++				PNM_INF("[HOST-C][%d] READ RESULT [%d] [%ld]\n",
+ 					tid, pnm_id, *out_len);
+ 
+ 			WRITE_ONCE(pnm_ctrl->compress[pnm_id].done, false);
+@@ -179,7 +178,7 @@ int inst_comp(struct instruction *pnm_inst, size_t *out_len)
+ 
+ 	if (unlikely(log_enabled))
+ 		/* Timeout: Failed to get result */
+-		pr_info("[HOST-C][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
++		PNM_INF("[HOST-C][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
+ 			pnm_ctrl->compress[pnm_id].commit.tid,
+ 			ktime_get() - kstarted);
+ 
+@@ -199,7 +198,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 
+ 	//[TODO, ]: need to execute software decompression when there are not idle units
+ 	if (unlikely(log_enabled))
+-		pr_info("[HOST-D][%d] IDLE UNITs %d\n", tid,
++		PNM_INF("[HOST-D][%d] IDLE UNITs %d\n", tid,
+ 			atomic_read(&pnm_ctrl->num_idle_decomp_unit));
+ 
+ 	spin_lock(&pnm_ctrl->decompress_lock);
+@@ -227,7 +226,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 		return status;
+ 
+ 	if (unlikely(log_enabled))
+-		pr_info("[HOST-D][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
++		PNM_INF("[HOST-D][%d] ALLOCATED IN PNM [%d] %d IDLE UNITs %d\n",
+ 			tid, pnm_id, pnm_ctrl->decompress[pnm_id].state,
+ 			atomic_read(&pnm_ctrl->num_idle_decomp_unit));
+ 
+@@ -249,7 +248,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 			*out_len = pnm_ctrl->decompress[pnm_id].dst_size;
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[HOST-D][%d] READ RESULT [%d] [%ld]\n",
++				PNM_INF("[HOST-D][%d] READ RESULT [%d] [%ld]\n",
+ 					tid, pnm_id, *out_len);
+ 
+ 			WRITE_ONCE(pnm_ctrl->decompress[pnm_id].done, false);
+@@ -267,7 +266,7 @@ int inst_decomp(struct instruction *pnm_inst, size_t *out_len)
+ 	atomic_inc(&pnm_ctrl->num_idle_decomp_unit);
+ 
+ 	if (unlikely(log_enabled))
+-		pr_info("[HOST-D][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
++		PNM_INF("[HOST-D][%d] FAILED TO READ RESULT [%d]: %lld\n", tid,
+ 			pnm_ctrl->decompress[pnm_id].commit.tid,
+ 			ktime_get() - kstarted);
+ 
+@@ -280,21 +279,21 @@ int cxl_pnm_offload(struct instruction *pnm_inst, size_t *out_len)
+ 	int status;
+ 
+ 	if (unlikely(log_enabled))
+-		pr_info("[HOST] OFFLOADING TO PNM\n");
++		PNM_INF("[HOST] OFFLOADING TO PNM\n");
+ 
+ 	if (pnm_inst->opcode == CXL_PNM_OP_COMP_STORE) {
+ 		status = inst_comp(pnm_inst, out_len);
+ 
+ 		if (unlikely(log_enabled))
+-			pr_info("[HOST] PNM COMPRESSION FINISHED %d\n", status);
++			PNM_INF("[HOST] PNM COMPRESSION FINISHED %d\n", status);
+ 	} else if (pnm_inst->opcode == CXL_PNM_OP_DECOMP_LOAD) {
+ 		status = inst_decomp(pnm_inst, out_len);
+ 
+ 		if (unlikely(log_enabled))
+-			pr_info("[HOST] PNM DECOMPRESSION FINISHED %d\n",
++			PNM_INF("[HOST] PNM DECOMPRESSION FINISHED %d\n",
+ 				status);
+ 	} else {
+-		pr_err("pnm opcode error %d\n", pnm_inst->opcode);
++		PNM_ERR("pnm opcode error %d\n", pnm_inst->opcode);
+ 		status = CXL_PNM_ERROR_INVALID_ARGUMENTS;
+ 	}
+ 
+@@ -307,7 +306,7 @@ static int page_compressor_param_set(const char *value,
+ 	char *svalue = strstrip((char *)value);
+ 
+ 	if (READ_ONCE(sim_is_active)) {
+-		pr_err("[pnm_sim] Unable to change compressor when simulator is active");
++		PNM_ERR("[pnm_sim] Unable to change compressor when simulator is active");
+ 		return -EPERM;
+ 	}
+ 
+@@ -320,8 +319,8 @@ static int page_compressor_param_set(const char *value,
+ 	} else {
+ 		// here we have specified compression algorithm
+ 		if (!check_compressor_support(svalue)) {
+-			pr_err("[FS] The compressor %s not available\n",
+-			       svalue);
++			PNM_ERR("[FS] The compressor %s not available\n",
++				svalue);
+ 			return -EINVAL;
+ 		}
+ 		pnm_functional_sim = true;
+@@ -369,7 +368,7 @@ int pnm_compress_unit(void *p)
+ 
+ 		if (READ_ONCE(unit->state) & RUNNING) {
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-C][%d] STATE [RUNNING] - READY TO RUN\n",
++				PNM_INF("[PNM-C][%d] STATE [RUNNING] - READY TO RUN\n",
+ 					unit->inst.tid);
+ 
+ 			/* for exception */
+@@ -378,7 +377,7 @@ int pnm_compress_unit(void *p)
+ 				WRITE_ONCE(unit->state, FAILED);
+ 
+ 				if (unlikely(log_enabled))
+-					pr_info("[PNM-C][%d] STATE [FAILED] - OPCODE ERROR\n",
++					PNM_INF("[PNM-C][%d] STATE [FAILED] - OPCODE ERROR\n",
+ 						unit->inst.tid);
+ 			}
+ 
+@@ -407,7 +406,7 @@ int pnm_compress_unit(void *p)
+ 			WRITE_ONCE(unit->done, true);
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-C][%d] STATE [DONE] - FINISH\n",
++				PNM_INF("[PNM-C][%d] STATE [DONE] - FINISH\n",
+ 					unit->inst.tid);
+ 
+ 			/* wait until the thread takes results */
+@@ -424,7 +423,7 @@ int pnm_compress_unit(void *p)
+ 						&pnm_ctrl->num_idle_comp_unit);
+ 
+ 					if (unlikely(log_enabled))
+-						pr_info("[PNM-C][%d] STATE [IDLE] - HOST GET RESULT\n",
++						PNM_INF("[PNM-C][%d] STATE [IDLE] - HOST GET RES\n",
+ 							unit->inst.tid);
+ 
+ 					break;
+@@ -437,7 +436,7 @@ int pnm_compress_unit(void *p)
+ 
+ 		if (READ_ONCE(unit->state) & FAILED) {
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-C][%d] STATE [FAILED]\n",
++				PNM_INF("[PNM-C][%d] STATE [FAILED]\n",
+ 					unit->inst.tid);
+ 
+ 			/* init for next execution */
+@@ -457,7 +456,7 @@ int pnm_compress_unit(void *p)
+ 			WRITE_ONCE(unit->state, IDLE);
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-C][%d] STATE [IDLE]\n",
++				PNM_INF("[PNM-C][%d] STATE [IDLE]\n",
+ 					unit->inst.tid);
+ 
+ 			/* update statistics of pnm unit */
+@@ -465,7 +464,7 @@ int pnm_compress_unit(void *p)
+ 			unit->num_failed++;
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-C][%d] IDLE UNITs %d\n",
++				PNM_INF("[PNM-C][%d] IDLE UNITs %d\n",
+ 					unit->inst.tid,
+ 					atomic_read(
+ 						&pnm_ctrl->num_idle_comp_unit));
+@@ -504,7 +503,7 @@ int pnm_decompress_unit(void *p)
+ 
+ 		if (READ_ONCE(unit->state) & RUNNING) {
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-D][%d] STATE [RUNNING] - READY TO RUN\n",
++				PNM_INF("[PNM-D][%d] STATE [RUNNING] - READY TO RUN\n",
+ 					unit->inst.tid);
+ 
+ 			/* for exception */
+@@ -513,7 +512,7 @@ int pnm_decompress_unit(void *p)
+ 				WRITE_ONCE(unit->state, FAILED);
+ 
+ 				if (unlikely(log_enabled))
+-					pr_info("[PNM-D][%d] STATE [FAILED] - OPCODE ERROR\n",
++					PNM_INF("[PNM-D][%d] STATE [FAILED] - OPCODE ERROR\n",
+ 						unit->inst.tid);
+ 			}
+ 
+@@ -542,7 +541,7 @@ int pnm_decompress_unit(void *p)
+ 			WRITE_ONCE(unit->done, true);
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-D][%d] STATE [DONE] - FINISH\n",
++				PNM_INF("[PNM-D][%d] STATE [DONE] - FINISH\n",
+ 					unit->inst.tid);
+ 
+ 			/* wait until the thread takes results */
+@@ -559,7 +558,7 @@ int pnm_decompress_unit(void *p)
+ 						&pnm_ctrl->num_idle_decomp_unit);
+ 
+ 					if (unlikely(log_enabled))
+-						pr_info("[PNM-D][%d] STATE [IDLE] - HOST GET RESULT\n",
++						PNM_INF("[PNM-D][%d] STATE [IDLE] - HOST GET RES\n",
+ 							unit->inst.tid);
+ 
+ 					break;
+@@ -572,7 +571,7 @@ int pnm_decompress_unit(void *p)
+ 
+ 		if (READ_ONCE(unit->state) == FAILED) {
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-D][%d] STATE [FAILED]\n",
++				PNM_INF("[PNM-D][%d] STATE [FAILED]\n",
+ 					unit->inst.tid);
+ 
+ 			/* init for next execution */
+@@ -592,14 +591,14 @@ int pnm_decompress_unit(void *p)
+ 			WRITE_ONCE(unit->state, IDLE);
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-D][%d] STATE [IDLE]\n",
++				PNM_INF("[PNM-D][%d] STATE [IDLE]\n",
+ 					unit->inst.tid);
+ 
+ 			unit->num_used++;
+ 			unit->num_failed++;
+ 
+ 			if (unlikely(log_enabled))
+-				pr_info("[PNM-D][%d] IDLE UNITs %d\n",
++				PNM_INF("[PNM-D][%d] IDLE UNITs %d\n",
+ 					unit->inst.tid,
+ 					atomic_read(
+ 						&pnm_ctrl->num_idle_decomp_unit));
+@@ -702,7 +701,7 @@ static void cxl_pnm_sim_shutdown(void)
+ 
+ void cxl_pnm_sim_exit(void)
+ {
+-	pr_info("[pnm_sim] simulator exit!\n");
++	PNM_INF("[pnm_sim] simulator exit!\n");
+ 	if (sim_is_active)
+ 		cxl_pnm_sim_shutdown();
+ }
+@@ -720,7 +719,7 @@ static void pnm_queue_gen(void)
+ 			inst_queue_depth * sizeof(struct instruction);
+ 		pnm_ctrl->c_q.head = 0;
+ 		pnm_ctrl->c_q.tail = 0;
+-		pr_info("[pnm_sim] compress_queue: 0x%p-0x%p %7d bytes\n",
++		PNM_INF("[pnm_sim] compress_queue: 0x%p-0x%p %7d bytes\n",
+ 			(void *)C_QUEUE_BASE_ADDR, (void *)C_QUEUE_BASE_ADDR,
+ 			C_QUEUE_SIZE);
+ 	}
+@@ -731,7 +730,7 @@ static void pnm_queue_gen(void)
+ 			inst_queue_depth * sizeof(struct instruction);
+ 		pnm_ctrl->d_q.head = 0;
+ 		pnm_ctrl->d_q.tail = 0;
+-		pr_info("[pnm_sim] decompress_queue: 0x%p-0x%p %7d bytes\n",
++		PNM_INF("[pnm_sim] decompress_queue: 0x%p-0x%p %7d bytes\n",
+ 			(void *)D_QUEUE_BASE_ADDR,
+ 			(void *)D_QUEUE_BASE_ADDR + D_QUEUE_SIZE, D_QUEUE_SIZE);
+ 	}
+@@ -742,7 +741,7 @@ static void pnm_queue_gen(void)
+ 			completion_queue_depth * sizeof(struct commit);
+ 		pnm_ctrl->f_q.head = 0;
+ 		pnm_ctrl->f_q.tail = 0;
+-		pr_info("[pnm_sim] completion_queue: 0x%p-0x%p %7d bytes\n",
++		PNM_INF("[pnm_sim] completion_queue: 0x%p-0x%p %7d bytes\n",
+ 			(void *)F_QUEUE_BASE_ADDR,
+ 			(void *)F_QUEUE_BASE_ADDR + F_QUEUE_SIZE, F_QUEUE_SIZE);
+ 	}
+@@ -781,10 +780,10 @@ static void pnm_thread_create(void)
+ 			kthread_bind(pnm_ctrl->compress[i].task_unit,
+ 				     pnm_ctrl->compress[i].core_id);
+ 			wake_up_process(pnm_ctrl->compress[i].task_unit);
+-			pr_info("[pnm_sim] compress unit[%d] generation succeeded\n",
++			PNM_INF("[pnm_sim] compress unit[%d] generation succeeded\n",
+ 				i);
+ 		} else {
+-			pr_info("[pnm_sim] compress unit[%d] generation failed\n",
++			PNM_INF("[pnm_sim] compress unit[%d] generation failed\n",
+ 				i);
+ 		}
+ 	}
+@@ -809,10 +808,10 @@ static void pnm_thread_create(void)
+ 			kthread_bind(pnm_ctrl->decompress[i].task_unit,
+ 				     pnm_ctrl->decompress[i].core_id);
+ 			wake_up_process(pnm_ctrl->decompress[i].task_unit);
+-			pr_info("[pnm_sim] decompress unit[%d] generation succeeded\n",
++			PNM_INF("[pnm_sim] decompress unit[%d] generation succeeded\n",
+ 				i);
+ 		} else {
+-			pr_info("[pnm_sim] decompress unit[%d] generation failed\n",
++			PNM_INF("[pnm_sim] decompress unit[%d] generation failed\n",
+ 				i);
+ 		}
+ 	}
+@@ -853,7 +852,7 @@ static int pnm_sim_init(void)
+ 	/* TODO: change from cache to wc/uc */
+ 	pnm_ctrl->hidden_pool =
+ 		ioremap_cache(HIDDEN_POOL_BASE_ADDR, HIDDEN_POOL_SIZE);
+-	pr_info("[pnm_sim] hidden_pool: 0x%p-0x%p %7ld bytes\n",
++	PNM_INF("[pnm_sim] hidden_pool: 0x%p-0x%p %7ld bytes\n",
+ 		(void *)HIDDEN_POOL_BASE_ADDR,
+ 		(void *)HIDDEN_POOL_BASE_ADDR + HIDDEN_POOL_SIZE,
+ 		HIDDEN_POOL_SIZE);
+@@ -879,7 +878,7 @@ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ 
+ 	if (enable_sim) {
+ 		WRITE_ONCE(sim_is_active, true);
+-		pr_info("[pnm_sim] pnm simulator engine loaded!\n");
++		PNM_INF("[pnm_sim] pnm simulator engine loaded!\n");
+ 		init_benchmark_data();
+ 		ret = init_procfs();
+ 		if (ret) {
+@@ -893,7 +892,7 @@ static int pnm_sim_setup(const char *val, const struct kernel_param *kp)
+ 		}
+ 		pnm_unit_gen();
+ 	} else {
+-		pr_info("[pnm_sim] pnm simulator stopped!\n");
++		PNM_INF("[pnm_sim] pnm simulator stopped!\n");
+ 		cxl_pnm_sim_shutdown();
+ 	}
+ 	return 0;
+diff --git a/drivers/pnm/log.h b/include/linux/pnm_log.h
+similarity index 64%
+rename from drivers/pnm/log.h
+rename to include/linux/pnm_log.h
+index 8027f3398..1697d9833 100644
+--- a/drivers/pnm/log.h
++++ b/include/linux/pnm_log.h
+@@ -1,15 +1,18 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+ #ifndef __PNM_LOG_H__
+ #define __PNM_LOG_H__
+ 
+ #include <linux/kernel.h>
+ 
+-#define PNM_DD_MARK "[PNM_RESOURCE_MGR]"
++#ifndef PNM_LOG_COMPONENT_MARK
++#error "PNM log component mark must be set"
++#endif
++#define PNM_LOG_MARK "[PNM]" PNM_LOG_COMPONENT_MARK
+ 
+-#define PNM_PRINT(level, fmt, ...)                                 \
+-	pr_##level(PNM_DD_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
++#define PNM_PRINT(level, fmt, ...)                                  \
++	pr_##level(PNM_LOG_MARK "[%s:%d] " fmt, __FILE__, __LINE__, \
+ 		   ##__VA_ARGS__)
+ #define PNM_ERR(fmt, ...) PNM_PRINT(err, fmt, ##__VA_ARGS__)
+ #define PNM_WRN(fmt, ...) PNM_PRINT(warn, fmt, ##__VA_ARGS__)
+diff --git a/lib/pnm/Makefile b/lib/pnm/Makefile
+index 28220cb26..4b35e397b 100644
+--- a/lib/pnm/Makefile
++++ b/lib/pnm/Makefile
+@@ -1,5 +1,8 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+ obj-$(CONFIG_PNM_LIB) += pnm_lib.o
++
++ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[LIB]\"
++
+ pnm_lib-y := pnm_alloc.o
+ pnm_lib-y += pnm_sched.o
+diff --git a/lib/pnm/log.h b/lib/pnm/log.h
+deleted file mode 100644
+index bb908692f..000000000
+--- a/lib/pnm/log.h
++++ /dev/null
+@@ -1,20 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+-
+-/* [TODO: @p.bred] MCS23-1586 Unify logs subsystem */
+-
+-#ifndef __PNM_LOG_H__
+-#define __PNM_LOG_H__
+-
+-#include <linux/kernel.h>
+-
+-#define PNM_MARK "[PNM]"
+-
+-#define PNM_PRINT(level, fmt, ...) \
+-	pr_##level(PNM_MARK "[%s:%d] " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+-#define PNM_ERR(fmt, ...) PNM_PRINT(err, fmt, ##__VA_ARGS__)
+-#define PNM_WRN(fmt, ...) PNM_PRINT(warn, fmt, ##__VA_ARGS__)
+-#define PNM_INF(fmt, ...) PNM_PRINT(info, fmt, ##__VA_ARGS__)
+-#define PNM_DBG(fmt, ...) PNM_PRINT(debug, fmt, ##__VA_ARGS__)
+-
+-#endif /* __PNM_LOG_H__ */
+diff --git a/lib/pnm/pnm_alloc.c b/lib/pnm/pnm_alloc.c
+index 5dd010227..73e2e1475 100644
+--- a/lib/pnm/pnm_alloc.c
++++ b/lib/pnm/pnm_alloc.c
+@@ -1,9 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+-#include "log.h"
+-
+ #include <linux/pnm_alloc.h>
++#include <linux/pnm_log.h>
+ #include <linux/range.h>
+ #include <linux/slab.h>
+ 
+diff --git a/lib/pnm/pnm_sched.c b/lib/pnm/pnm_sched.c
+index 91f012b7b..b020204b3 100644
+--- a/lib/pnm/pnm_sched.c
++++ b/lib/pnm/pnm_sched.c
+@@ -1,9 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2023 Samsung LTD. All rights reserved. */
+ 
+-#include "log.h"
+-
+ #include <linux/mutex.h>
++#include <linux/pnm_log.h>
+ #include <linux/pnm_sched.h>
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+diff --git a/lib/pnm/zswap/Makefile b/lib/pnm/zswap/Makefile
+index 7196a6d7c..c4ad7137d 100644
+--- a/lib/pnm/zswap/Makefile
++++ b/lib/pnm/zswap/Makefile
+@@ -1,4 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+ obj-$(CONFIG_PNM_ZSWAP) += pnm_zswap_lib.o
++
++ccflags-y += -DPNM_LOG_COMPONENT_MARK=\"[LIB_ZSWAP]\"
++
+ pnm_zswap_lib-y := pnm_zswap_lib.o
+diff --git a/lib/pnm/zswap/pnm_zswap_lib.c b/lib/pnm/zswap/pnm_zswap_lib.c
+index 1368ea4cf..4ee2646a5 100644
+--- a/lib/pnm/zswap/pnm_zswap_lib.c
++++ b/lib/pnm/zswap/pnm_zswap_lib.c
+@@ -17,6 +17,7 @@
+ #include <linux/module.h> /* needed for EXPORT_SYMBOL */
+ #include <linux/moduleparam.h> /* needed for module_param */
+ #include <linux/pnm/cxl_zswap.h>
++#include <linux/pnm_log.h>
+ #include <linux/slab.h> /* kmalloc(), kfree() */
+ #include <linux/spinlock.h>
+ #include <linux/types.h> /* needed for size_t, gfp_t type */
+@@ -147,7 +148,7 @@ int pnm_run(const char *type, enum cxl_pnm_op_e opcode, const unsigned char *in,
+ 		driver = pnm_get_driver(type);
+ 	}
+ 	if (!driver) {
+-		pr_err("no driver for type %s\n", type);
++		PNM_ERR("no driver for type %s\n", type);
+ 		return -1;
+ 	}
+ 
+@@ -182,12 +183,12 @@ int dma_request_chann(void)
+ 	dma_cap_set(DMA_MEMCPY, mask);
+ 	chan = dma_request_channel(mask, NULL, NULL);
+ 	if (chan == NULL) {
+-		pr_err("[host]err: failed dma_request_channel. %s:%d\n",
+-		       __FILE__, __LINE__);
++		PNM_ERR("[host]err: failed dma_request_channel. %s:%d\n",
++			__FILE__, __LINE__);
+ 		return -1;
+ 	}
+ 
+-	pr_info("[pnm_lib] request chan got channel %d! %s:%d\n", chan->chan_id,
++	PNM_INF("[pnm_lib] request chan got channel %d! %s:%d\n", chan->chan_id,
+ 		__FILE__, __LINE__);
+ 	return 0;
+ }
+@@ -210,21 +211,21 @@ int dma_copy_page(struct page *src_page, struct page *dst_page)
+ 	int ret = 0;
+ 
+ 	if (!chan) {
+-		pr_err("[host]err: no dma channel, %s:%d\n", __FILE__,
+-		       __LINE__);
++		PNM_ERR("[host]err: no dma channel, %s:%d\n", __FILE__,
++			__LINE__);
+ 		return -1;
+ 	}
+ 	dma_src = dma_map_page(chan->device->dev, src_page, 0, PAGE_SIZE,
+ 			       DMA_TO_DEVICE);
+ 	if (dma_mapping_error(chan->device->dev, dma_src)) {
+-		pr_err("[host]dma map err:%s:%d\n", __FILE__, __LINE__);
++		PNM_ERR("[host]dma map err:%s:%d\n", __FILE__, __LINE__);
+ 		return -1;
+ 	}
+ 
+ 	dma_dst = dma_map_page(chan->device->dev, dst_page, 0, PAGE_SIZE,
+ 			       DMA_FROM_DEVICE);
+ 	if (dma_mapping_error(chan->device->dev, dma_dst)) {
+-		pr_err("[host]dma map err:%s:%d\n", __FILE__, __LINE__);
++		PNM_ERR("[host]dma map err:%s:%d\n", __FILE__, __LINE__);
+ 		dma_unmap_page(chan->device->dev, dma_src, PAGE_SIZE,
+ 			       DMA_TO_DEVICE);
+ 		return -1;
+@@ -234,8 +235,8 @@ int dma_copy_page(struct page *src_page, struct page *dst_page)
+ 				       DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
+ 
+ 	if (!tx) {
+-		pr_err("[host] err:Failed to prepare DMA memcpy, %s:%d\n",
+-		       __FILE__, __LINE__);
++		PNM_ERR("[host] err:Failed to prepare DMA memcpy, %s:%d\n",
++			__FILE__, __LINE__);
+ 		ret = -1;
+ 		goto out;
+ 	}
+@@ -243,15 +244,15 @@ int dma_copy_page(struct page *src_page, struct page *dst_page)
+ 	cookie = dmaengine_submit(tx);
+ 
+ 	if (dma_submit_error(cookie)) {
+-		pr_err("[host] err: Failed to do DMA tx_submit, %s:%d\n",
+-		       __FILE__, __LINE__);
++		PNM_ERR("[host] err: Failed to do DMA tx_submit, %s:%d\n",
++			__FILE__, __LINE__);
+ 		ret = -1;
+ 		goto out;
+ 	}
+ 
+ 	if (dma_sync_wait(chan, cookie) != DMA_COMPLETE) {
+-		pr_err("[host] err: Failed to complete transaction, %s:%d\n",
+-		       __FILE__, __LINE__);
++		PNM_ERR("[host] err: Failed to complete transaction, %s:%d\n",
++			__FILE__, __LINE__);
+ 		ret = -1;
+ 		goto out;
+ 	}
+-- 
+2.34.1
+

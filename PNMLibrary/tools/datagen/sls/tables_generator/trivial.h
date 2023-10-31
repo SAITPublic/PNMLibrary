@@ -22,6 +22,8 @@
 #include <utility>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Template for trivial tables generator with variable generation
  * strategy */
 template <typename T, typename EntryGen>
@@ -50,5 +52,7 @@ private:
 
   EntryGen entry_generator_;
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_TRIVIAL_GENERATOR_H

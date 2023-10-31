@@ -9,7 +9,7 @@ start
 Prepare InRange requests
 Prepare InList requests (predictor lists);
 
-:device = new IMDBDevice();
+:device = new ImdbDevice();
 
 |API|
 :Init SFR Registers

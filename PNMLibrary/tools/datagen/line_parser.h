@@ -21,6 +21,8 @@
 #include <unordered_map>
 #include <utility>
 
+namespace tools::gen {
+
 /*! \brief Line parser for ini file entry. */
 class LineParser {
 public:
@@ -52,5 +54,7 @@ public:
 private:
   std::unordered_map<std::string, parse_closure> function_set_;
 };
+
+} // namespace tools::gen
 
 #endif // SLS_LINE_PARSER_H

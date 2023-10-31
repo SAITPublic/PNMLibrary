@@ -1,7 +1,7 @@
 From 86af1e19e88f6b35e1a1b6aac08919624719753b Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Fri, 14 Oct 2022 18:58:52 +0300
-Subject: [PATCH 04/23] Test for AXDIMM pytorch module
+Subject: [PATCH 04/24] Test for AXDIMM pytorch module
 
 Resolves: AXDIMM-316
 

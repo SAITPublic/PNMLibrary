@@ -1,0 +1,838 @@
+From ec56c583f69b04602db88d83396c19874bef5ab8 Mon Sep 17 00:00:00 2001
+From: Bogdan Palkin <b.palkin@samsung.com>
+Date: Mon, 23 Oct 2023 07:30:22 +0000
+Subject: [PATCH 216/225] [sls] Refactor sls cunit_scheduler
+
+Remove unnecessary rd_sched. Prepare for use cunit_scheduler
+with unified resource manager.
+
+Signed-off-by: Bogdan Palkin <b.palkin@samsung.com>
+---
+ drivers/pnm/sls_resource/Makefile          |   2 +-
+ drivers/pnm/sls_resource/cunit_sched.c     | 105 +++++++++++++++
+ drivers/pnm/sls_resource/cunit_sched.h     |  28 ++++
+ drivers/pnm/sls_resource/cunit_scheduler.c | 145 ---------------------
+ drivers/pnm/sls_resource/cunit_scheduler.h |  30 -----
+ drivers/pnm/sls_resource/process_manager.c | 133 +++++--------------
+ drivers/pnm/sls_resource/process_manager.h |   6 +-
+ drivers/pnm/sls_resource/sls.c             |  18 +--
+ drivers/pnm/sls_resource/sysfs/cunits.c    |  11 +-
+ drivers/pnm/sls_resource/sysfs/sysfs.c     |   9 +-
+ include/uapi/linux/sls_resources.h         |  25 ++--
+ 11 files changed, 200 insertions(+), 312 deletions(-)
+ create mode 100644 drivers/pnm/sls_resource/cunit_sched.c
+ create mode 100644 drivers/pnm/sls_resource/cunit_sched.h
+ delete mode 100644 drivers/pnm/sls_resource/cunit_scheduler.c
+ delete mode 100644 drivers/pnm/sls_resource/cunit_scheduler.h
+
+diff --git a/drivers/pnm/sls_resource/Makefile b/drivers/pnm/sls_resource/Makefile
+index aa9ced8e5..d78e9e9e6 100644
+--- a/drivers/pnm/sls_resource/Makefile
++++ b/drivers/pnm/sls_resource/Makefile
+@@ -13,7 +13,7 @@ sysfs-y += sysfs/topology.o
+ topo-y := topo/params.o
+ 
+ sls_resource-y := allocator.o
+-sls_resource-y += cunit_scheduler.o
++sls_resource-y += cunit_sched.o
+ sls_resource-y += mem_info.o
+ sls_resource-y += process_manager.o
+ sls_resource-y += sls.o
+diff --git a/drivers/pnm/sls_resource/cunit_sched.c b/drivers/pnm/sls_resource/cunit_sched.c
+new file mode 100644
+index 000000000..780dbdae4
+--- /dev/null
++++ b/drivers/pnm/sls_resource/cunit_sched.c
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
++
++#include "cunit_sched.h"
++#include "process_manager.h"
++#include "topo/params.h"
++
++#include <linux/bitops.h>
++#include <linux/pnm/log.h>
++#include <linux/pnm/sched.h>
++#include <linux/slab.h>
++#include <linux/uaccess.h>
++#include <linux/wait.h>
++
++/* this timeout value was tunned for FPGA, in order to avoid hangs, which
++ * presumably come from userspace cunit acquire attempts in a loop
++ */
++#define RETRY_TIMEOUT_NS (100000)
++
++static struct pnm_sched sls_sched;
++
++static int get_sls_cunit(struct file *filp, uint arg)
++{
++	int ret = pnm_sched_get_free_cunit(&sls_sched, arg);
++
++	if (ret >= 0) /* got cunit, add to process resources */
++		sls_proc_register_cunit(filp, ret);
++
++	return ret;
++}
++
++static int release_sls_cunit(struct file *filp, uint arg)
++{
++	int ret = sls_proc_remove_cunit(filp, arg);
++
++	if (likely(!ret))
++		ret = pnm_sched_release_and_wakeup(&sls_sched, arg);
++
++	return ret;
++}
++
++void reset_cunit_sched(void)
++{
++	PNM_DBG("Resetting sls scheduler\n");
++	pnm_sched_reset(&sls_sched);
++}
++
++int init_cunit_sched(void)
++{
++	int err;
++
++	PNM_DBG("Initializing sls scheduler\n");
++	err = pnm_sched_init(&sls_sched, sls_topo()->nr_cunits,
++			     RETRY_TIMEOUT_NS);
++
++	if (err) {
++		PNM_ERR("Failed to init sls scheduler\n");
++		return err;
++	}
++
++	return 0;
++}
++
++void destroy_cunit_sched(void)
++{
++	PNM_DBG("Destroy sls scheduler\n");
++	pnm_sched_cleanup(&sls_sched);
++}
++
++int cunit_sched_ioctl(struct file *filp, uint cmd, uint arg)
++{
++	switch (cmd) {
++	case GET_CUNIT:
++		return get_sls_cunit(filp, arg);
++	case RELEASE_CUNIT:
++		return release_sls_cunit(filp, arg);
++	}
++
++	return -ENOTTY;
++}
++
++bool cunit_sched_state(uint8_t cunit)
++{
++	return pnm_sched_get_cunit_state(&sls_sched, cunit);
++}
++
++uint64_t cunit_sched_acq_cnt(uint8_t cunit)
++{
++	return pnm_sched_get_cunit_acquisition_cnt(&sls_sched, cunit);
++}
++
++uint64_t cunit_sched_acq_timeout(void)
++{
++	return pnm_sched_get_acquisition_timeout(&sls_sched);
++}
++
++void cunit_sched_set_acq_timeout(uint64_t timeout)
++{
++	pnm_sched_set_acquisition_timeout(&sls_sched, timeout);
++}
++
++int release_cunit(uint8_t cunit)
++{
++	return pnm_sched_release_cunit(&sls_sched, cunit);
++}
+diff --git a/drivers/pnm/sls_resource/cunit_sched.h b/drivers/pnm/sls_resource/cunit_sched.h
+new file mode 100644
+index 000000000..6b02c5432
+--- /dev/null
++++ b/drivers/pnm/sls_resource/cunit_sched.h
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
++
++#ifndef __SLS_CUNIT_SCHEDULER_H__
++#define __SLS_CUNIT_SCHEDULER_H__
++
++#include <linux/fs.h>
++#include <linux/sls_resources.h>
++#include <linux/types.h>
++
++void reset_cunit_sched(void);
++int init_cunit_sched(void);
++void destroy_cunit_sched(void);
++int cunit_sched_ioctl(struct file *filp, uint cmd, uint arg);
++
++/* these functions are intended for direct cunit status manipulation from
++ * resource manager, in order to free resources which were not freed by
++ * user space process itself
++ */
++int release_cunit(uint8_t cunit);
++
++bool cunit_sched_state(uint8_t cunit);
++uint64_t cunit_sched_acq_cnt(uint8_t cunit);
++
++uint64_t cunit_sched_acq_timeout(void);
++void cunit_sched_set_acq_timeout(uint64_t timeout);
++
++#endif /* __SLS_CUNIT_SCHEDULER_H__ */
+diff --git a/drivers/pnm/sls_resource/cunit_scheduler.c b/drivers/pnm/sls_resource/cunit_scheduler.c
+deleted file mode 100644
+index f33404514..000000000
+--- a/drivers/pnm/sls_resource/cunit_scheduler.c
++++ /dev/null
+@@ -1,145 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+-
+-#include "cunit_scheduler.h"
+-#include "process_manager.h"
+-#include "topo/params.h"
+-
+-#include <linux/bitops.h>
+-#include <linux/pnm/log.h>
+-#include <linux/pnm/sched.h>
+-#include <linux/slab.h>
+-#include <linux/uaccess.h>
+-#include <linux/wait.h>
+-
+-/* this timeout value was tunned for FPGA, in order to avoid hangs, which
+- * presumably come from userspace cunit acquire attempts in a loop
+- */
+-#define RETRY_TIMEOUT_NS (100000)
+-
+-struct sls_sched {
+-	struct pnm_sched wr_sched;
+-	struct pnm_sched rd_sched;
+-};
+-
+-static struct sls_sched sls_sched;
+-
+-void reset_cunit_scheduler(void)
+-{
+-	PNM_DBG("Resetting sls write scheduler\n");
+-	pnm_sched_reset(&sls_sched.wr_sched);
+-	PNM_DBG("Resetting sls read scheduler\n");
+-	pnm_sched_reset(&sls_sched.rd_sched);
+-}
+-
+-int init_cunit_scheduler(void)
+-{
+-	int err;
+-
+-	PNM_DBG("Initializing sls write scheduler\n");
+-	err = pnm_sched_init(&sls_sched.wr_sched, sls_topo()->nr_cunits,
+-			     RETRY_TIMEOUT_NS);
+-
+-	if (err) {
+-		PNM_ERR("Failed to init sls write scheduler\n");
+-		return err;
+-	}
+-
+-	PNM_DBG("Initializing sls read scheduler\n");
+-	err = pnm_sched_init(&sls_sched.rd_sched, sls_topo()->nr_cunits,
+-			     RETRY_TIMEOUT_NS);
+-	if (err) {
+-		PNM_ERR("Failed to init sls read scheduler\n");
+-		pnm_sched_cleanup(&sls_sched.wr_sched);
+-		return err;
+-	}
+-
+-	return 0;
+-}
+-
+-void destroy_cunit_scheduler(void)
+-{
+-	PNM_DBG("Destroy sls write scheduler\n");
+-	pnm_sched_cleanup(&sls_sched.wr_sched);
+-	PNM_DBG("Destroy sls read scheduler\n");
+-	pnm_sched_cleanup(&sls_sched.rd_sched);
+-}
+-
+-static int get_cunit(uint cmd, uint arg)
+-{
+-	if (cmd == GET_CUNIT_FOR_READ)
+-		return pnm_sched_get_free_cunit(&sls_sched.rd_sched,
+-						BIT_MASK(arg));
+-	else if (cmd == GET_CUNIT_FOR_WRITE)
+-		return pnm_sched_get_free_cunit(&sls_sched.wr_sched, arg);
+-
+-	PNM_ERR("Unknown cunit operation cmd [%d]\n", cmd);
+-	return -EINVAL;
+-}
+-
+-int get_sls_cunit(struct file *filp, uint cmd, uint arg)
+-{
+-	int ret = get_cunit(cmd, arg);
+-
+-	if (ret >= 0) /* got cunit, add to process resources */
+-		sls_proc_register_cunit(filp, ret, cmd);
+-
+-	return ret;
+-}
+-
+-bool cunit_scheduler_write_state(uint8_t cunit)
+-{
+-	return pnm_sched_get_cunit_state(&sls_sched.wr_sched, cunit);
+-}
+-
+-uint64_t cunit_scheduler_write_acquisition_cnt(uint8_t cunit)
+-{
+-	return pnm_sched_get_cunit_acquisition_cnt(&sls_sched.wr_sched, cunit);
+-}
+-
+-uint64_t cunit_scheduler_write_acquisition_timeout(void)
+-{
+-	return pnm_sched_get_acquisition_timeout(&sls_sched.wr_sched);
+-}
+-
+-void cunit_scheduler_set_write_acquisition_timeout(uint64_t timeout)
+-{
+-	pnm_sched_set_acquisition_timeout(&sls_sched.wr_sched, timeout);
+-	pnm_sched_set_acquisition_timeout(&sls_sched.rd_sched, timeout);
+-}
+-
+-static int release_and_wakeup(uint cmd, uint arg)
+-{
+-	int ret;
+-
+-	if (cmd == RELEASE_WRITE_CUNIT)
+-		ret = pnm_sched_release_and_wakeup(&sls_sched.wr_sched, arg);
+-	else if (cmd == RELEASE_READ_CUNIT)
+-		ret = pnm_sched_release_and_wakeup(&sls_sched.rd_sched, arg);
+-	else {
+-		PNM_ERR("Unknown cunit operation cmd [%d]\n", cmd);
+-		return -EINVAL;
+-	}
+-
+-	return ret;
+-}
+-
+-int release_sls_cunit(struct file *filp, uint cmd, uint arg)
+-{
+-	int ret = sls_proc_remove_cunit(filp, arg, cmd);
+-
+-	if (likely(!ret))
+-		ret = release_and_wakeup(cmd, arg);
+-
+-	return ret;
+-}
+-
+-int release_cunit_write(uint8_t cunit)
+-{
+-	return pnm_sched_release_cunit(&sls_sched.wr_sched, cunit);
+-}
+-
+-int release_cunit_read(uint8_t cunit)
+-{
+-	return pnm_sched_release_cunit(&sls_sched.rd_sched, cunit);
+-}
+diff --git a/drivers/pnm/sls_resource/cunit_scheduler.h b/drivers/pnm/sls_resource/cunit_scheduler.h
+deleted file mode 100644
+index b3eaadf62..000000000
+--- a/drivers/pnm/sls_resource/cunit_scheduler.h
++++ /dev/null
+@@ -1,30 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright(c) 2022 Samsung LTD. All rights reserved. */
+-
+-#ifndef __SLS_RANK_SCHEDULER_H__
+-#define __SLS_RANK_SCHEDULER_H__
+-
+-#include <linux/fs.h>
+-#include <linux/sls_resources.h>
+-#include <linux/types.h>
+-
+-void reset_cunit_scheduler(void);
+-int init_cunit_scheduler(void);
+-void destroy_cunit_scheduler(void);
+-int get_sls_cunit(struct file *filp, uint cmd, uint arg);
+-int release_sls_cunit(struct file *filp, uint cmd, uint arg);
+-
+-/* these functions are intended for direct cunit status manipulation from
+- * resource manager, in order to free resources which were not freed by
+- * user space process itself
+- */
+-int release_cunit_write(uint8_t cunit);
+-int release_cunit_read(uint8_t cunit);
+-
+-bool cunit_scheduler_write_state(uint8_t cunit);
+-uint64_t cunit_scheduler_write_acquisition_cnt(uint8_t cunit);
+-
+-uint64_t cunit_scheduler_write_acquisition_timeout(void);
+-void cunit_scheduler_set_write_acquisition_timeout(uint64_t timeout);
+-
+-#endif
+diff --git a/drivers/pnm/sls_resource/process_manager.c b/drivers/pnm/sls_resource/process_manager.c
+index 9cfc4f283..6d30089d1 100644
+--- a/drivers/pnm/sls_resource/process_manager.c
++++ b/drivers/pnm/sls_resource/process_manager.c
+@@ -3,7 +3,7 @@
+ 
+ #include "process_manager.h"
+ #include "allocator.h"
+-#include "cunit_scheduler.h"
++#include "cunit_sched.h"
+ 
+ #include <linux/pnm/log.h>
+ #include <linux/sched.h>
+@@ -18,8 +18,7 @@ struct sls_proc_desc {
+ /* resources allocated for particular process */
+ struct sls_proc_resources {
+ 	struct rb_root alloc_desc_tree;
+-	unsigned long cunit_write_mask;
+-	unsigned long cunit_read_mask;
++	unsigned long cunit_mask;
+ 	/* this counter needed because release f_op is called on each close
+ 	 * syscall, sometimes userspace process can just open/close device
+ 	 * for reset ioctl purpose. take in mind this counter should be accessed
+@@ -53,12 +52,6 @@ static struct process_manager proc_mgr = {
+ 	.proc_list_lock = __MUTEX_INITIALIZER(proc_mgr.proc_list_lock)
+ };
+ 
+-enum cunit_access_type {
+-	CUNIT_ACCESS_RD,
+-	CUNIT_ACCESS_WR,
+-	CUNIT_ACCESS_INVAL,
+-};
+-
+ static inline bool sls_alloc_less(struct pnm_allocation a,
+ 				  struct pnm_allocation b)
+ {
+@@ -111,21 +104,6 @@ static bool desc_insert(struct rb_root *root, struct sls_proc_desc *proc_desc)
+ 	return true;
+ }
+ 
+-static inline enum cunit_access_type get_cunit_access_type(unsigned int cmd)
+-{
+-	if (cmd == GET_CUNIT_FOR_WRITE || cmd == RELEASE_WRITE_CUNIT)
+-		return CUNIT_ACCESS_WR;
+-	if (cmd == GET_CUNIT_FOR_READ || cmd == RELEASE_READ_CUNIT)
+-		return CUNIT_ACCESS_RD;
+-
+-	return CUNIT_ACCESS_INVAL;
+-}
+-
+-static inline const char *cunit_access_type_to_str(enum cunit_access_type type)
+-{
+-	return type == CUNIT_ACCESS_RD ? "rd" : "wr";
+-}
+-
+ static pid_t get_current_process_id(void)
+ {
+ 	/*
+@@ -137,7 +115,7 @@ static pid_t get_current_process_id(void)
+ 
+ static bool has_resources_leaked(struct sls_proc_resources *proc_res)
+ {
+-	return proc_res->cunit_write_mask || proc_res->cunit_read_mask ||
++	return proc_res->cunit_mask ||
+ 	       !RB_EMPTY_ROOT(&proc_res->alloc_desc_tree);
+ }
+ 
+@@ -150,34 +128,28 @@ static void track_leaked_resources(struct process_manager *mgr,
+ 	atomic64_inc(&mgr->leaked);
+ 	list_add(&proc_res->list, &mgr->leaked_process_list);
+ 
+-	PNM_DBG("Tracked leakage by pid: %d, tid: %d; cunit_rw_mask: %lu, cunit_rd_mask: %lu\n",
+-		get_current_process_id(), current->pid,
+-		proc_res->cunit_write_mask, proc_res->cunit_read_mask);
++	PNM_DBG("Tracked leakage by pid: %d, tid: %d; cunit_mask: %lu\n",
++		get_current_process_id(), current->pid, proc_res->cunit_mask);
+ 
+ 	for (node = rb_first(&proc_res->alloc_desc_tree); node;
+ 	     node = rb_next(node)) {
+ 		desc = rb_entry(node, struct sls_proc_desc, node);
+-		PNM_DBG("Leaked memory under desc[cunit = %u, addr = %llu]\n",
++		PNM_DBG("Leaked memory under desc[cunit = %hhu, addr = %llu]\n",
+ 			desc->alloc.memory_pool, desc->alloc.addr);
+ 	}
+ }
+ 
+-static bool release_cunit_mask(unsigned long *cunit_mask,
+-			       enum cunit_access_type type)
++static bool release_cunit_mask(unsigned long *cunit_mask)
+ {
+ 	bool failed = false;
+ 	unsigned long bit_index;
+ 
+ 	while (*cunit_mask) {
+ 		bit_index = ffs(*cunit_mask) - 1;
+-		if (type == CUNIT_ACCESS_WR)
+-			failed |= (release_cunit_write(bit_index) != bit_index);
+-		else
+-			failed |= (release_cunit_read(bit_index) != bit_index);
++		failed |= (release_cunit(bit_index) != bit_index);
+ 		clear_bit(bit_index, cunit_mask);
+-		PNM_INF("Abnormal release cunit_%s[%lu], pid: %d, tid: %d\n",
+-			cunit_access_type_to_str(type), bit_index,
+-			get_current_process_id(), current->pid);
++		PNM_INF("Abnormal release cunit[%lu], pid: %d, tid: %d\n",
++			bit_index, get_current_process_id(), current->pid);
+ 	}
+ 
+ 	return failed;
+@@ -193,10 +165,7 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 	bool failed = false;
+ 
+ 	/* handle unreleased cunits */
+-	failed |= release_cunit_mask(&proc_res->cunit_write_mask,
+-				     CUNIT_ACCESS_WR);
+-	failed |=
+-		release_cunit_mask(&proc_res->cunit_read_mask, CUNIT_ACCESS_RD);
++	failed |= release_cunit_mask(&proc_res->cunit_mask);
+ 
+ 	/* handle unreleased allocation descriptors */
+ 	while ((next = rb_first(&proc_res->alloc_desc_tree))) {
+@@ -216,7 +185,7 @@ static int release_process_resources(struct sls_proc_resources *proc_res)
+ 
+ 			failed |= deallocate_memory_unsafe(desc_node->alloc) !=
+ 				  0;
+-			PNM_INF("Abnormal release desc[cunit=%u, offset=%llu],pid:%d,tid:%d\n",
++			PNM_INF("Abnormal release desc[cunit=%hhu, offset=%llu],pid:%d,tid:%d\n",
+ 				desc_node->alloc.memory_pool,
+ 				desc_node->alloc.addr, get_current_process_id(),
+ 				current->pid);
+@@ -287,10 +256,8 @@ int release_sls_process(struct file *filp)
+ 	return err_code;
+ }
+ 
+-static int set_cunit_status(struct file *filp, struct process_manager *mgr,
+-			    enum cunit_access_type type, int cunit, bool set)
++static int set_cunit_status(struct file *filp, uint8_t cunit, bool set)
+ {
+-	unsigned long *cunit_mask;
+ 	struct sls_proc_resources *proc_res = NULL;
+ 
+ 	if (!filp)
+@@ -301,63 +268,37 @@ static int set_cunit_status(struct file *filp, struct process_manager *mgr,
+ 	if (proc_res == NULL)
+ 		return -EINVAL;
+ 
+-	mutex_lock(&proc_res->sls_proc_lock);
+-	{
+-		/* get read or write mask according to request */
+-		cunit_mask = type == CUNIT_ACCESS_RD ?
+-				     &proc_res->cunit_read_mask :
+-				     &proc_res->cunit_write_mask;
+-		/* set or unset cunit's bit according to request */
+-		assign_bit(cunit, cunit_mask, set);
+-	}
+-	mutex_unlock(&proc_res->sls_proc_lock);
++	/* set or unset cunit's bit according to request */
++	assign_bit(cunit, &proc_res->cunit_mask, set);
+ 	return 0;
+ }
+ 
+-int sls_proc_register_cunit(struct file *filp, int cunit, unsigned int cmd)
++int sls_proc_register_cunit(struct file *filp, uint8_t cunit)
+ {
+-	enum cunit_access_type cunit_type = get_cunit_access_type(cmd);
+-
+-	if (unlikely(cunit_type == CUNIT_ACCESS_INVAL)) {
+-		PNM_ERR("Unknown cunit type\n");
+-		return -1;
+-	}
+-
+-	PNM_DBG("Registering cunit_%s[%d], pid: %d, tid: %d\n",
+-		cunit_access_type_to_str(cunit_type), cunit,
++	PNM_DBG("Registering cunit[%hhu], pid: %d, tid: %d\n", cunit,
+ 		get_current_process_id(), current->pid);
+-	if (set_cunit_status(filp, &proc_mgr, cunit_type, cunit, true)) {
+-		PNM_ERR("Fail to register cunit_%s[%d], pid: %d, tid: %d\n",
+-			cunit_access_type_to_str(cunit_type), cunit,
+-			get_current_process_id(), current->pid);
++	if (set_cunit_status(filp, cunit, true)) {
++		PNM_ERR("Fail to register cunit[%hhu], pid: %d, tid: %d\n",
++			cunit, get_current_process_id(), current->pid);
+ 		return -1;
+ 	}
+ 	return 0;
+ }
+ 
+-int sls_proc_remove_cunit(struct file *filp, int cunit, unsigned int cmd)
++int sls_proc_remove_cunit(struct file *filp, uint8_t cunit)
+ {
+-	int cunit_type = get_cunit_access_type(cmd);
+-
+-	if (unlikely(cunit_type == CUNIT_ACCESS_INVAL)) {
+-		PNM_ERR("Unknown cunit type\n");
+-		return -1;
+-	}
+-
+-	PNM_DBG("Removing cunit_%s[%d], pid: %d, tid: %d\n",
+-		cunit_access_type_to_str(cunit_type), cunit,
++	PNM_DBG("Removing cunit[%hhu], pid: %d, tid: %d\n", cunit,
+ 		get_current_process_id(), current->pid);
+-	if (set_cunit_status(filp, &proc_mgr, cunit_type, cunit, false)) {
+-		PNM_ERR("Fail to remove cunit_%s[%d], pid: %d, tid: %d\n",
+-			cunit_access_type_to_str(cunit_type), cunit,
++	if (set_cunit_status(filp, cunit, false)) {
++		PNM_ERR("Fail to remove cunit[%hhu], pid: %d, tid: %d\n", cunit,
+ 			get_current_process_id(), current->pid);
+ 		return -1;
+ 	}
+ 	return 0;
+ }
+ 
+-static int update_alloc_tree(struct file *filp, struct process_manager *mgr,
+-			     struct pnm_allocation alloc, bool is_registration)
++static int update_alloc_tree(struct file *filp, struct pnm_allocation alloc,
++			     bool is_registration)
+ {
+ 	int err_code = 0;
+ 	struct sls_proc_resources *proc_res = NULL;
+@@ -393,25 +334,23 @@ static int update_alloc_tree(struct file *filp, struct process_manager *mgr,
+ 	return err_code;
+ }
+ 
+-static int register_allocation(struct file *filp, struct process_manager *mgr,
+-			       struct pnm_allocation alloc)
++static int register_allocation(struct file *filp, struct pnm_allocation alloc)
+ {
+-	return update_alloc_tree(filp, mgr, alloc, true);
++	return update_alloc_tree(filp, alloc, true);
+ }
+ 
+-static int unregister_allocation(struct file *filp, struct process_manager *mgr,
+-				 struct pnm_allocation alloc)
++static int unregister_allocation(struct file *filp, struct pnm_allocation alloc)
+ {
+-	return update_alloc_tree(filp, mgr, alloc, false);
++	return update_alloc_tree(filp, alloc, false);
+ }
+ 
+ int sls_proc_register_alloc(struct file *filp, struct pnm_allocation alloc)
+ {
+-	PNM_DBG("Registering allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
++	PNM_DBG("Registering allocation, desc[cunit = %hhu, addr = %llu], pid: %d, tid: %d\n",
+ 		alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 		current->pid);
+-	if (register_allocation(filp, &proc_mgr, alloc)) {
+-		PNM_ERR("Fail to register cunit: %u, addr: %llu, pid: %d, tid: %d\n",
++	if (register_allocation(filp, alloc)) {
++		PNM_ERR("Fail to register cunit: %hhu, addr: %llu, pid: %d, tid: %d\n",
+ 			alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 			current->pid);
+ 		return -1;
+@@ -421,11 +360,11 @@ int sls_proc_register_alloc(struct file *filp, struct pnm_allocation alloc)
+ 
+ int sls_proc_remove_alloc(struct file *filp, struct pnm_allocation alloc)
+ {
+-	PNM_DBG("Removing allocation, desc[cunit = %u, addr = %llu], pid: %d, tid: %d\n",
++	PNM_DBG("Removing allocation, desc[cunit = %hhu, addr = %llu], pid: %d, tid: %d\n",
+ 		alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 		current->pid);
+-	if (unregister_allocation(filp, &proc_mgr, alloc)) {
+-		PNM_ERR("Fail to remove cunit: %u, addr: %llu, pid: %d, tid: %d\n",
++	if (unregister_allocation(filp, alloc)) {
++		PNM_ERR("Fail to remove cunit: %hhu, addr: %llu, pid: %d, tid: %d\n",
+ 			alloc.memory_pool, alloc.addr, get_current_process_id(),
+ 			current->pid);
+ 		return -1;
+diff --git a/drivers/pnm/sls_resource/process_manager.h b/drivers/pnm/sls_resource/process_manager.h
+index ceb9b7d2c..65e54538c 100644
+--- a/drivers/pnm/sls_resource/process_manager.h
++++ b/drivers/pnm/sls_resource/process_manager.h
+@@ -5,7 +5,7 @@
+ #define __SLS_PROCESS_MANAGER_H__
+ 
+ #include "allocator.h"
+-#include "cunit_scheduler.h"
++#include "cunit_sched.h"
+ 
+ #include <linux/fs.h>
+ #include <linux/list.h>
+@@ -21,11 +21,11 @@ int release_sls_process(struct file *filp);
+ 
+ /* functions for adding allocation/cunits into process's resources data structure*/
+ int sls_proc_register_alloc(struct file *filp, struct pnm_allocation alloc);
+-int sls_proc_register_cunit(struct file *filp, int cunit, unsigned int cmd);
++int sls_proc_register_cunit(struct file *filp, uint8_t cunit);
+ 
+ /* function for removing allocation/cunits from process's resources data structure*/
+ int sls_proc_remove_alloc(struct file *filp, struct pnm_allocation alloc);
+-int sls_proc_remove_cunit(struct file *filp, int cunit, unsigned int cmd);
++int sls_proc_remove_cunit(struct file *filp, uint8_t cunit);
+ 
+ int sls_proc_manager_cleanup_on(void);
+ void sls_proc_manager_cleanup_off(void);
+diff --git a/drivers/pnm/sls_resource/sls.c b/drivers/pnm/sls_resource/sls.c
+index d1134ff81..8cb0e4082 100644
+--- a/drivers/pnm/sls_resource/sls.c
++++ b/drivers/pnm/sls_resource/sls.c
+@@ -71,7 +71,7 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 
+ 	switch (cmd) {
+ 	case DEVICE_IOCRESET:
+-		reset_cunit_scheduler();
++		reset_cunit_sched();
+ 		retval = reset_sls_allocator();
+ 		reset_process_manager();
+ 		break;
+@@ -81,13 +81,9 @@ long sls_ioctl(struct file *filp, unsigned int cmd, unsigned long __user arg)
+ 	case GET_SHARED_ALLOC:
+ 		retval = mem_process_ioctl(filp, cmd, arg);
+ 		break;
+-	case GET_CUNIT_FOR_WRITE:
+-	case GET_CUNIT_FOR_READ:
+-		retval = get_sls_cunit(filp, cmd, arg);
+-		break;
+-	case RELEASE_READ_CUNIT:
+-	case RELEASE_WRITE_CUNIT:
+-		retval = release_sls_cunit(filp, cmd, arg);
++	case GET_CUNIT:
++	case RELEASE_CUNIT:
++		retval = cunit_sched_ioctl(filp, cmd, arg);
+ 		break;
+ 	case NOP:
+ 		// Do nothing. We need it only for context switch
+@@ -192,7 +188,7 @@ int init_sls_device(void)
+ 		goto allocator_fail;
+ 
+ 	/* Reset cunits status and synchronization primitives */
+-	err = init_cunit_scheduler();
++	err = init_cunit_sched();
+ 	if (err)
+ 		goto cunit_scheduler_fail;
+ 
+@@ -205,7 +201,7 @@ int init_sls_device(void)
+ 	return 0;
+ 
+ build_sysfs_fail:
+-	destroy_cunit_scheduler();
++	destroy_cunit_sched();
+ 	cleanup_process_manager();
+ cunit_scheduler_fail:
+ 	cleanup_sls_allocator();
+@@ -240,7 +236,7 @@ void cleanup_sls_device(void)
+ 	cleanup_process_manager();
+ 
+ 	/* Reset state */
+-	destroy_cunit_scheduler();
++	destroy_cunit_sched();
+ 
+ 	/* Destroy sysfs  */
+ 	sls_destroy_sysfs(sls_resource_device);
+diff --git a/drivers/pnm/sls_resource/sysfs/cunits.c b/drivers/pnm/sls_resource/sysfs/cunits.c
+index db3d5bdd6..b972fa858 100644
+--- a/drivers/pnm/sls_resource/sysfs/cunits.c
++++ b/drivers/pnm/sls_resource/sysfs/cunits.c
+@@ -2,7 +2,7 @@
+ /* Copyright(c) 2022-2023 Samsung LTD. All rights reserved. */
+ 
+ #include "allocator.h"
+-#include "cunit_scheduler.h"
++#include "cunit_sched.h"
+ #include "private.h"
+ #include "sysfs-private.h"
+ #include "topo/params.h"
+@@ -92,10 +92,10 @@ static const char *const region_attr_name[] = {
+ static ssize_t cunit_show(struct cunit_attribute *attr, char *buf)
+ {
+ 	uint8_t state;
+-	uint64_t free_size, size, wr_acq_count;
++	uint64_t free_size, size, acq_count;
+ 
+ 	if (strcmp(attr->attr.name, cunit_attr_name[0]) == 0) {
+-		state = cunit_scheduler_write_state(attr->cunit);
++		state = cunit_sched_state(attr->cunit);
+ 		return sysfs_emit(buf, "%u\n", state);
+ 	}
+ 
+@@ -110,9 +110,8 @@ static ssize_t cunit_show(struct cunit_attribute *attr, char *buf)
+ 	}
+ 
+ 	if (strcmp(attr->attr.name, cunit_attr_name[3]) == 0) {
+-		wr_acq_count =
+-			cunit_scheduler_write_acquisition_cnt(attr->cunit);
+-		return sysfs_emit(buf, "%llu\n", wr_acq_count);
++		acq_count = cunit_sched_acq_cnt(attr->cunit);
++		return sysfs_emit(buf, "%llu\n", acq_count);
+ 	}
+ 
+ 	return 0;
+diff --git a/drivers/pnm/sls_resource/sysfs/sysfs.c b/drivers/pnm/sls_resource/sysfs/sysfs.c
+index ca7cf2fd1..ac8dd3d60 100644
+--- a/drivers/pnm/sls_resource/sysfs/sysfs.c
++++ b/drivers/pnm/sls_resource/sysfs/sysfs.c
+@@ -3,7 +3,7 @@
+ 
+ #include "sysfs.h"
+ #include "allocator.h"
+-#include "cunit_scheduler.h"
++#include "cunit_sched.h"
+ #include "mem_info.h"
+ #include "private.h"
+ #include "process_manager.h"
+@@ -54,10 +54,9 @@ static DEVICE_ATTR_RW(cleanup);
+ static ssize_t acq_timeout_show(struct device *device,
+ 				struct device_attribute *attr, char *buf)
+ {
+-	uint64_t acquisition_count =
+-		cunit_scheduler_write_acquisition_timeout();
++	uint64_t acq_timeout = cunit_sched_acq_timeout();
+ 
+-	return sysfs_emit(buf, "%llu\n", acquisition_count);
++	return sysfs_emit(buf, "%llu\n", acq_timeout);
+ }
+ 
+ static ssize_t acq_timeout_store(struct device *device,
+@@ -72,7 +71,7 @@ static ssize_t acq_timeout_store(struct device *device,
+ 		return -EINVAL;
+ 	}
+ 	PNM_DBG("Setting acq_timeout to %llu ns via sysfs\n", acq_timeout);
+-	cunit_scheduler_set_write_acquisition_timeout(acq_timeout);
++	cunit_sched_set_acq_timeout(acq_timeout);
+ 	return count;
+ }
+ static DEVICE_ATTR_RW(acq_timeout);
+diff --git a/include/uapi/linux/sls_resources.h b/include/uapi/linux/sls_resources.h
+index 33865fded..66ab38808 100644
+--- a/include/uapi/linux/sls_resources.h
++++ b/include/uapi/linux/sls_resources.h
+@@ -174,23 +174,20 @@ enum sls_user_preferences {
+ 
+ #define SLS_IOC_MAGIC 'T'
+ 
+-#define DEVICE_IOCRESET _IO(SLS_IOC_MAGIC, 0)
+-#define SET_FIRST_BUFFER _IO(SLS_IOC_MAGIC, 1)
+-#define SET_SECOND_BUFFER _IO(SLS_IOC_MAGIC, 2)
+-#define WHICH_BUFFER _IOR(SLS_IOC_MAGIC, 3, int)
+-#define GET_CUNIT_FOR_WRITE _IOW(SLS_IOC_MAGIC, 4, unsigned int)
+-#define GET_CUNIT_FOR_READ _IOW(SLS_IOC_MAGIC, 5, unsigned int)
+-#define RELEASE_WRITE_CUNIT _IOW(SLS_IOC_MAGIC, 6, unsigned int)
+-#define RELEASE_READ_CUNIT _IOW(SLS_IOC_MAGIC, 7, unsigned int)
+-#define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 8, struct pnm_allocation)
+-#define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 9, struct pnm_allocation)
+-#define MAKE_SHARED_ALLOC _IOWR(SLS_IOC_MAGIC, 10, struct pnm_allocation)
+-#define GET_SHARED_ALLOC _IOWR(SLS_IOC_MAGIC, 11, struct pnm_allocation)
++#define GET_CUNIT _IOW(SLS_IOC_MAGIC, 0, unsigned int)
++#define RELEASE_CUNIT _IOW(SLS_IOC_MAGIC, 1, unsigned int)
++#define ALLOCATE_MEMORY _IOWR(SLS_IOC_MAGIC, 2, struct pnm_allocation)
++#define DEALLOCATE_MEMORY _IOW(SLS_IOC_MAGIC, 3, struct pnm_allocation)
++#define MAKE_SHARED_ALLOC _IOWR(SLS_IOC_MAGIC, 4, struct pnm_allocation)
++#define GET_SHARED_ALLOC _IOWR(SLS_IOC_MAGIC, 5, struct pnm_allocation)
+ 
+ // Required to switch CPU context to avoid hangs in SLS-CXL hardware
+ // [TODO: @y-lavrinenko] Get rid when firmware be more stable
+-#define NOP _IO(SLS_IOC_MAGIC, 12)
++#define NOP _IO(SLS_IOC_MAGIC, 6)
+ 
+-#define SLS_IOC_MAXNR (12)
++// [TODO: b.palkin] Remove DEVICE_IOCRESET
++#define DEVICE_IOCRESET _IO(SLS_IOC_MAGIC, 7)
++
++#define SLS_IOC_MAXNR (7)
+ 
+ #endif /* __SLS_RESOURCES_H__ */
+-- 
+2.34.1
+

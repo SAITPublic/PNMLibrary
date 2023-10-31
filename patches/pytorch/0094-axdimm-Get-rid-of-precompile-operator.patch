@@ -1,7 +1,7 @@
 From a5e34af8dbcbaf82433723e449448b7be4955154 Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Thu, 24 Nov 2022 12:55:53 +0300
-Subject: [PATCH 094/128] [axdimm] Get rid of precompile operator
+Subject: [PATCH 094/135] [axdimm] Get rid of precompile operator
 
 Remove functionals for precompile operators to fix latest AXDIMM API.
 

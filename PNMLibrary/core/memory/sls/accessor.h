@@ -22,11 +22,11 @@
 #include <vector>
 
 namespace pnm::memory {
-class SLSAccessorCore : public AccessorCore {
+class SlsAccessorCore : public AccessorCore {
 public:
   using RegionType = RankedRegion;
 
-  SLSAccessorCore(const DeviceRegion &region, DevicePointer &device);
+  SlsAccessorCore(const DeviceRegion &region, DevicePointer &device);
 
 private:
   void store_impl(const void *value, uint64_t size,
@@ -34,7 +34,8 @@ private:
 
   DeviceRegion phys_range_impl() const override;
 
-  const uint8_t *access_impl(uint64_t byte_offset) const override;
+  const uint8_t *access_impl(uint64_t byte_offset,
+                             uint64_t size) const override;
 
   VirtualRegion virtual_range_impl() const override;
 

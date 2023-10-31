@@ -1,7 +1,7 @@
 From 4402ae7e700b771fdd1c0f75623a25b55b2ea9a7 Mon Sep 17 00:00:00 2001
 From: Egor Kutovoi <e.kutovoi@partner.samsung.com>
 Date: Wed, 28 Jun 2023 15:51:08 +0000
-Subject: [PATCH 124/161] [sls_resource] Keep only single alloc
+Subject: [PATCH 124/225] [sls_resource] Keep only single alloc
 
 * Remove all allocation methods from kernel into userspace, keep only
   the simplest allocation method - a single region at a time

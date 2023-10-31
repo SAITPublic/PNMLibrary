@@ -18,6 +18,8 @@
 #include <optional>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Interface for indices generators */
 class ILengthsGenerator {
 public:
@@ -34,5 +36,7 @@ private:
   create_lengths_impl(size_t num_tables, std::optional<size_t> min_num_lookup,
                       size_t max_num_lookup, size_t minibatch_size) = 0;
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_ILENGTHS_GENERATOR_H

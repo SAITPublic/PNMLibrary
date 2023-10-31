@@ -15,6 +15,7 @@
 
 #include "common/log.h"
 #include "common/make_error.h"
+#include "common/topology_constants.h"
 
 #include "pnmlib/core/allocator.h"
 #include "pnmlib/core/context.h"
@@ -26,6 +27,23 @@
 #include <memory>
 #include <utility>
 
+namespace {
+
+pnm::ContextHandler make_sls_context() {
+  const auto bus_type = pnm::sls::device::topo().Bus;
+
+  switch (bus_type) {
+  case pnm::sls::device::BusType::AXDIMM:
+    return std::make_unique<pnm::SlsRankwiseContext>();
+  case pnm::sls::device::BusType::CXL:
+    return std::make_unique<pnm::SlsChannelwiseContext>();
+  }
+
+  throw pnm::error::make_inval("Device type");
+}
+
+} // namespace
+
 namespace pnm {
 
 ContextHandler PNM_API make_context(Device::Type type) {
@@ -36,12 +54,10 @@ ContextHandler PNM_API make_context(Device::Type type) {
   }
 
   switch (type) {
-  case Device::Type::SLS_AXDIMM:
-    return std::make_unique<SlsRankwiseContext>();
-  case Device::Type::SLS_CXL:
-    return std::make_unique<SlsChannelwiseContext>();
-  case Device::Type::IMDB_CXL:
-    return std::make_unique<IMDBContext>();
+  case Device::Type::SLS:
+    return make_sls_context();
+  case Device::Type::IMDB:
+    return std::make_unique<ImdbContext>();
   }
 
   throw error::make_inval("Unknown context type {}.", static_cast<int>(type));

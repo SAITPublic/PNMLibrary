@@ -1,7 +1,7 @@
 From c9f17fb6d03226150c7fdc3b3d25e20dc9d09d3c Mon Sep 17 00:00:00 2001
 From: Yaroslav Lavrinenko <y.lavrinenko@samsung.com>
 Date: Fri, 1 Jul 2022 18:31:31 +0300
-Subject: [PATCH 10/33] Make DeepRecSys work with int type
+Subject: [PATCH 10/34] Make DeepRecSys work with int type
 
 Make correct call of int version of secure SLS operator.
 Add extra argument (--sls_dtype) into run script to specify

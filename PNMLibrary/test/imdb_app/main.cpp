@@ -91,12 +91,12 @@ template <OperationType scan_operation, OutputType scan_output_type>
 void RunOperation(const compressed_vector &column,
                   const InputDataType<scan_operation> &input,
                   const bool runner_mode,
-                  const OutputDataType<scan_output_type> &golden_result) {
+                  const OutputDataType<scan_output_type> &golden_result,
+                  pnm::ContextHandler &context) {
   OutputDataType<scan_output_type> result;
 
   if (runner_mode == IMDB_RUNNER_MODE) {
-    static auto context = pnm::make_context(pnm::Device::Type::IMDB_CXL);
-    IMDBRunner runner(column, context);
+    ImdbRunner runner(column, context);
     result = DispatchOperation<scan_operation, scan_output_type>(runner, input);
   } else {
     AVX2Runner runner(column);
@@ -107,7 +107,7 @@ void RunOperation(const compressed_vector &column,
 }
 
 template <OperationType scan_operation, OutputType scan_output_type>
-class IMDBTestAppMT : public testing::TestWithParam<
+class ImdbTestAppMT : public testing::TestWithParam<
                           std::tuple<bool, std::string, std::string, uint64_t,
                                      index_type, uint64_t, double>> {
 public:
@@ -120,12 +120,16 @@ public:
             pred_gen_name, bit_size, column_size, inputs_size, selectivity,
             true);
 
+    if (runner_mode == IMDB_RUNNER_MODE) {
+      context_ = pnm::make_context(pnm::Device::Type::IMDB);
+    }
+
     // [TODO: MCS23-432] use std::barrier when c++20 become true
     std::atomic<size_t> visitor_cnt{num_threads};
     std::vector<std::future<void>> threads(num_threads);
 
     for (auto &thread : threads) {
-      thread = std::async(std::launch::async, &IMDBTestAppMT::worker, this,
+      thread = std::async(std::launch::async, &ImdbTestAppMT::worker, this,
                           std::cref(column), std::cref(input), runner_mode,
                           std::cref(result), std::ref(visitor_cnt));
     }
@@ -148,12 +152,14 @@ private:
     }
 
     RunOperation<scan_operation, scan_output_type>(column, input, runner_mode,
-                                                   golden_result);
+                                                   golden_result, context_);
   }
+
+  pnm::ContextHandler context_;
 };
 
 template <OperationType scan_operation, OutputType scan_output_type>
-class IMDBTestAppMP : public testing::TestWithParam<
+class ImdbTestAppMP : public testing::TestWithParam<
                           std::tuple<bool, std::string, std::string, uint64_t,
                                      index_type, uint64_t, double>> {
 public:
@@ -214,14 +220,34 @@ public:
   }
 
 private:
+  void
+  child_process_impl(const compressed_vector &column,
+                     const InputDataType<scan_operation> &input,
+                     const bool runner_mode,
+                     const OutputDataType<scan_output_type> &golden_result) {
+
+    if (runner_mode == IMDB_RUNNER_MODE) {
+      context_ = pnm::make_context(pnm::Device::Type::IMDB);
+    }
+
+    RunOperation<scan_operation, scan_output_type>(column, input, runner_mode,
+                                                   golden_result, context_);
+  }
+
   void child_process(const compressed_vector &column,
                      const InputDataType<scan_operation> &input,
                      const bool runner_mode,
                      const OutputDataType<scan_output_type> &golden_result) {
-    RunOperation<scan_operation, scan_output_type>(column, input, runner_mode,
-                                                   golden_result);
+
+    // This macro is necessary to prevent a fork-bomb explosion due to the
+    // release of an unhandled exception.
+    EXPECT_NO_THROW(
+        child_process_impl(column, input, runner_mode, golden_result));
+
     exit(testing::Test::HasFailure());
   }
+
+  pnm::ContextHandler context_;
 };
 
 // In order the params are:
@@ -262,67 +288,67 @@ auto stress_testing_parameters_in_list = testing::Combine(
     testing::Values(100'000), testing::Values(1'000), testing::Values(0.5));
 
 using InRangeToBVTestAppMT =
-    IMDBTestAppMT<OperationType::InRange, OutputType::BitVector>;
+    ImdbTestAppMT<OperationType::InRange, OutputType::BitVector>;
 using InRangeToIVTestAppMT =
-    IMDBTestAppMT<OperationType::InRange, OutputType::IndexVector>;
+    ImdbTestAppMT<OperationType::InRange, OutputType::IndexVector>;
 using InListToBVTestAppMT =
-    IMDBTestAppMT<OperationType::InList, OutputType::BitVector>;
+    ImdbTestAppMT<OperationType::InList, OutputType::BitVector>;
 using InListToIVTestAppMT =
-    IMDBTestAppMT<OperationType::InList, OutputType::IndexVector>;
+    ImdbTestAppMT<OperationType::InList, OutputType::IndexVector>;
 
 TEST_P(InRangeToBVTestAppMT, Main) { this->run(num_threads); }
 TEST_P(InRangeToIVTestAppMT, Main) { this->run(num_threads); }
 TEST_P(InListToBVTestAppMT, Main) { this->run(num_threads); }
 TEST_P(InListToIVTestAppMT, Main) { this->run(num_threads); }
 
-INSTANTIATE_TEST_SUITE_P(IMDBTestMT, InRangeToBVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMT, InRangeToBVTestAppMT,
                          testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestMT, InRangeToIVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMT, InRangeToIVTestAppMT,
                          testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestMT, InListToBVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMT, InListToBVTestAppMT,
                          testing_parameters_in_list);
-INSTANTIATE_TEST_SUITE_P(IMDBTestMT, InListToIVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMT, InListToIVTestAppMT,
                          testing_parameters_in_list);
 
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMT, InRangeToBVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMT, InRangeToBVTestAppMT,
                          stress_testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMT, InRangeToIVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMT, InRangeToIVTestAppMT,
                          stress_testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMT, InListToBVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMT, InListToBVTestAppMT,
                          stress_testing_parameters_in_list);
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMT, InListToIVTestAppMT,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMT, InListToIVTestAppMT,
                          stress_testing_parameters_in_list);
 
 using InRangeToBVTestAppMP =
-    IMDBTestAppMP<OperationType::InRange, OutputType::BitVector>;
+    ImdbTestAppMP<OperationType::InRange, OutputType::BitVector>;
 using InRangeToIVTestAppMP =
-    IMDBTestAppMP<OperationType::InRange, OutputType::IndexVector>;
+    ImdbTestAppMP<OperationType::InRange, OutputType::IndexVector>;
 using InListToBVTestAppMP =
-    IMDBTestAppMP<OperationType::InList, OutputType::BitVector>;
+    ImdbTestAppMP<OperationType::InList, OutputType::BitVector>;
 using InListToIVTestAppMP =
-    IMDBTestAppMP<OperationType::InList, OutputType::IndexVector>;
+    ImdbTestAppMP<OperationType::InList, OutputType::IndexVector>;
 
 TEST_P(InRangeToBVTestAppMP, Main) { this->run(num_threads); }
 TEST_P(InRangeToIVTestAppMP, Main) { this->run(num_threads); }
 TEST_P(InListToBVTestAppMP, Main) { this->run(num_threads); }
 TEST_P(InListToIVTestAppMP, Main) { this->run(num_threads); }
 
-INSTANTIATE_TEST_SUITE_P(IMDBTestMP, InRangeToBVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMP, InRangeToBVTestAppMP,
                          testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestMP, InRangeToIVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMP, InRangeToIVTestAppMP,
                          testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestMP, InListToBVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMP, InListToBVTestAppMP,
                          testing_parameters_in_list);
-INSTANTIATE_TEST_SUITE_P(IMDBTestMP, InListToIVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestMP, InListToIVTestAppMP,
                          testing_parameters_in_list);
 
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMP, InRangeToBVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMP, InRangeToBVTestAppMP,
                          stress_testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMP, InRangeToIVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMP, InRangeToIVTestAppMP,
                          stress_testing_parameters_in_range);
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMP, InListToBVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMP, InListToBVTestAppMP,
                          stress_testing_parameters_in_list);
-INSTANTIATE_TEST_SUITE_P(IMDBTestStressMP, InListToIVTestAppMP,
+INSTANTIATE_TEST_SUITE_P(ImdbTestStressMP, InListToIVTestAppMP,
                          stress_testing_parameters_in_list);
 
 int main(int argc, char **argv) {

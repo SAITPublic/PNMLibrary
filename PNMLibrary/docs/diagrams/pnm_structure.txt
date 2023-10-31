@@ -62,20 +62,20 @@ package IMDB{
             +constexpr auto view() &
         }
 
-        struct bitview_iterator #palegreen{
+        struct bit_iterator #palegreen{
             Iterator for bit_***_view types
-            +constexpr bitview_iterator(const C &base, uint64_t index)
-            +constexpr bool operator!=(const bitview_iterator &rhs)
-            +constexpr bool operator==(const bitview_iterator &rhs) const
+            +constexpr bit_iterator(const C &base, uint64_t index)
+            +constexpr bool operator!=(const bit_iterator &rhs)
+            +constexpr bool operator==(const bit_iterator &rhs) const
             +constexpr auto &operator++()
             +constexpr auto operator++(int)
             +constexpr reference operator*()
             +constexpr reference operator*()
         }
 
-        class bit_compressed_view #palegreen{
+        class bit_compressed #palegreen{
             View to provide access for compressed data in a region
-            +constexpr bit_compressed_view(...)
+            +constexpr bit_compressed(...)
             +constexpr auto size() const
             +constexpr auto capacity() const
             +constexpr auto bytes() const
@@ -132,7 +132,7 @@ package IMDB{
         }
 
         class compressed_vector_view #palegreen {
-            using of bit_compressed_view
+            using of bit_compressed
         }
 
         class predictor_input_vector #palegreen{
@@ -140,7 +140,7 @@ package IMDB{
         }
 
         class predictor_input_vector_view #palegreen{
-            using of bit_vector_view<common_view>
+            using of bit_vector_view<common>
         }
 
         class index_vector #palegreen{
@@ -148,7 +148,7 @@ package IMDB{
         }
 
         class index_vector_view #palegreen{
-            using of common_view<index_type>
+            using of common<index_type>
         }
 
         class BitVectors #palegreen {
@@ -243,21 +243,21 @@ package IMDB{
 
 package AI{
 
-    class EmbeddedTables #palegreen{
-        Create, fill and destroy embedded tables for SLS operations
+    class EmbeddingTables #palegreen{
+        Create, fill and destroy embedding tables for SLS operations
         +template <typename... Args> static auto create(Args &&...args)
-        +template <typename T> EmbeddedTables(...)
-        +EmbeddedTables(...)
-        +void bind_tables_data(common_view<const uint8_t> host)
+        +template <typename T> EmbeddingTables(...)
+        +EmbeddingTables(...)
+        +void bind_tables_data(common<const uint8_t> host)
         +const auto &buffers() const
         +const auto &layout() const
     }
 
-    class EmbeddedTablesHandler #palegreen{
-        using of std::unique_ptr<EmbeddedTables>
+    class EmbeddingTablesHandler #palegreen{
+        using of std::unique_ptr<EmbeddingTables>
     }
 
-    enum SLSType #palegreen{
+    enum Type #palegreen{
         SLS operation types. Specifies type of embeddings used in SLS calculation
         --
         +Float
@@ -265,9 +265,9 @@ package AI{
         +Uint32Tagged
     }
 
-    class PNMSLSOperation #palegreen{
+    class SLS #palegreen{
         SLS operation data container
-        +PNMSLSOperation(..)
+        +SLS(..)
         +void set_run_params(...)
         +uint32_t sparse_feature_size() const
         +auto tables_sizes() const
@@ -276,8 +276,8 @@ package AI{
         +auto indices() const
         +auto psum()
         +auto psum() const
-        +SLSType op_type() const
-        +const pnm::memory::EmbeddedTables *tables() const
+        +Type op_type() const
+        +const pnm::memory::EmbeddingTables *tables() const
     }
 
 }
@@ -288,7 +288,7 @@ package Core{
         Buffer for transferring data to the device
         +Buffer(...)
         +Accessor<T> direct_access()
-        +void bind_user_region(pnm::common_view<T> user_range)
+        +void bind_user_region(pnm::views::common<T> user_range)
         +uint64_t copy_to_device()
         +uint64_t copy_from_device()
     }
@@ -306,9 +306,9 @@ package Core{
             using of std::unique_ptr<Context>
         }
 
-        struct IMDBContext{
+        struct ImdbContext{
             ---
-            +IMDBContext()
+            +ImdbContext()
             +void define_supported_operation()
         }
 
@@ -369,11 +369,11 @@ package Core{
         }
 
         class VirtualSequentialRegion #palegreen{
-            using of common_view<uint8_t>
+            using of common<uint8_t>
         }
 
         class VirtualRankedRegion #palegreen{
-            using of std::vector<pnm::common_view<uint8_t>>
+            using of std::vector<pnm::views::common<uint8_t>>
         }
 
         class VirtualRegion #palegreen{
@@ -388,7 +388,7 @@ package Core{
 
             package MemBlockHandler {
 
-                class SLSMemBlockHandler {
+                class SlsMemBlockHandler {
                     +void write_block(...)
                     +void read_block(...)
                     +void *get_mem_block_ptr(...)
@@ -422,15 +422,15 @@ package Core{
 
                 package CXL {
 
-                    class CXLMemBlockHandler{
+                    class CxlMemBlockHandler{
                         Memory block handler for CXL
                     }
 
-                    class CXLHardwareMemBlockHandler{
+                    class CxlHardwareMemBlockHandler{
                         Memory block handler for hardware CXL
                     }
 
-                    class CXLSimulatorMemBlockHandler {
+                    class CxlSimulatorMemBlockHandler {
                         Memory block handler for simulator CXL
                     }
 
@@ -446,7 +446,7 @@ package Core{
                 +void close()
                 +static SlsDevice make(PNMDevice::Type dev_type)
                 +size_t base_memory_size() const noexcept
-                +uint64_t compute_unit_info(uint8_t rank, SlsComputeUnitInfo key) const
+                +uint64_t compute_unit_info(uint8_t rank, ComputeUnitInfo key) const
                 +void reset()
                 +uint64_t acquisition_timeout() const
                 +void set_acquisition_timeout(uint64_t value)
@@ -457,7 +457,7 @@ package Core{
                 +const BaseDevice *internal() const noexcept
             }
 
-            enum SlsComputeUnitInfo #palegreen{
+            enum ComputeUnitInfo #palegreen{
                 Enumeration of sls sysfs rank info
                 --
                 +State = 0
@@ -534,31 +534,26 @@ package Core{
             class BaseDevice{
                 +BaseDevice(...)
                 +static std::unique_ptr<BaseDevice> make_device(PNMDevice::Type dev_type)
-                +Type get_device_type() const final
-                +void enable_sls(uint8_t rank)
-                +void disable_sls(uint8_t rank)
-                +void exec_sls(uint8_t rank)
-                +void wait_for_completion_instr(uint8_t rank) const
+                +Type get_device_type() const override
+                +void exec_sls(uint8_t compute_unit)
                 +void write_cfgr_block(...)
                 +void read_cfgr_block(...)
                 +void read_and_reset_psum(...)
                 +void read_and_reset_tags(...)
                 +size_t get_min_block_size(...) const
                 +size_t get_base_memory_size() const
-                +int get_devmem_fd() const final
-                +int get_resource_fd() const final
+                +int get_devmem_fd() const override
+                +int get_resource_fd() const override
                 +auto get_acquisition_timeout() const
                 +void set_acquisition_timeout(uint64_t value)
                 +void set_resource_cleanup(uint64_t value) const
                 +auto get_resource_cleanup() const
                 +auto get_leaked()
-                +auto get_compute_unit_info(uint8_t rank, SlsComputeUnitInfo key) const
+                +auto get_compute_unit_info(uint8_t compute_unit, ComputeUnitInfo key) const
                 +void read_poll(...)
-                +void get_num_processed_inst(uint8_t rank, uint8_t *buf_out)
-                +bool acquire_cunit_for_write_from_range(...)
-                +bool acquire_cunit_for_read(uint8_t rank) const
-                +void release_cunit_for_write(uint8_t rank) const
-                +void release_cunit_for_read(uint8_t rank) const
+                +void get_num_processed_inst(uint8_t compute_unit, uint8_t *buf_out)
+                +bool acquire_cunit_from_range(...)
+                +void release_cunit(uint8_t compute_unit) const
             }
 
             class RankAddressGenerator{
@@ -619,14 +614,14 @@ package Core{
             class "BaseDevice" as BaseDevice2
             class BaseDevice2{
                 +static std::unique_ptr<BaseDevice> make_device()
-                +void reset() final
+                +void reset() override
                 +volatile ThreadCSR *get_csr(uint8_t thread_id)
                 +const volatile ThreadCSR *get_csr(uint8_t thread_id) const
                 +void dump_thread_csr(uint8_t thread_id) const
                 +RegisterPointers register_pointers() const
-                +Type get_device_type() const final
-                +int get_devmem_fd() const final
-                +int get_resource_fd() const final
+                +Type get_device_type() const override
+                +int get_devmem_fd() const override
+                +int get_resource_fd() const override
                 +uint8_t lock_thread()
                 +void release_thread(uint8_t thread)
                 +auto alignment() const
@@ -656,7 +651,7 @@ package Core{
         struct PNMDevice #palegreen{
             Public API for device
             --
-            -enum class Type { SLS_AXDIMM, SLS_CXL, IMDB_CXL }
+            -enum class Type { SLS, IMDB }
             --
             -enum class ResetOptions : size_t {...} 
             --
@@ -686,7 +681,7 @@ package Core{
             to hardware restrictions (e.g. INST/PSUM buffer sizes).
             +virtual uint32_t get_num_exec_iterations(uint8_t pack) const
             +virtual const ... generate_instructions(...)
-            +virtual pnm::common_view<uint8_t> get_output_buffer(..)
+            +virtual pnm::views::common<uint8_t> get_output_buffer(..)
             +virtual uint8_t get_num_outputs() const
         }
 
@@ -714,10 +709,10 @@ package Core{
             +const std::vector<uint64_t> &get_traces() const
         }
 
-        struct SLSOperation{
-            +SLSOperation(PNMSLSOperation &sls_op, const AxdimmBaseDevice &device)
+        struct SlsOperation{
+            +SlsOperation(SLS &sls_op, const AxdimmBaseDevice &device)
             +uint32_t get_num_exec_iterations(uint8_t pack) const override
-            +pnm::common_view<uint8_t> get_output_buffer(...) const override
+            +pnm::views::common<uint8_t> get_output_buffer(...) const override
             +uint8_t get_num_outputs() const override
             +const std::vector<uint64_t> & generate_instructions(...)
         }
@@ -776,8 +771,8 @@ package Core{
 
         class TransferManager #palegreen{
             --
-            +... uint64_t copy_to_device(common_view<T> host_region, Accessor<T> accessor)
-            +... uint64_t copy_from_device(Accessor<T> accessor, common_view<T> host_region)
+            +... uint64_t copy_to_device(common<T> host_region, Accessor<T> accessor)
+            +... uint64_t copy_from_device(Accessor<T> accessor, common<T> host_region)
             --
             -struct DeviceRegionInfo {VirtualRegion virt; DeviceRegion phys; }
         }
@@ -803,7 +798,7 @@ package Core{
 
         package AXDIMM{
 
-            class AXDIMMTransferManager{
+            class AxdimmTransferManager{
                 Transfer Manager for AXDIMM
             }
 
@@ -811,12 +806,12 @@ package Core{
 
         package IMDB{
 
-            class IMDBAccessorCore {
+            class ImdbAccessorCore {
                 Accessor core for IMDB
-                +IMDBAccessorCore(...)
+                +ImdbAccessorCore(...)
             }
 
-            class IMDBTransferManager {
+            class ImdbTransferManager {
                 Transfer manager for IMDB
             }
 
@@ -824,8 +819,8 @@ package Core{
 
         package SLS {
 
-            class SLSAccessorCore {
-                +SLSAccessorCore(...)
+            class SlsAccessorCore {
+                +SlsAccessorCore(...)
             }
 
         }
@@ -873,17 +868,17 @@ PropertiesList <.. PropertiesTraits
 
 'IMDB
 
-compressed_vector <|-- bit_compressed_view
+compressed_vector <|-- bit_compressed
 compressed_vector <.. aligned_allocator
 
 bit_vector <|-- bit_vector_view
 bit_vector <.. aligned_allocator
 
-bit_compressed_view <.. bitview_iterator
+bit_compressed <.. bit_iterator
 
-bit_vector_view <.. bitview_iterator
+bit_vector_view <.. bit_iterator
 
-compressed_vector_view <|-- bit_compressed_view
+compressed_vector_view <|-- bit_compressed
 
 predictor_input_vector <|-- bit_vector
 
@@ -925,13 +920,13 @@ Operation <|-- InternalOperator #orange
 
 'AI
 
-EmbeddedTables *-- Buffer #red
-EmbeddedTables <.. ContextHandler #red
+EmbeddingTables *-- Buffer #red
+EmbeddingTables <.. ContextHandler #red
 
-EmbeddedTablesHandler *-- EmbeddedTables
+EmbeddingTablesHandler *-- EmbeddingTables
 
-PNMSLSOperation o-- SLSType
-PNMSLSOperation o-- EmbeddedTables
+SLS o-- Type
+SLS o-- EmbeddingTables
 
 
 
@@ -953,13 +948,13 @@ Context *-- Dispatcher
 
 ContextHandler *-- Context
 
-IMDBContext <|-- Context
-IMDBContext <.. Scan #DeepPink
-IMDBContext <.. Operation #DeepPink
+ImdbContext <|-- Context
+ImdbContext <.. Scan #DeepPink
+ImdbContext <.. Operation #DeepPink
 
 SlsContext <|-- Context
-SlsContext <.. PNMSLSOperation #Aqua
-SlsContext <.. SLSOperation #Aqua
+SlsContext <.. SLS #Aqua
+SlsContext <.. SlsOperation #Aqua
 
 Dispatcher <.. Context
 
@@ -969,10 +964,10 @@ DeviceRegion <.. RankedRegion
 VirtualRegion <.. VirtualSequentialRegion
 VirtualRegion <.. VirtualRankedRegion
 
-SLSMemBlockHandler <.. MemInfo
-SLSMemBlockHandler <.. OutputRankStream
+SlsMemBlockHandler <.. MemInfo
+SlsMemBlockHandler <.. OutputRankStream
 
-AxdimmMemBlockHandler <|-- SLSMemBlockHandler
+AxdimmMemBlockHandler <|-- SlsMemBlockHandler
 
 AxdimmHardwareMemBlockHandler <|-- AxdimmMemBlockHandler
 AxdimmHardwareMemBlockHandler <.. InputRankStream #RoyalBlue
@@ -984,14 +979,14 @@ AxdimmSimulatorMemBlockHandler <.. InputRankStream #RoyalBlue
 AxdimmSimulatorMemBlockHandler <.. OutputRankStream
 AxdimmSimulatorMemBlockHandler <.. RankAddressGenerator
 
-CXLMemBlockHandler <|-- SLSMemBlockHandler
+CxlMemBlockHandler <|-- SlsMemBlockHandler
 
-CXLHardwareMemBlockHandler <|-- CXLMemBlockHandler
+CxlHardwareMemBlockHandler <|-- CxlMemBlockHandler
 
-CXLSimulatorMemBlockHandler <|-- CXLMemBlockHandler
+CxlSimulatorMemBlockHandler <|-- CxlMemBlockHandler
 
 SlsDevice *-- BaseDevice
-SlsDevice <.. SlsComputeUnitInfo
+SlsDevice <.. ComputeUnitInfo
 SlsDevice <.. PNMDevice
 
 MemMap o-- "*" memAddr
@@ -1000,13 +995,13 @@ NBufferedMemory o-- MemMap
 
 MemInfo *-- "*" RegionInfo
 
-Control <.. SlsComputeUnitInfo
+Control <.. ComputeUnitInfo
 Control <.. RegionInfo
 Control <.. MemInfo
 
 BaseDevice <|-- PNMDevice #purple
-BaseDevice <.. SlsComputeUnitInfo
-BaseDevice <.. SLSMemBlockHandler
+BaseDevice <.. ComputeUnitInfo
+BaseDevice <.. SlsMemBlockHandler
 BaseDevice <.. RankMemory #purple
 
 NBufferedMemory <.. RankAddressGenerator
@@ -1025,7 +1020,7 @@ BaseDevice2 o-- Control2
 
 HardwareDevice <|-- BaseDevice2
 
-SimulatorCore o-- bit_compressed_view #Lime
+SimulatorCore o-- bit_compressed #Lime
 SimulatorCore o-- libimdb #Lime
 SimulatorCore o-- RegisterPointers
 SimulatorCore <.. OutputType #Lime
@@ -1046,13 +1041,13 @@ TraceGeneratorCore <.. InstGenerator
 TraceGeneratorCore <.. RankMemory
 TraceGeneratorCore <.. Opcode
 
-SLSOperation <|-- ReductionOperation
-SLSOperation o-- RankMemory #RoyalBlue
-SLSOperation o-- ExecutionGenerator
-SLSOperation <.. TraceGeneratorCore
-SLSOperation o-- PNMSLSOperation #RoyalBlue
-SLSOperation <.. BaseDevice #RoyalBlue
-SLSOperation <.. Execution
+SlsOperation <|-- ReductionOperation
+SlsOperation o-- RankMemory #RoyalBlue
+SlsOperation o-- ExecutionGenerator
+SlsOperation <.. TraceGeneratorCore
+SlsOperation o-- SLS #RoyalBlue
+SlsOperation <.. BaseDevice #RoyalBlue
+SlsOperation <.. Execution
 
 AccessorCore <.. Regions #Green
 
@@ -1080,19 +1075,19 @@ SequentialAllocator <|-- Allocator
 SequentialAllocator <.. Properties #HotPink
 SequentialAllocator o-- PNMDevice #HotPink
 
-AXDIMMTransferManager <|-- TransferManager
-AXDIMMTransferManager <.. VirtualRankedRegion #SlateGray
-AXDIMMTransferManager <.. InputRankStream #SlateGray
-AXDIMMTransferManager <.. OutputRankStream #SlateGray
-AXDIMMTransferManager <..  RankAddressGenerator #SlateGray
+AxdimmTransferManager <|-- TransferManager
+AxdimmTransferManager <.. VirtualRankedRegion #SlateGray
+AxdimmTransferManager <.. InputRankStream #SlateGray
+AxdimmTransferManager <.. OutputRankStream #SlateGray
+AxdimmTransferManager <..  RankAddressGenerator #SlateGray
 
-IMDBAccessorCore <|-- SequentialAccessorCore
-IMDBAccessorCore <.. BaseDevice2 #Teal
+ImdbAccessorCore <|-- SequentialAccessorCore
+ImdbAccessorCore <.. BaseDevice2 #Teal
 
-IMDBTransferManager <|-- TransferManager
+ImdbTransferManager <|-- TransferManager
 
-SLSAccessorCore <|-- AccessorCore
-SLSAccessorCore <.. DevicePointer #Green
+SlsAccessorCore <|-- AccessorCore
+SlsAccessorCore <.. DevicePointer #Green
 
 InternalRunner <.. InternalOperator #HotPink
 

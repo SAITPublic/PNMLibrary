@@ -1,0 +1,44 @@
+From 48c5c614bf0bb80015b0bc851166e820d54390ad Mon Sep 17 00:00:00 2001
+From: Bogdan Palkin <b.palkin@samsung.com>
+Date: Tue, 12 Sep 2023 08:11:49 +0000
+Subject: [PATCH 29/29] [pnm] Unify allocation structure
+
+Currently we have 2 separate structures for allocations in kernel,
+but they are basically the same.
+This commit introduces unified structure `allocation` to PNMgramine.
+
+Resolves: MCS23-1619
+
+Signed-off-by: Bogdan Palkin <b.palkin@samsung.com>
+---
+ pal/src/host/linux-sgx/pal_sls.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/pal/src/host/linux-sgx/pal_sls.c b/pal/src/host/linux-sgx/pal_sls.c
+index fb593a1f..33fcb5fe 100644
+--- a/pal/src/host/linux-sgx/pal_sls.c
++++ b/pal/src/host/linux-sgx/pal_sls.c
+@@ -54,17 +54,17 @@ int _PalSlsIoControl(PAL_HANDLE handle, uint32_t cmd, uint64_t arg, int* out_ret
+             /* These requests have an argument that is larger than a single machine word,
+              * so we need to copy them to untrusted memory and only then execute. And after that,
+              * copy back into trusted memory. */
+-            uint64_t req_size = ALLOC_ALIGN_UP(sizeof(struct sls_memory_alloc_request));
++            uint64_t req_size = ALLOC_ALIGN_UP(sizeof(struct pnm_allocation));
+ 
+             // [TODO: @e-kutovoi MCS23-1260] Eliminate the mmap, use COPY_VALUE_TO_UNTRUSTED
+-            struct sls_memory_alloc_request* untrusted_addr;
++            struct pnm_allocation* untrusted_addr;
+             ret = ocall_mmap_untrusted(&untrusted_addr, req_size,
+                                        PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,
+                                        /*fd=*/-1, /*offset=*/0);
+             if (ret < 0)
+                 return unix_to_pal_error(ret);
+ 
+-            struct sls_memory_alloc_request* trusted_addr = (struct sls_memory_alloc_request*)arg;
++            struct pnm_allocation* trusted_addr = (struct pnm_allocation*)arg;
+             *untrusted_addr = *trusted_addr;
+ 
+             ret = sls_ioctl((int)handle->dev.fd, cmd, (uint64_t)untrusted_addr, out_ret);
+-- 
+2.34.1
+

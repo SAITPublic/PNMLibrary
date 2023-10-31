@@ -1,7 +1,7 @@
 From e3fb39eb8385e1d41129828063faa45b19cc91a3 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
 Date: Mon, 29 Nov 2021 16:18:15 +0900
-Subject: [PATCH 009/161] [drivers/dax] NFC: fix some formatting
+Subject: [PATCH 009/225] [drivers/dax] NFC: fix some formatting
 
 Signed-off-by: Maxim Ostapenko <maxim.o@samsung.com>
 ---

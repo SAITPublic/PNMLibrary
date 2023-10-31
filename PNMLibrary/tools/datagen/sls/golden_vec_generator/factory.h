@@ -25,6 +25,8 @@
 #include <string>
 #include <vector>
 
+namespace tools::gen::sls {
+
 /*! \brief Interface for SLS operation */
 class IGoldenVecGenerator {
 public:
@@ -38,8 +40,7 @@ public:
 
   void compute_and_store_golden_sls(const std::filesystem::path &root,
                                     const std::string &prefix,
-                                    sls::tests::TablesMmap &tables,
-                                    sls::tests::Indices &indices) const;
+                                    TablesMmap &tables, Indices &indices) const;
 
 private:
   virtual std::vector<uint8_t>
@@ -54,5 +55,7 @@ class GoldenVecGeneratorFactory
 public:
   static GoldenVecGeneratorFactory &default_factory();
 };
+
+} // namespace tools::gen::sls
 
 #endif // SLS_SLS_PROCESSOR_H

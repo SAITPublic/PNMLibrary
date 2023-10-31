@@ -34,7 +34,7 @@
 #include <utility>
 #include <vector>
 
-using namespace sls::secure;
+using namespace pnm::sls::secure;
 
 struct SecurePostprocessorSimple : public ::testing::Test {
   const uint32_t index[2] = {0, 1};
@@ -43,7 +43,7 @@ struct SecurePostprocessorSimple : public ::testing::Test {
   uint64_t edata[4] = {1ULL, 2ULL, 3ULL, 4ULL};
   std::vector<uint64_t> psum, dummy;
 
-  std::vector<pnm::uint128_t> tags;
+  std::vector<pnm::types::uint128_t> tags;
   std::unique_ptr<IPostprocessor<uint64_t>> handler;
   std::vector<uint8_t> out;
 
@@ -67,23 +67,25 @@ struct SecurePostprocessorSimple : public ::testing::Test {
       for (auto j = 0; j < 2; ++j) {
         psum[i * 4 + j] = data[i * 2 + j];
       }
-      as<pnm::uint128_t>(&psum[i * 4 + 2]) = tags[i];
+      as<pnm::types::uint128_t>(&psum[i * 4 + 2]) = tags[i];
     }
   }
 
   static auto psum_view(std::vector<uint64_t> &ps) {
-    return pnm::make_rowwise_view(ps.data(), ps.data() + ps.size(), 4, 0, 2);
+    return pnm::views::make_rowwise_view(ps.data(), ps.data() + ps.size(), 4, 0,
+                                         2);
   }
   static auto tag_view(std::vector<uint64_t> &tg) {
-    return pnm::make_rowwise_view(tg.data(), tg.data() + tg.size(), 4, 2, 0);
+    return pnm::views::make_rowwise_view(tg.data(), tg.data() + tg.size(), 4, 2,
+                                         0);
   }
 };
 
 TEST_F(SecurePostprocessorSimple, VerificationSingleOk)
 NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW {
   const std::vector indices{requests_view{
-      0, pnm::make_variable_row_view(index, index + 2,
-                                     pnm::make_view(lengths, lengths + 1))}};
+      0, pnm::views::make_variable_row_view(
+             index, index + 2, pnm::views::make_view(lengths, lengths + 1))}};
 
   handler->perform_sls(indices, psum_view(psum), tag_view(psum));
 
@@ -91,14 +93,14 @@ NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW {
   psum[1] = 6;
   out.resize(1);
 
-  as<pnm::uint128_t>(&dummy[2]) = tags[0] + tags[1];
+  as<pnm::types::uint128_t>(&dummy[2]) = tags[0] + tags[1];
 
   auto check = handler->decrypt_psum(
-      pnm::make_rowwise_view(psum.data(), psum.data() + 4, 4, 0, 2),
-      pnm::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 0, 2),
-      pnm::make_rowwise_view(psum.data(), psum.data() + 4, 4, 2, 0),
-      pnm::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 2, 0),
-      pnm::make_view(out));
+      pnm::views::make_rowwise_view(psum.data(), psum.data() + 4, 4, 0, 2),
+      pnm::views::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 0, 2),
+      pnm::views::make_rowwise_view(psum.data(), psum.data() + 4, 4, 2, 0),
+      pnm::views::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 2, 0),
+      pnm::views::make_view(out));
   ASSERT_EQ(check, true);
   ASSERT_EQ(out[0], true);
 }
@@ -106,8 +108,8 @@ NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW {
 TEST_F(SecurePostprocessorSimple, VerificationSingleCorrupted)
 NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW {
   const std::vector indices{requests_view{
-      0, pnm::make_variable_row_view(index, index + 2,
-                                     pnm::make_view(lengths, lengths + 1))}};
+      0, pnm::views::make_variable_row_view(
+             index, index + 2, pnm::views::make_view(lengths, lengths + 1))}};
 
   handler->perform_sls(indices, psum_view(psum), tag_view(psum));
 
@@ -115,22 +117,23 @@ NO_SANITIZE_UNSIGNED_INTEGER_OVERFLOW {
   psum[1] = 6;
   out.resize(1);
 
-  as<pnm::uint128_t>(&dummy[2]) = tags[0] + tags[1];
+  as<pnm::types::uint128_t>(&dummy[2]) = tags[0] + tags[1];
 
   auto check = handler->decrypt_psum(
-      pnm::make_rowwise_view(psum.data(), psum.data() + 4, 4, 0, 2),
-      pnm::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 0, 2),
-      pnm::make_rowwise_view(psum.data(), psum.data() + 4, 4, 2, 0),
-      pnm::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 2, 0),
-      pnm::make_view(out));
+      pnm::views::make_rowwise_view(psum.data(), psum.data() + 4, 4, 0, 2),
+      pnm::views::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 0, 2),
+      pnm::views::make_rowwise_view(psum.data(), psum.data() + 4, 4, 2, 0),
+      pnm::views::make_rowwise_view(dummy.data(), dummy.data() + 4, 4, 2, 0),
+      pnm::views::make_view(out));
   ASSERT_EQ(check, false);
   ASSERT_EQ(out[0], false);
 }
 
 TEST_F(SecurePostprocessorSimple, VerificationDoubleBatchOk) {
-  const std::vector indices{requests_view{
-      0, pnm::variable_row_view(index, index + 2,
-                                pnm::make_view(lengths + 1, lengths + 3))}};
+  const std::vector indices{
+      requests_view{0, pnm::views::variable_row(
+                           index, index + 2,
+                           pnm::views::make_view(lengths + 1, lengths + 3))}};
 
   handler->perform_sls(indices, psum_view(psum), tag_view(psum));
 
@@ -142,12 +145,12 @@ TEST_F(SecurePostprocessorSimple, VerificationDoubleBatchOk) {
 
   out.resize(2, false);
 
-  as<pnm::uint128_t>(&dummy[2]) = tags[0];
-  as<pnm::uint128_t>(&dummy[6]) = tags[1];
+  as<pnm::types::uint128_t>(&dummy[2]) = tags[0];
+  as<pnm::types::uint128_t>(&dummy[6]) = tags[1];
 
   auto check =
       handler->decrypt_psum(psum_view(psum), psum_view(dummy), tag_view(psum),
-                            tag_view(dummy), pnm::make_view(out));
+                            tag_view(dummy), pnm::views::make_view(out));
 
   ASSERT_EQ(check, true);
   ASSERT_EQ(out[0], true);
@@ -155,9 +158,10 @@ TEST_F(SecurePostprocessorSimple, VerificationDoubleBatchOk) {
 }
 
 TEST_F(SecurePostprocessorSimple, VerificationDoubleBatchCorrupted) {
-  const std::vector indices{requests_view{
-      0, pnm::variable_row_view(index, index + 2,
-                                pnm::make_view(lengths + 1, lengths + 3))}};
+  const std::vector indices{
+      requests_view{0, pnm::views::variable_row(
+                           index, index + 2,
+                           pnm::views::make_view(lengths + 1, lengths + 3))}};
 
   handler->perform_sls(indices, psum_view(psum), tag_view(psum));
 
@@ -169,12 +173,12 @@ TEST_F(SecurePostprocessorSimple, VerificationDoubleBatchCorrupted) {
 
   out.resize(2, false);
 
-  as<pnm::uint128_t>(&dummy[2]) = tags[0] - 1;
-  as<pnm::uint128_t>(&dummy[6]) = tags[1];
+  as<pnm::types::uint128_t>(&dummy[2]) = tags[0] - 1;
+  as<pnm::types::uint128_t>(&dummy[6]) = tags[1];
 
   auto check =
       handler->decrypt_psum(psum_view(psum), psum_view(dummy), tag_view(psum),
-                            tag_view(dummy), pnm::make_view(out));
+                            tag_view(dummy), pnm::views::make_view(out));
 
   ASSERT_EQ(check, false);
   ASSERT_EQ(out[0], false);
@@ -183,8 +187,8 @@ TEST_F(SecurePostprocessorSimple, VerificationDoubleBatchCorrupted) {
 
 TEST_F(SecurePostprocessorSimple, SimpleEncryption) {
   const std::vector indices{requests_view{
-      0, pnm::make_variable_row_view(index, index + 2,
-                                     pnm::make_view(lengths, lengths + 1))}};
+      0, pnm::views::make_variable_row_view(
+             index, index + 2, pnm::views::make_view(lengths, lengths + 1))}};
   handler->perform_sls(indices_t{indices}, psum_view(psum));
 
   std::vector<uint64_t> epsum{
@@ -196,8 +200,8 @@ TEST_F(SecurePostprocessorSimple, SimpleEncryption) {
   ASSERT_EQ(psum[1], 6);
 }
 
-TEST_F(SecurePostprocessorArtificial, SLSNoMac) {
-  sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> preproc(
+TEST_F(SecurePostprocessorArtificial, SlsNoMac) {
+  pnm::sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> preproc(
       data.data(), emb_table.info.rows(), emb_table.info.cols());
 
   auto postproc = preproc.load(data.data(), false);
@@ -208,7 +212,7 @@ TEST_F(SecurePostprocessorArtificial, SLSNoMac) {
 
   const auto *data_it = data.data();
   for (auto tid = 0UL; tid < emb_table.info.rows().size(); ++tid) {
-    auto table_view = pnm::make_rowwise_view(
+    auto table_view = pnm::views::make_rowwise_view(
         data_it, data_it + emb_table.info.rows()[tid] * emb_table.info.cols(),
         emb_table.info.cols());
     auto indices_view = indices_views[tid].second;
@@ -220,24 +224,24 @@ TEST_F(SecurePostprocessorArtificial, SLSNoMac) {
   }
 
   std::vector<uint32_t> encr_psum(golden.size(), 0);
-  postproc->perform_sls(
-      indices_views, pnm::make_rowwise_view(encr_psum.data(),
-                                            encr_psum.data() + encr_psum.size(),
-                                            emb_table.info.cols()));
+  postproc->perform_sls(indices_views, pnm::views::make_rowwise_view(
+                                           encr_psum.data(),
+                                           encr_psum.data() + encr_psum.size(),
+                                           emb_table.info.cols()));
 
   postproc->decrypt_psum(
-      pnm::make_rowwise_view(encr_psum.data(),
-                             encr_psum.data() + encr_psum.size(),
-                             emb_table.info.cols()),
-      pnm::make_rowwise_view(sls_on_encr.data(),
-                             sls_on_encr.data() + sls_on_encr.size(),
-                             emb_table.info.cols()));
+      pnm::views::make_rowwise_view(encr_psum.data(),
+                                    encr_psum.data() + encr_psum.size(),
+                                    emb_table.info.cols()),
+      pnm::views::make_rowwise_view(sls_on_encr.data(),
+                                    sls_on_encr.data() + sls_on_encr.size(),
+                                    emb_table.info.cols()));
 
   ASSERT_EQ(encr_psum, golden);
 }
 
-TEST_F(SecurePostprocessorArtificial, SLSWithMac) {
-  sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> preproc(
+TEST_F(SecurePostprocessorArtificial, SlsWithMac) {
+  pnm::sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> preproc(
       data.data(), emb_table.info.rows(), emb_table.info.cols());
 
   // output buffer with extra size for tags
@@ -250,17 +254,18 @@ TEST_F(SecurePostprocessorArtificial, SLSWithMac) {
   std::vector<uint32_t> sls_on_tag;
   sls_on_encr.reserve(golden.size());
 
-  static constexpr auto TAG_SIZE = sizeof(pnm::uint128_t) / sizeof(uint32_t);
+  static constexpr auto TAG_SIZE =
+      sizeof(pnm::types::uint128_t) / sizeof(uint32_t);
 
   const auto *data_it = enc_data.data();
   for (auto tid = 0UL; tid < emb_table.info.rows().size(); ++tid) {
-    auto table_view =
-        pnm::make_rowwise_view(data_it,
-                               data_it + emb_table.info.rows()[tid] *
-                                             (emb_table.info.cols() + TAG_SIZE),
-                               emb_table.info.cols() + TAG_SIZE, 0, TAG_SIZE);
+    auto table_view = pnm::views::make_rowwise_view(
+        data_it,
+        data_it +
+            emb_table.info.rows()[tid] * (emb_table.info.cols() + TAG_SIZE),
+        emb_table.info.cols() + TAG_SIZE, 0, TAG_SIZE);
 
-    auto tag_view = pnm::make_rowwise_view(
+    auto tag_view = pnm::views::make_rowwise_view(
         data_it,
         data_it +
             emb_table.info.rows()[tid] * (emb_table.info.cols() + TAG_SIZE),
@@ -284,25 +289,25 @@ TEST_F(SecurePostprocessorArtificial, SLSWithMac) {
 
   postproc->perform_sls(
       indices_views,
-      pnm::make_rowwise_view(encr_psum.data(),
-                             encr_psum.data() + encr_psum.size(),
-                             emb_table.info.cols()),
-      pnm::make_rowwise_view(encr_tags.data(),
-                             encr_tags.data() + encr_tags.size(), TAG_SIZE));
+      pnm::views::make_rowwise_view(encr_psum.data(),
+                                    encr_psum.data() + encr_psum.size(),
+                                    emb_table.info.cols()),
+      pnm::views::make_rowwise_view(
+          encr_tags.data(), encr_tags.data() + encr_tags.size(), TAG_SIZE));
 
   std::vector<uint8_t> checks(golden.size() / emb_table.info.cols());
   auto is_ok = postproc->decrypt_psum(
-      pnm::make_rowwise_view(encr_psum.data(),
-                             encr_psum.data() + encr_psum.size(),
-                             emb_table.info.cols()),
-      pnm::make_rowwise_view(sls_on_encr.data(),
-                             sls_on_encr.data() + sls_on_encr.size(),
-                             emb_table.info.cols()),
-      pnm::make_rowwise_view(encr_tags.data(),
-                             encr_tags.data() + encr_tags.size(), TAG_SIZE),
-      pnm::make_rowwise_view(sls_on_tag.data(),
-                             sls_on_tag.data() + sls_on_tag.size(), TAG_SIZE),
-      pnm::make_view(checks));
+      pnm::views::make_rowwise_view(encr_psum.data(),
+                                    encr_psum.data() + encr_psum.size(),
+                                    emb_table.info.cols()),
+      pnm::views::make_rowwise_view(sls_on_encr.data(),
+                                    sls_on_encr.data() + sls_on_encr.size(),
+                                    emb_table.info.cols()),
+      pnm::views::make_rowwise_view(
+          encr_tags.data(), encr_tags.data() + encr_tags.size(), TAG_SIZE),
+      pnm::views::make_rowwise_view(
+          sls_on_tag.data(), sls_on_tag.data() + sls_on_tag.size(), TAG_SIZE),
+      pnm::views::make_view(checks));
 
   EXPECT_EQ(encr_psum, golden);
 
@@ -311,8 +316,8 @@ TEST_F(SecurePostprocessorArtificial, SLSWithMac) {
       std::all_of(checks.begin(), checks.end(), [](auto v) { return v; }));
 }
 
-TEST_F(SecurePostprocessorArtificial, SLSWithMacCorrupted) {
-  sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> preproc(
+TEST_F(SecurePostprocessorArtificial, SlsWithMacCorrupted) {
+  pnm::sls::secure::DLRMPreprocessor<uint32_t, PtrReader, PtrWriter> preproc(
       data.data(), emb_table.info.rows(), emb_table.info.cols());
 
   // output buffer with extra size for tags
@@ -325,19 +330,20 @@ TEST_F(SecurePostprocessorArtificial, SLSWithMacCorrupted) {
   std::vector<uint32_t> sls_on_tag;
   sls_on_encr.reserve(golden.size());
 
-  static constexpr auto TAG_SIZE = sizeof(pnm::uint128_t) / sizeof(uint32_t);
+  static constexpr auto TAG_SIZE =
+      sizeof(pnm::types::uint128_t) / sizeof(uint32_t);
 
   constexpr std::array corrupted_table{0, 3};
 
   auto *data_it = enc_data.data();
   for (auto tid = 0UL; tid < emb_table.info.rows().size(); ++tid) {
-    auto table_view = pnm::make_rowwise_view<const uint32_t>(
+    auto table_view = pnm::views::make_rowwise_view<const uint32_t>(
         data_it,
         data_it +
             emb_table.info.rows()[tid] * (emb_table.info.cols() + TAG_SIZE),
         emb_table.info.cols() + TAG_SIZE, 0, TAG_SIZE);
 
-    auto tag_view = pnm::make_rowwise_view<const uint32_t>(
+    auto tag_view = pnm::views::make_rowwise_view<const uint32_t>(
         data_it,
         data_it +
             emb_table.info.rows()[tid] * (emb_table.info.cols() + TAG_SIZE),
@@ -368,31 +374,31 @@ TEST_F(SecurePostprocessorArtificial, SLSWithMacCorrupted) {
 
   postproc->perform_sls(
       indices_views,
-      pnm::make_rowwise_view(encr_psum.data(),
-                             encr_psum.data() + encr_psum.size(),
-                             emb_table.info.cols()),
-      pnm::make_rowwise_view(encr_tags.data(),
-                             encr_tags.data() + encr_tags.size(), TAG_SIZE));
+      pnm::views::make_rowwise_view(encr_psum.data(),
+                                    encr_psum.data() + encr_psum.size(),
+                                    emb_table.info.cols()),
+      pnm::views::make_rowwise_view(
+          encr_tags.data(), encr_tags.data() + encr_tags.size(), TAG_SIZE));
 
   std::vector<uint8_t> checks(golden.size() / emb_table.info.cols());
   auto is_ok = postproc->decrypt_psum(
-      pnm::make_rowwise_view(encr_psum.data(),
-                             encr_psum.data() + encr_psum.size(),
-                             emb_table.info.cols()),
-      pnm::make_rowwise_view(sls_on_encr.data(),
-                             sls_on_encr.data() + sls_on_encr.size(),
-                             emb_table.info.cols()),
-      pnm::make_rowwise_view(encr_tags.data(),
-                             encr_tags.data() + encr_tags.size(), TAG_SIZE),
-      pnm::make_rowwise_view(sls_on_tag.data(),
-                             sls_on_tag.data() + sls_on_tag.size(), TAG_SIZE),
-      pnm::make_view(checks));
+      pnm::views::make_rowwise_view(encr_psum.data(),
+                                    encr_psum.data() + encr_psum.size(),
+                                    emb_table.info.cols()),
+      pnm::views::make_rowwise_view(sls_on_encr.data(),
+                                    sls_on_encr.data() + sls_on_encr.size(),
+                                    emb_table.info.cols()),
+      pnm::views::make_rowwise_view(
+          encr_tags.data(), encr_tags.data() + encr_tags.size(), TAG_SIZE),
+      pnm::views::make_rowwise_view(
+          sls_on_tag.data(), sls_on_tag.data() + sls_on_tag.size(), TAG_SIZE),
+      pnm::views::make_view(checks));
 
   EXPECT_FALSE(is_ok);
-  auto psum_view = pnm::make_rowwise_view(encr_psum.data(),
-                                          encr_psum.data() + encr_psum.size(),
-                                          emb_table.info.cols());
-  auto golden_view = pnm::make_rowwise_view(
+  auto psum_view = pnm::views::make_rowwise_view(
+      encr_psum.data(), encr_psum.data() + encr_psum.size(),
+      emb_table.info.cols());
+  auto golden_view = pnm::views::make_rowwise_view(
       golden.data(), golden.data() + golden.size(), emb_table.info.cols());
   auto i = 0U;
   for (auto [tid, batches] : indices_views) {

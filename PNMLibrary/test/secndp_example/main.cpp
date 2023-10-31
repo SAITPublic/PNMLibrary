@@ -12,6 +12,8 @@
 
 #include "secure/plain/sls.h"
 
+#include "common/topology_constants.h"
+
 #include "tools/datagen/sls/general/indices_info.h"
 #include "tools/datagen/sls/general/tables_info.h"
 #include "tools/datagen/sls/indices_generator/factory.h"
@@ -37,6 +39,8 @@
 #include <memory>
 #include <vector>
 
+using namespace tools::gen::sls;
+
 int main(int argc, char **argv) {
   CLI::App app{"Example SecNDP API application"};
 
@@ -47,12 +51,18 @@ int main(int argc, char **argv) {
 
   CLI11_PARSE(app, argc, argv);
 
+  if (with_tag &&
+      pnm::sls::device::topo().Bus == pnm::sls::device::BusType::CXL) {
+    fmt::print(stderr, "SLS-CXL HW does not support tags\n");
+    return 0;
+  }
+
   // 1. Prepare input tables
   // For explanation about the internal structure see
-  // `docs/howto/embedded_tables.md`
+  // `docs/howto/embedding_tables.md`
 
   // Each table has the same number of columns (i.e. the features that each
-  // table represents are vectors of the same length)
+  // table represents are vectors of the same length)MakeBufferFromSharedMP
   static constexpr size_t column_count = 16;
   // Number of rows per table
   const std::vector<uint32_t> table_row_sizes = {6, 7, 5};
@@ -76,9 +86,9 @@ int main(int argc, char **argv) {
   const auto indices = igen->create(iinfo, tinfo);
 
   // 3. Setup device parameters
-  const sls::secure::UntrustedDeviceParams sls_device_params{
+  const pnm::sls::secure::UntrustedDeviceParams sls_device_params{
       // Numbers of rows per table
-      .rows = pnm::make_view(tinfo.rows()),
+      .rows = pnm::views::make_view(tinfo.rows()),
       // The amount of columns
       .sparse_feature_size = tinfo.cols(),
       // To use encryption verification or not (this adds some additional bytes
@@ -88,17 +98,17 @@ int main(int argc, char **argv) {
       .preference = SLS_ALLOC_DISTRIBUTE_ALL};
 
   // 4. Put the parameters into a generic container
-  auto device_arguments = sls::secure::DeviceArguments(sls_device_params);
+  auto device_arguments = pnm::sls::secure::DeviceArguments(sls_device_params);
 
   // 5. Create and initialize the runner
-  std::unique_ptr<sls::secure::IRunner> runner =
-      std::make_unique<sls::secure::ProdConsSLSRunner<uint32_t>>();
+  std::unique_ptr<pnm::sls::secure::IRunner> runner =
+      std::make_unique<pnm::sls::secure::ProdConsSlsRunner<uint32_t>>();
 
   runner->init(&device_arguments);
 
   // 6. Load the table data onto the device. This function firstly encrypts the
   //    data, and only then loads it onto the untrusted device
-  runner->load_tables(emb_tables.data(), pnm::make_view(tinfo.rows()),
+  runner->load_tables(emb_tables.data(), pnm::views::make_view(tinfo.rows()),
                       tinfo.cols(), with_tag);
 
   // 7. Allocate data for the results
@@ -110,15 +120,16 @@ int main(int argc, char **argv) {
 
   // 8. Perform the computations
   const bool verification_result = runner->run(
-      iinfo.minibatch_size(), pnm::make_view(iinfo.lengths()),
-      pnm::make_view(indices), pnm::view_cast<uint8_t>(pnm::make_view(psum)),
-      pnm::make_view(row_checks));
+      iinfo.minibatch_size(), pnm::views::make_view(iinfo.lengths()),
+      pnm::views::make_view(indices),
+      pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)),
+      pnm::views::make_view(row_checks));
 
   fmt::print("Verification result: {}\n",
              verification_result ? "CORRECT" : "INCORRECT");
   fmt::print("Psum results:\n");
 
-  auto psum_view = pnm::make_rowwise_view(
+  auto psum_view = pnm::views::make_rowwise_view(
       psum.data(), psum.data() + psum.size(), tinfo.cols());
 
   for (const auto &vector : psum_view) {

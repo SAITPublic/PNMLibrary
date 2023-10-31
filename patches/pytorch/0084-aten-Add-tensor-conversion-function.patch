@@ -1,7 +1,7 @@
 From 581475afe0eb643a72df16d42bebdec6a6c998bd Mon Sep 17 00:00:00 2001
 From: Nikita Enin <n.enin@samsung.com>
 Date: Sat, 29 Oct 2022 01:38:45 +0300
-Subject: [PATCH 084/128] [aten] Add tensor conversion function
+Subject: [PATCH 084/135] [aten] Add tensor conversion function
 
 Resolves: AXDIMM-337
 

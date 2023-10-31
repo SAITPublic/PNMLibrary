@@ -38,7 +38,8 @@ private:
   using RegionType = RankedRegion;
   using VRegionType = VirtualRankedRegion;
 
-  const uint8_t *access_impl(uint64_t byte_offset) const override;
+  const uint8_t *access_impl(uint64_t byte_offset,
+                             uint64_t size) const override;
 
   VirtualRegion virtual_range_impl() const override;
 
@@ -49,7 +50,8 @@ private:
   void store_impl(const void *value, uint64_t size,
                   uint64_t byte_offset) override;
 
-  common_view<uint8_t> mmap_region(const SequentialRegion &seq_region) const;
+  pnm::views::common<uint8_t>
+  mmap_region(const SequentialRegion &seq_region) const;
 
   pnm::Device *device_ = nullptr;
 

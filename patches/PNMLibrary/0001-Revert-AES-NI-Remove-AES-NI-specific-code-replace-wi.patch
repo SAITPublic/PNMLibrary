@@ -1,10 +1,10 @@
-From d1668f5ed0aab50c1edc68b893b38f7ab505ee83 Mon Sep 17 00:00:00 2001
+From 93a0a67ef89f30071195f46ba293b0941c2832f4 Mon Sep 17 00:00:00 2001
 From: Maxim Ostapenko <maxim.o@samsung.com>
-Date: Wed, 27 Sep 2023 00:14:10 +0000
+Date: Mon, 30 Oct 2023 20:50:54 -0400
 Subject: [PATCH] Revert "[AES-NI] Remove AES-NI specific code, replace with
  exception"
 
-This reverts commit 4a8852f513681af19506cee82e2c3fd5e55e1c3a.
+This reverts commit 49509095148689a918bd3476027e5a7b5f1a071c.
 ---
  secure/encryption/AES/key_exp128.h | 63 ++++++++++++++++++++---
  secure/encryption/AES/key_exp192.h | 77 ++++++++++++++++++++++++----

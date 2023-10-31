@@ -1,7 +1,7 @@
 From 278e28e0178d7713249550c941c984eb7fb3b5c9 Mon Sep 17 00:00:00 2001
 From: Petr Bred <p.bred@samsung.com>
 Date: Fri, 12 May 2023 19:37:24 +0300
-Subject: [PATCH 113/161] [DBA][Allocator] Split common memory range into ranks
+Subject: [PATCH 113/225] [DBA][Allocator] Split common memory range into ranks
 
 * DBA physical memory range with 32GB size contains 2 ranks by 16GB.
 Make allocator changes to reflect this and add the possibility

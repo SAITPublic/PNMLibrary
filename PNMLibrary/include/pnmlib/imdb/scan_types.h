@@ -25,9 +25,9 @@
 
 namespace pnm::imdb {
 
-enum class OperationType { InRange, InList };
+enum class OperationType : uint8_t { InRange, InList };
 
-enum class OutputType { BitVector, IndexVector };
+enum class OutputType : uint8_t { BitVector, IndexVector };
 
 using compressed_element_type = uint32_t;
 using index_type = uint32_t;
@@ -40,19 +40,19 @@ struct RangeOperation {
 using compressed_vector =
     pnm::containers::compressed_vector<compressed_element_type>;
 using compressed_vector_view =
-    pnm::views::bit_compressed_view<const compressed_element_type>;
+    pnm::views::bit_compressed<const compressed_element_type>;
 
 using predictor_input_vector =
     pnm::containers::bit_vector<compressed_element_type>;
 using predictor_input_vector_view = pnm::views::bit_vector_view<
-    pnm::common_view<const compressed_element_type>>;
+    pnm::views::common<const compressed_element_type>>;
 
 using bit_vector = pnm::containers::bit_vector<index_type>;
 using bit_vector_view =
-    pnm::views::bit_vector_view<pnm::common_view<index_type>>;
+    pnm::views::bit_vector_view<pnm::views::common<index_type>>;
 
 using index_vector = std::vector<index_type>;
-using index_vector_view = pnm::common_view<index_type>;
+using index_vector_view = pnm::views::common<index_type>;
 
 // NOTE: Batching is not actually supported by hardware, these types are here
 //       just for convenience

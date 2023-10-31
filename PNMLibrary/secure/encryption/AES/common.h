@@ -12,11 +12,13 @@
 #ifndef SLS_AES_COMMON_H
 #define SLS_AES_COMMON_H
 
-namespace sls::secure {
-enum class AES_KEY_SIZE : unsigned {
+#include <cstdint>
+
+namespace pnm::sls::secure {
+enum class AES_KEY_SIZE : uint16_t {
   AES_128 = 128U,
   AES_192 = 192U,
   AES_256 = 256U,
 };
-} // namespace sls::secure
+} // namespace pnm::sls::secure
 #endif // SLS_AES_COMMON_H

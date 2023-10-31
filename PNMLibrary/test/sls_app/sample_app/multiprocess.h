@@ -19,7 +19,7 @@
 #include "test/sls_app/api/constants.h"
 #include "test/sls_app/api/structs.h"
 
-#include "pnmlib/sls/embedded_tables.h"
+#include "pnmlib/sls/embedding_tables.h"
 #include "pnmlib/sls/sls.h"
 
 #include "pnmlib/core/runner.h"
@@ -30,8 +30,7 @@
 
 #include <fmt/core.h>
 
-#include <sched.h>
-#include <signal.h> // NOLINT(modernize-deprecated-headers, misc-include-cleaner)
+#include <signal.h> // NOLINT(modernize-deprecated-headers)
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -46,11 +45,11 @@
 namespace test_app {
 
 template <typename T>
-class SLSTestMultiprocess : private SLSTestStandardHelper<T> {
+class SlsTestMultiprocess : private SlsTestStandardHelper<T> {
 public:
-  using SLSTestStandardHelper<T>::SLSTestStandardHelper;
+  using SlsTestStandardHelper<T>::SlsTestStandardHelper;
 
-  ~SLSTestMultiprocess() override = default;
+  ~SlsTestMultiprocess() override = default;
 
   /**
       @brief Parent process creates child processes which run sls operation
@@ -64,7 +63,7 @@ public:
            const std::filesystem::path &root) const;
 
   void print() const {
-    fmt::print("SLSTestMultiprocess\n");
+    fmt::print("SlsTestMultiprocess\n");
     this->print_params();
   }
 
@@ -79,27 +78,32 @@ private:
       2. Run SLS on SLS device/simulator.
       3. Golden check for results.
   */
-  void child_process(const SlsOpParams &sls_op_params,
-                     const std::filesystem::path &root,
-                     const pnm::memory::EmbeddedTables *embedded_tables) const;
+  void
+  child_process(const SlsOpParams &sls_op_params,
+                const std::filesystem::path &root,
+                const pnm::memory::EmbeddingTables *embedding_tables) const;
+
+  void child_process_impl(
+      const SlsOpParams &sls_op_params, const std::filesystem::path &root,
+      const pnm::memory::EmbeddingTables *embedding_tables) const;
 };
 
 template <typename T>
-void SLSTestMultiprocess<T>::run(int num_engines,
+void SlsTestMultiprocess<T>::run(int num_engines,
                                  const std::vector<uint8_t> &tables,
                                  const SlsOpParams &sls_op_params,
                                  const std::filesystem::path &root) const {
-  sls_start_profiling();
+  pnm::profile::sls_start_profiling();
 
-  pnm::memory::EmbeddedTables embedded_tables(
-      pnm::make_view(tables), this->model_params_.tables_rows_num,
+  pnm::memory::EmbeddingTables embedding_tables(
+      pnm::views::make_view(tables), this->model_params_.tables_rows_num,
       this->model_params_.template feature_size_in_bytes<T>(), this->ctx_,
       this->testapp_run_params_.preference);
 
-  sls_report_profile();
-  sls_end_profiling();
+  pnm::profile::sls_report_profile();
+  pnm::profile::sls_end_profiling();
 
-  std::vector<pid_t> children_pids;
+  std::vector<pid_t> children_pids; // NOLINT(misc-include-cleaner)
   children_pids.reserve(num_engines);
 
   int child_index;
@@ -122,7 +126,7 @@ void SLSTestMultiprocess<T>::run(int num_engines,
     // child
 
     // Run SLS workload
-    child_process(sls_op_params, root, &embedded_tables);
+    child_process(sls_op_params, root, &embedding_tables);
   } else {
     // parent
     bool error_happened = false;
@@ -150,21 +154,32 @@ void SLSTestMultiprocess<T>::run(int num_engines,
 }
 
 template <typename T>
-void SLSTestMultiprocess<T>::child_process(
+void SlsTestMultiprocess<T>::child_process_impl(
     const SlsOpParams &sls_op_params, const std::filesystem::path &root,
-    const pnm::memory::EmbeddedTables *embedded_tables) const {
-  sls_start_profiling();
+    const pnm::memory::EmbeddingTables *embedding_tables) const {
+  pnm::profile::sls_start_profiling();
   {
     auto ctx = test::mock::make_context_mock(this->run_params_.context_type);
     pnm::Runner runner{ctx};
-    auto sls_op = this->create_sls_op(embedded_tables);
+    auto sls_op = this->create_sls_op(embedding_tables);
 
     const auto psum_res = this->run_sls(sls_op, sls_op_params, runner);
 
     const double error_ratio = this->perform_golden_check(psum_res, root);
     EXPECT_LE(error_ratio, kmismatch_ratio_threshold_val);
   }
-  sls_report_profile();
+  pnm::profile::sls_report_profile();
+}
+
+template <typename T>
+void SlsTestMultiprocess<T>::child_process(
+    const SlsOpParams &sls_op_params, const std::filesystem::path &root,
+    const pnm::memory::EmbeddingTables *embedding_tables) const {
+
+  // This macro is necessary to prevent a fork-bomb explosion due to the
+  // release of an unhandled exception.
+  EXPECT_NO_THROW(child_process_impl(sls_op_params, root, embedding_tables));
+
   // Terminate child process
   // So destructors of parent's scoped objects are not called.
   exit(testing::Test::HasFailure());

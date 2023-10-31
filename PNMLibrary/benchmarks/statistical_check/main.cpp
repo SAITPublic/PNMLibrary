@@ -14,9 +14,8 @@
 
 #include "tools/datagen/sls/utils.h"
 
-#include "pnmlib/sls/embedded_tables.h"
+#include "pnmlib/sls/embedding_tables.h"
 #include "pnmlib/sls/operation.h"
-#include "pnmlib/sls/type.h"
 
 #include "pnmlib/core/context.h"
 #include "pnmlib/core/device.h"
@@ -53,11 +52,11 @@ void benchmark_sls(benchmark::State &state) {
       fmt::format("{} {}", idx_values, sparse_feature_size);
   std::vector<uint8_t> tables;
 
-  sls::tests::get_or_create_test_tables(root, "float_tapp", generator_args,
-                                        sparse_feature_size, num_tables,
-                                        table_len, tables);
+  tools::gen::sls::get_or_create_test_tables(root, "float_tapp", generator_args,
+                                             sparse_feature_size, num_tables,
+                                             table_len, tables);
 
-  auto context = pnm::make_context(pnm::Device::Type::SLS_AXDIMM);
+  auto context = pnm::make_context(pnm::Device::Type::SLS);
 
   const auto sparse_feature_size_bytes = sparse_feature_size * sizeof(float);
   std::vector<uint32_t> rows(num_tables, table_len);
@@ -65,7 +64,7 @@ void benchmark_sls(benchmark::State &state) {
   std::vector<uint32_t> lengths;
   std::vector<uint32_t> indices;
 
-  const sls::tests::GeneratorWithOverflowParams params{
+  const tools::gen::sls::GeneratorWithOverflowParams params{
       .max_num_lookup = static_cast<size_t>(num_lookups),
       .min_num_lookup = static_cast<size_t>(num_lookups),
       .mini_batch_size = mini_batch_size,
@@ -76,20 +75,22 @@ void benchmark_sls(benchmark::State &state) {
       .generator_indices_name = "random",
       .entry_type = "float"};
 
-  sls::tests::get_or_create_test_indices(params, lengths, indices);
+  tools::gen::sls::get_or_create_test_indices(params, lengths, indices);
 
-  auto tables_layout = pnm::memory::EmbeddedTables::create(
-      pnm::make_view(std::cref(tables).get()), rows, sparse_feature_size_bytes,
-      context, SLS_ALLOC_AUTO);
+  auto tables_layout = pnm::memory::EmbeddingTables::create(
+      pnm::views::make_view(std::cref(tables).get()), rows,
+      sparse_feature_size_bytes, context, SLS_ALLOC_AUTO);
 
-  PNMSLSOperation sls_op{sparse_feature_size, pnm::make_const_view(rows),
-                         tables_layout.get(), SLSType::Float};
+  pnm::operations::SlsOperation sls_op{
+      sparse_feature_size, pnm::views::make_const_view(rows),
+      tables_layout.get(), pnm::operations::SlsOperation::Type::Float};
 
   std::vector<float> psum(mini_batch_size * num_tables * sparse_feature_size);
 
-  sls_op.set_run_params(mini_batch_size, pnm::make_const_view(lengths),
-                        pnm::make_const_view(indices),
-                        pnm::view_cast<uint8_t>(pnm::make_view(psum)));
+  sls_op.set_run_params(
+      mini_batch_size, pnm::views::make_const_view(lengths),
+      pnm::views::make_const_view(indices),
+      pnm::views::view_cast<uint8_t>(pnm::views::make_view(psum)));
 
   const pnm::Runner runner(context);
   for ([[maybe_unused]] auto _ : state) {
