@@ -1,0 +1,61 @@
+From df5b5a5d2fae89054e6ddb274249778d4a58de79 Mon Sep 17 00:00:00 2001
+From: "mao.chen" <mao.chen@samsung.com>
+Date: Tue, 31 Oct 2023 23:41:33 +0800
+Subject: [PATCH 226/226] [PNM][ZSWAP]fix the risk of GPL v2.0 voliation
+
+Add original copyright information in pnm_zswap.c
+and pnm_zswap_lib.c to avoid the risk of GPL v2.0
+voliation
+
+BREAKING CHANGE: no
+
+Resolve: MCS23-1803
+
+Signed-off-by: mao.chen <mao.chen@samsung.com>
+---
+ lib/pnm/zswap/pnm_zswap_lib.c |  8 ++++++++
+ mm/pnm/pnm_zswap.c            | 11 +++++++++++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/lib/pnm/zswap/pnm_zswap_lib.c b/lib/pnm/zswap/pnm_zswap_lib.c
+index 3d77275c5..2e3d03e8c 100644
+--- a/lib/pnm/zswap/pnm_zswap_lib.c
++++ b/lib/pnm/zswap/pnm_zswap_lib.c
+@@ -1,5 +1,13 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++/*
++ * zpool memory storage api
++ *
++ * Copyright (C) 2014 Dan Streetman
++ *
++ * This is a common frontend for memory storage pool implementations.
++ * Typically, this is used to store compressed memory.
++ */
+ 
+ #include <asm/page.h> /* PAGE_SIZE */
+ #include <linux/cdev.h> /* cdev definition */
+diff --git a/mm/pnm/pnm_zswap.c b/mm/pnm/pnm_zswap.c
+index f5614554a..5e84e8dca 100644
+--- a/mm/pnm/pnm_zswap.c
++++ b/mm/pnm/pnm_zswap.c
+@@ -1,5 +1,16 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* Copyright(c) 2021-2023 Samsung LTD. All rights reserved. */
++/*
++ * zswap.c - zswap driver file
++ *
++ * zswap is a backend for frontswap that takes pages that are in the process
++ * of being swapped out and attempts to compress and store them in a
++ * RAM-based memory pool.  This can result in a significant I/O reduction on
++ * the swap device and, in the case where decompressing from RAM is faster
++ * than reading from the swap device, can also improve workload performance.
++ *
++ * Copyright (C) 2012  Seth Jennings <sjenning@linux.vnet.ibm.com>
++ */
+ 
+ #include <asm/msr.h>
+ #include <asm/timer.h>
+-- 
+2.34.1
+
